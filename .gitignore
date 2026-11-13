@@ -13,3 +13,6 @@ build-tmp/
 *.jks
 *.keystore
 *.p12
+__pycache__/
+*.pyc
+p0/ci-logs*
