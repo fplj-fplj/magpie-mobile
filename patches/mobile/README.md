@@ -1,7 +1,9 @@
-# 固定 Magpie mobile 安全补丁
+# 固定 Magpie Android 宿主适配与 legacy mobile 补丁
 
-基线：54dc257f100e2ca82a843b1eea6a24b8006781f5；Go 1.26.8。
-这是实际源码精确替换 + overlay，不是示意 diff。非 mobile 构建保持原桌面行为；mobile 常量包没有 gateway/gui 依赖，避免循环。
+当前基线：b52c711142a662fe18fedf5a80cb1e4aa94bce62（v0.1.3781）；Go 1.26.8。
+这是实际源码精确替换 + overlay，不是示意 diff。不含 `mobile` 或 `androidhost` 标签的构建保持原桌面行为；mobilepolicy 常量包没有 gateway/gui 依赖，避免循环。
+
+当前 APK 使用 `nogui,androidhost`：保留 Android 生命周期、鉴权和 APK 更新适配，开放官方完整配置 API 与网页，使用一次性浏览器入口；不使用旧的功能白名单。新路线见 [完整核心与双编辑](../../docs/full-core-dual-editors.md)。以下历史白名单说明和 mobile 测试用于 legacy `mobile` 构建的兼容验证，不代表当前 APK 的功能范围。
 
 ## 应用器
 

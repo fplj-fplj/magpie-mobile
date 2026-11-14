@@ -121,9 +121,13 @@
         {
           "old": "func webKey() (key string, fixed bool, err error) {\n",
           "new": "func webKey() (key string, fixed bool, err error) {\n\tif mobilepolicy.Enabled {\n\t\tk := os.Getenv(\"MAGPIE_WEB_KEY\")\n\t\tos.Unsetenv(\"MAGPIE_WEB_KEY\")\n\t\tos.Unsetenv(webRunKey)\n\t\tif k == \"\" {\n\t\t\treturn \"\", false, errors.New(\"mobile requires App-injected MAGPIE_WEB_KEY\")\n\t\t}\n\t\tif err := CheckWebKey(k); err != nil {\n\t\t\treturn \"\", false, err\n\t\t}\n\t\treturn k, false, nil // process-only; no persistent credential cookie\n\t}\n"
+        },
+        {
+          "old": "\treturn webCompressed(webGuard(\"magpie_web_\"+port, key, keep, box, webOwnPage(page)))\n",
+          "new": "\treturn webCompressed(androidHostEditor(port, key, keep, box, page))\n"
         }
       ],
-      "resultSha256": "f6cb89a8ad30eac5183c34b5895a68ef33b2983bf51862b89b78a2145c3c4265"
+      "resultSha256": "2a8abe511adf360115684f250a1887a8393ddeea781fd14a46b7efadf9b46d6b"
     },
     {
       "path": "internal/gui/api.go",
@@ -161,10 +165,10 @@
         },
         {
           "old": "func printWeb(w *gui.Web) {\n",
-          "new": "func printWeb(w *gui.Web) {\n\tif mobilepolicy.Enabled {\n\t\tfmt.Println(\"magpie mobile private management on\", w.Addr)\n\t\tfmt.Println(\"  App-managed credentials only; no key-bearing link is printed. Gateway requests require a valid key.\")\n\t\treturn\n\t}\n"
+          "new": "func printWeb(w *gui.Web) {\n\tif mobilepolicy.Enabled {\n\t\tfmt.Println(\"magpie Android private management on\", w.Addr)\n\t\tfmt.Println(\"  App-managed credentials only; no key-bearing link is printed. Gateway requests require a valid key.\")\n\t\treturn\n\t}\n"
         }
       ],
-      "resultSha256": "5b714c4cef55b67bcdca8524c074e8668056e038c8dbe83ac72bee651cfa10e1"
+      "resultSha256": "5e4ea15178f7b4ac08626f15cd9590fb1294253b312102bbbdbdf333f6be1c1f"
     },
     {
       "path": "internal/provider/provider.go",
@@ -200,12 +204,31 @@
         }
       ],
       "resultSha256": "b621f635e0ab6198aae2d80b6e600f2b7fa387ae688e66b6e5a6e109fcb75615"
+    },
+    {
+      "path": "internal/gui/gatewaymode.go",
+      "sha256": "ecf2c681edf50661bd8d22141e27d5b9da6c61f936a16e39dd00b378d1864cc9",
+      "replacements": [
+        {
+          "old": "\t\"github.com/yetone/magpie/internal/agent\"\n",
+          "new": "\t\"github.com/yetone/magpie/internal/agent\"\n\t\"github.com/yetone/magpie/internal/mobilepolicy\"\n"
+        },
+        {
+          "old": "\tif !agentsHere() {\n",
+          "new": "\tif mobilepolicy.FullAdmin {\n\t\treturn false, \"android-host\"\n\t}\n\tif !agentsHere() {\n"
+        },
+        {
+          "old": "\t\t\ton = WebGateway.Load() || !agentsHereKept()\n",
+          "new": "\t\t\ton = WebGateway.Load() || (!mobilepolicy.FullAdmin && !agentsHereKept())\n"
+        }
+      ],
+      "resultSha256": "d81a5f032694af69b85c356c17e246a0145191126cb8929074bd703c824375c6"
     }
   ],
   "overlays": [
     {
       "path": "internal/cli/mobile_policy_test.go",
-      "sha256": "15b48993c5aa55ac295b4a48c12827554f0d8a9c8d72a9c3ce21f97d9ce9076f"
+      "sha256": "0879248c983c0392409e84e008840126187e5900946158793e780219f7615b99"
     },
     {
       "path": "internal/gateway/mobile_identity.go",
@@ -213,7 +236,15 @@
     },
     {
       "path": "internal/gateway/mobile_policy_test.go",
-      "sha256": "52b851547bcf392cc7466fcf3f6831830b0e76c78aeeaaf5604e250bcb7cd8ae"
+      "sha256": "06b8e6e9b14c97458f529ed741435dbe1f9a078eb3842b5461218b7b1544cb29"
+    },
+    {
+      "path": "internal/gui/androidhost_editor.go",
+      "sha256": "67aa50342f2fa615607c16ef950f8ef61795a493c6ee596c1a6fe573c2fd2e9c"
+    },
+    {
+      "path": "internal/gui/androidhost_editor_test.go",
+      "sha256": "cfc37fbf9050c5b0e251880407de682d4e72e4944d471b7ac58689510de16e62"
     },
     {
       "path": "internal/gui/mobile_discovery_test.go",
@@ -221,7 +252,7 @@
     },
     {
       "path": "internal/gui/mobile_policy.go",
-      "sha256": "172d9e4757d538d262283c6fe77de90637395143fde74da3a3df1c5c238b343f"
+      "sha256": "bbc2773796b81f868d6733582901febbeea3892dfb5363e47252fe1d315d4f57"
     },
     {
       "path": "internal/gui/mobile_policy_test.go",
@@ -236,12 +267,20 @@
       "sha256": "211810084b3780321e4457b2057ca9461d00b43cd0768c826206313561aaebc3"
     },
     {
+      "path": "internal/mobilepolicy/enabled_androidhost.go",
+      "sha256": "5b00751edd68c351cae8779fde7917fe4722168c0a6f43dfaf8d8a28f2eb9e5c"
+    },
+    {
       "path": "internal/mobilepolicy/enabled_desktop.go",
-      "sha256": "dc25f72247e743aef64c773d490ad9e9a0a4a09ab24b7a891e5ac6044894355a"
+      "sha256": "c848aa8ae764d02933ff044ed143fb5ea12e93e5b9dd5d747851e491bbb39f24"
     },
     {
       "path": "internal/mobilepolicy/enabled_mobile.go",
-      "sha256": "4a0f3cb7dc5fcd7b38db82c9414cc8ec1d0abbb04ea8c28b06f3bb22d0f4dcbd"
+      "sha256": "e956b1932067feda1c7201cb1de4cb9431808171510b47803739609623130447"
+    },
+    {
+      "path": "internal/provider/androidhost_store_test.go",
+      "sha256": "ed19a5cbb45a51fa076fde3be460f5d6dc21bc6f186e990b1cda647cb1b5e3ed"
     },
     {
       "path": "internal/provider/mobile_discovery.go",
@@ -256,16 +295,16 @@
       "sha256": "fc7f1416bd33b5daa39119a847e7ec971a402fe3adc7b0156321dbcbf550507f"
     },
     {
+      "path": "internal/provider/mobile_network_error_test.go",
+      "sha256": "e9790be88dd4ea74f8d3710ba55703804479ba08b4ae6c8da8de613f405c5f7e"
+    },
+    {
       "path": "internal/provider/mobile_store.go",
-      "sha256": "6459c12dfbc115ba9b2817af8aa2814de2e7c904e75f404fff93826e55357f66"
+      "sha256": "3eb28d7a82ead510dd3b3c64c2e67504e7201089ba5b58da724336655ebbff4c"
     },
     {
       "path": "internal/provider/mobile_store_test.go",
       "sha256": "988f6ff99e258e0303b38c55e967fc5203757113fec044f8aee0301cc1788629"
-    },
-    {
-      "path": "internal/provider/mobile_network_error_test.go",
-      "sha256": "e9790be88dd4ea74f8d3710ba55703804479ba08b4ae6c8da8de613f405c5f7e"
     }
   ]
 }

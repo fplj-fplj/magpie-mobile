@@ -74,7 +74,7 @@ internal fun PluginMarketCard(
     ContentCard {
             Text("插件候选目录", style = MaterialTheme.typography.titleLarge)
             Text(
-                "收录 " + marketState.entries.size + " 个候选条目。当前保存的是示例文件，完整插件下载和执行仍待接入。",
+                "收录 " + marketState.entries.size + " 个本机候选示例。完整插件市场请使用上方的官方网页编辑器。",
                 style = MaterialTheme.typography.bodyMedium
             )
 
@@ -121,7 +121,8 @@ internal fun McpServerCard(
     var newDesc by remember { mutableStateOf("") }
 
     ContentCard {
-            Text("MCP 服务配置", style = MaterialTheme.typography.titleLarge)
+            Text("本机 MCP 配置记录", style = MaterialTheme.typography.titleLarge)
+            Text("这些记录尚未同步到核心。要使用核心 MCP 服务，请在官方网页的资源库中配置。", style = MaterialTheme.typography.bodySmall)
             Text(
                 "受控端点: " + mcpState.servers.size + " 个 (已启用: " + mcpState.activeCount + ") · 支持 HTTP/SSE/STDIO 契约",
                 style = MaterialTheme.typography.bodyMedium

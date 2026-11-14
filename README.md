@@ -1,19 +1,21 @@
 # Magpie-Mobile
 
-把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：原生界面覆盖绝大部分可移植功能，提供后台模型网关、其他 App 接入与应用内聊天。完整范围见 [移植计划](plan.md)。
+把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
-## 当前源码版本：0.1.38-paper-ui（CI/真机验收分开）
+## 当前源码版本：0.1.39-full-core-editors（CI/真机验收分开）
 
 - **上游核心**：v0.1.3781（commit `b52c7111`）；
+- **新技术路线**：官方完整 CLI 核心 + Android 宿主适配，APK 使用 `nogui,androidhost`，不再使用 `mobile` 构建标签；提供官方浏览器编辑器与原生提供商编辑两种入口。详见 [路线与双编辑说明](docs/full-core-dual-editors.md)；
 - **界面更新（P9）**：暖纸色与文楷排版、精简网关首页、二级管理导航、聊天消息分层；修复网络状态与电池设置入口。详见 [界面更新与验收说明](docs/ui-update-0.1.38.md)；
 - **真机稳定性（P4/P5）**：网络热切换监听、电池优化白名单引导、低内存告警、冷启动遥测（<800ms 门槛）、崩溃事后脱敏审计；
 - **功能对齐（P5/P6）**：历史会话重命名/删除、用量洞察四段卡片（聚合/热力图/额度/历史）、开源许可声明查看、密钥可见模型目录；
-- **既有能力（P2/P3）**：多提供商安全接入、模型目录发现、别名路由与降级、Key 轮询池、Bun 订阅插件（回滚可逆）、HTTP MCP 工具、Chat Profiles、多会话持久化。
+- **既有能力（P2/P3）**：多提供商安全接入、模型目录发现、Chat Profiles、多会话持久化。路由、号池、插件与 MCP 的实际核心配置由官方网页编辑；旧原生页面的示例尚未全部对接。
 
 ## 文档索引
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/full-core-dual-editors.md](docs/full-core-dual-editors.md) | 完整 CLI 路线、双编辑入口、RikkaHub 提供商结构参考与验收 |
 | [docs/ui-update-0.1.38.md](docs/ui-update-0.1.38.md) | P9 界面更新、字体来源与真机验收步骤 |
 | [docs/upgrade-guide-0.1.30.md](docs/upgrade-guide-0.1.30.md) | **安装与验证指南**（安装步骤/healthz 判定/新功能清单/故障排查） |
 | [docs/p5-gap-analysis.md](docs/p5-gap-analysis.md) | 原版功能对齐缺口分析与终审裁定 |
@@ -36,10 +38,10 @@
 
 ## 安全边界
 
-继承真实 mobile 核心 M1/M2/M3/M5 与核心签发 Key。管理 3430 Cookie 与网关 3425 Bearer 隔离；同 UID 插件不是沙箱。移动管理面是**精确方法+路径白名单**（非前缀匹配），每项能力单独审查后开放；新增/编辑只支持基础 custom API-key OpenAI Chat，安全 canonical/HMAC revision/严格锁/原子保存。
+完整核心继承 Android 宿主的鉴权与进程管理适配。管理 3430 Cookie 与网关 3425 Bearer 隔离；同 UID 插件不是沙箱。官方配置 API 已开放，退出、重启与原生升级由 Android 宿主负责。原生基础 OpenAI 兼容编辑使用 canonical/HMAC revision/严格锁/原子保存；浏览器和原生写入共用锁与版本检查。
 
 ## 验证与操作
 
-CI 执行 Python 应用器、JVM 全量测试、Go 安全测试、host fake-vendor GET-only 烟测，再构建固定 v0.1.3781/Go1.26.8 mobile,nogui AndroidARM64 PIE 核心 `0.1.3781-mobile.1`（16KB 页对齐，`-Wl,-z,max-page-size=16384`）与固定签名 APK，核对载荷 SHA-256 与签名证书。安装后核对版本/SHA 并按 [安装指南](docs/upgrade-guide-0.1.30.md) 验证。
+CI 执行 Python 应用器、JVM 全量测试、legacy mobile 与完整宿主 Go 回归、使用合成上游的宿主烟测，再构建固定 v0.1.3781/Go1.26.8 `nogui,androidhost` Android ARM64 PIE 核心 `0.1.3781-androidhost.1`（16KB 页对齐）与固定签名 APK，核对载荷 SHA-256 与签名证书。本地不运行编译；安装后按 [双编辑验收步骤](docs/full-core-dual-editors.md) 验证。
 
 本地大版本升级基线：v0.1.3622 起步（旧基线 v0.1.3188 的 24 个补丁目标文件零变更，升级流程见技能库与 gap-analysis §5）。

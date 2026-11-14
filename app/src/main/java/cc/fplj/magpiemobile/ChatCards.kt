@@ -29,7 +29,7 @@ internal fun SubscriptionPluginCard(
 
     ContentCard {
             Text("插件文件与运行时", style = MaterialTheme.typography.titleLarge)
-            Text("这里管理插件文件与示例记录；登录、模型发现和请求执行链仍待接入。插件与应用同 UID 运行，不提供独立沙箱。", style = MaterialTheme.typography.bodySmall)
+            Text("本页管理本机示例文件。完整插件请在官方网页中管理；原生插件执行对接仍待完善。插件与应用同 UID 运行。", style = MaterialTheme.typography.bodySmall)
             val bunText = if (pluginState.bunStatus.installed) {
                 "Bun 载荷：预置就绪 (" + pluginState.bunStatus.architecture + ")"
             } else {

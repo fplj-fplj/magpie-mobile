@@ -453,14 +453,22 @@ func mobileWrite(raw []byte) error {
 	return nil
 }
 
-// Every legacy mobile store uses the same strict lock and read-generation CAS.
-// An obsolete background snapshot cannot overwrite a newer mobile API edit.
-// Unknown provider fields/comments are patched around, not re-marshaled away.
+// Every Android store uses the same strict lock and read-generation CAS.
+// FullAdmin restores upstream whole-file writes, including composite fields,
+// removal and ordering. Legacy mobile retains its conservative patch behavior.
 func mobileStore(f file) (handled bool, err error) {
 	if !mobilepolicy.Enabled { return false, nil }
 	return true, mobileTransaction(func() error {
 		raw, old, e := mobileCanonical(); if e != nil { return e }
 		if f.mobileRevision != old.mobileRevision { return ErrMobileProviderRevision }
+		if mobilepolicy.FullAdmin {
+			f.Groups = slices.Clone(f.Groups)
+			for i := range f.Groups { f.Groups[i] = f.Groups[i].stored() }
+			updated, e := json.MarshalIndent(f, "", "  "); if e != nil { return ErrMobileProviderInvalid }
+			if e := mobileWrite(append(updated, '\n')); e != nil { return e }
+			pruneIcons(f)
+			return nil
+		}
 		if raw == nil { raw = []byte("{}\n") }
 		if len(f.Providers) < len(old.Providers) { return ErrMobileProviderUnsupported }
 		for i, p := range old.Providers {

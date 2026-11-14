@@ -77,6 +77,7 @@ internal fun EmptyState(title: String, description: String) {
 
 /** 单色线框图标以 Icon 的主题 tint 着色，无额外图标依赖。 */
 internal enum class AppSymbol(val path: String) {
+    ADD("M12,5 L12,19 M5,12 L19,12"),
     GATEWAY("M5,3 L19,3 L19,9 L5,9 Z M5,15 L19,15 L19,21 L5,21 Z M8,6 L8.1,6 M8,18 L8.1,18 M12,9 L12,15"),
     PROVIDERS("M4,4 L10,4 L10,10 L4,10 Z M14,4 L20,4 L20,10 L14,10 Z M4,14 L10,14 L10,20 L4,20 Z M14,14 L20,14 L20,20 L14,20 Z"),
     CHAT("M4,4 L20,4 L20,16 L10,16 L5,20 L5,16 L4,16 Z M8,8 L16,8 M8,12 L13,12"),

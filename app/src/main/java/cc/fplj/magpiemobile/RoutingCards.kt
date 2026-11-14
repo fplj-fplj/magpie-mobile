@@ -27,14 +27,14 @@ internal fun ModelRoutingCard(
     var newFallback by remember { mutableStateOf("") }
 
     ContentCard {
-            Text("模型别名与路由降级 (Model Routing)", style = MaterialTheme.typography.titleMedium)
+            Text("本机路由示例", style = MaterialTheme.typography.titleMedium)
             Text(
-                "配置客户端模型别名映射（例如将 gpt-4o 别名映射至指定提供商模型），并定义备用回退链。",
+                "本页规则只保存在内存，尚未写入核心。实际网关路由请使用上方的官方网页编辑器配置。",
                 style = MaterialTheme.typography.bodySmall
             )
 
             if (routingState.rules.isEmpty()) {
-                Text("暂无路由别名规则；所有模型请求将直接路由至提供商原生目录。", style = MaterialTheme.typography.bodySmall)
+                Text("尚无本机路由示例；实际网关规则请在官方网页中查看。", style = MaterialTheme.typography.bodySmall)
             } else {
                 routingState.rules.forEach { rule ->
                     Surface(
@@ -130,14 +130,14 @@ internal fun KeyPoolingCard(
     var providerInput by remember { mutableStateOf("openai") }
 
     ContentCard {
-            Text("多 Key 轮询与账号池 (Key Pooling)", style = MaterialTheme.typography.titleMedium)
+            Text("本机号池示例", style = MaterialTheme.typography.titleMedium)
             Text(
-                "为提供商配置多枚 API Key 并在本地实现循环轮询负载均衡，支持故障隔离与停用切换。",
+                "本页仅记录内存示例，尚未写入核心。实际提供商多 Key 与账号池请在官方网页中配置。",
                 style = MaterialTheme.typography.bodySmall
             )
 
             if (poolState.keys.isEmpty()) {
-                Text("当前账号池为空；默认使用提供商全局主密钥。", style = MaterialTheme.typography.bodySmall)
+                Text("尚无本机号池示例。", style = MaterialTheme.typography.bodySmall)
             } else {
                 poolState.keys.forEach { keyEntry ->
                     Surface(

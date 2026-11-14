@@ -49,12 +49,27 @@ func mobileAPI(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		if p == "/api" || strings.HasPrefix(p, "/api/") {
-			if r.URL.RawPath != "" || path.Clean(p) != p || !mobileAPIAllowed(r.Method, p) {
+			allowed := mobileAPIAllowed(r.Method, p)
+			if mobilepolicy.FullAdmin {
+				allowed = p != "/api" && !androidHostOwnedAPI(r.Method, p)
+			}
+			if r.URL.RawPath != "" || path.Clean(p) != p || !allowed {
 				http.NotFound(w, r)
 				return
 			}
 			if p == "/api/mobile/capabilities" {
+				if r.Method != http.MethodGet { http.NotFound(w, r); return }
 				w.Header().Set("Cache-Control", "no-store")
+				if mobilepolicy.FullAdmin {
+					writeJSON(w, map[string]any{
+						"schemaVersion": 1, "coreVersion": Version, "mobile": false,
+						"androidHost": true, "fullAdmin": true, "webEditor": true,
+						"loopbackKeys": true, "debugEndpoints": false, "adminLoopbackOnly": true,
+						"nativeAutoUpdate": false, "providerSchemaVersion": 1,
+						"providerManagement": true, "providerModelDiscovery": true,
+					})
+					return
+				}
 				writeJSON(w, struct {
 					SchemaVersion    int    `json:"schemaVersion"`
 					CoreVersion      string `json:"coreVersion"`
@@ -73,4 +88,17 @@ func mobileAPI(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// These actions belong to the Android service/installer. Configuration APIs
+// (including update preferences and gateway-mode) retain their upstream behavior.
+func androidHostOwnedAPI(method, p string) bool {
+	switch p {
+	case "/api/quit", "/api/restart", "/api/window/restart":
+		return true
+	}
+	if method != http.MethodGet && method != http.MethodHead {
+		return p == "/api/update" || strings.HasPrefix(p, "/api/update/") || p == "/api/cli" || p == "/api/settings/login"
+	}
+	return false
 }

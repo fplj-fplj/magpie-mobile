@@ -42,6 +42,29 @@ class CoreManagementClientTest {
         assertNull(request.fetchSite)
     }
 
+    @Test fun acceptsFullAndroidHostWithRequiredAuthenticationProperties() {
+        api.capabilitiesBody = """{"schemaVersion":1,"coreVersion":"0.1.3781-androidhost.1","mobile":false,"androidHost":true,"fullAdmin":true,"webEditor":true,"loopbackKeys":true,"debugEndpoints":false,"adminLoopbackOnly":true,"nativeAutoUpdate":false}"""
+        val capabilities = api.client().capabilities()
+        assertFalse(capabilities.mobile)
+        assertTrue(capabilities.androidHost && capabilities.fullAdmin && capabilities.webEditor)
+    }
+
+    @Test fun browserLinkUsesOneAuthenticatedPostAndOnlyAcceptsLocalSingleUseEntry() {
+        val expected = "http://127.0.0.1:${api.port}/androidhost/browser-entry?ticket=" + "a".repeat(64)
+        api.browserEditorBody = """{"url":"$expected"}"""
+        assertEquals(expected, api.client().browserEditorLink())
+        assertEquals("POST", api.requests.single().method)
+        assertEquals("/api/androidhost/browser-session", api.requests.single().path)
+        assertEquals(api.credential.cookieHeader(), api.requests.single().cookie)
+        for (bad in listOf(
+            "https://evil.invalid/", "http://127.0.0.1:3425/androidhost/browser-entry?ticket=" + "a".repeat(64),
+            expected + "&extra=1", expected + "#fragment", "http://127.0.0.1:${api.port}/?k=management-key",
+        )) {
+            api.browserEditorBody = """{"url":"$bad"}"""
+            assertFailsWith<ManagementProtocolException> { api.client().browserEditorLink() }
+        }
+    }
+
     @Test fun wrongManagerValueIs401AndDoesNotExposeFreeErrorBody() {
         val wrong = ManagerCredential.fromKey("f".repeat(32), api.port)
         val error = assertFailsWith<ManagementHttpException> { CoreManagementClient(wrong, api.baseUrl).listCallerKeys() }
@@ -292,6 +315,7 @@ internal class ManagementApiFixture : AutoCloseable {
     val listRequests = AtomicInteger()
     @Volatile var keys: List<RegisteredGatewayKey> = emptyList()
     @Volatile var capabilitiesBody = CAPABILITIES
+    @Volatile var browserEditorBody = """{"url":"http://127.0.0.1:$port/androidhost/browser-entry?ticket=${"a".repeat(64)}"}"""
     @Volatile var addHandler: ((HttpExchange) -> Unit)? = null
     @Volatile var copyHandler: ((HttpExchange) -> Unit)? = null
     @Volatile var listHandler: ((HttpExchange) -> Unit)? = null
@@ -312,6 +336,7 @@ internal class ManagementApiFixture : AutoCloseable {
                     respond(exchange, 403, "native request should not spoof browser origin")
                 } else when (exchange.requestMethod + " " + exchange.requestURI.path) {
                     "GET /api/mobile/capabilities" -> respond(exchange, 200, capabilitiesBody)
+                    "POST /api/androidhost/browser-session" -> respond(exchange, 200, browserEditorBody)
                     "GET /api/state" -> respond(exchange, 200, """{"anything":{"nested":[1,2,3]},"version":7}""")
                     "GET /api/usage/requests" -> respond(exchange, 200, """{"requests":[{"id":"req-1","model":"gpt-4o","status":200,"duration":150,"total_tokens":42}]}""")
                     "GET /api/notices" -> respond(exchange, 200, """{"text":"Magpie is MIT License. Bundled third-party components: MIT License, Apache-2.0."}""")

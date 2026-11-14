@@ -6,6 +6,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -38,11 +39,23 @@ class CoreManagementClient(
     fun capabilities(): MobileCapabilities {
         val body = transport.request("GET", "/api/mobile/capabilities")
         val result = decode { json.decodeFromString(MobileCapabilities.serializer(), body) }
-        if (result.schemaVersion != 1 || result.coreVersion.isBlank() || !result.mobile ||
+        if (result.schemaVersion != 1 || result.coreVersion.isBlank() || (!result.mobile && !result.androidHost) ||
             !result.loopbackKeys || !result.adminLoopbackOnly || result.debugEndpoints || result.nativeAutoUpdate) {
             throw ManagementCapabilitiesMismatch()
         }
         return result
+    }
+
+    /** Mint only on an explicit user action. The returned ticket is consumed by the browser. */
+    fun browserEditorLink(): String {
+        val body = transport.request("POST", "/api/androidhost/browser-session", "{}".toByteArray(Charsets.UTF_8))
+        val link = decode { json.parseToJsonElement(body).jsonObject["url"]?.jsonPrimitive?.content ?: throw ManagementProtocolException() }
+        val uri = try { URI(link) } catch (_: Exception) { throw ManagementProtocolException() }
+        val query = uri.rawQuery.orEmpty()
+        if (uri.scheme != "http" || uri.rawAuthority != "127.0.0.1:${credential.port}" ||
+            uri.rawPath != "/androidhost/browser-entry" || uri.rawFragment != null ||
+            !query.matches(Regex("ticket=[0-9a-f]{64}"))) throw ManagementProtocolException()
+        return link
     }
 
     fun listCallerKeys(): List<RegisteredGatewayKey> {
@@ -235,6 +248,9 @@ data class MobileCapabilities(
     val debugEndpoints: Boolean,
     val adminLoopbackOnly: Boolean,
     val nativeAutoUpdate: Boolean,
+    val androidHost: Boolean = false,
+    val fullAdmin: Boolean = false,
+    val webEditor: Boolean = false,
 )
 
 @Serializable

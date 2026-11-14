@@ -49,7 +49,7 @@ jobs:
           python3 scripts/test_apk_signature.py
           python3 scripts/test-device-stability.py
 
-      - name: Apply exact hash-pinned mobile core patch
+      - name: Apply hash-pinned Android host adaptation
         run: |
           python3 scripts/test_apply_mobile_core.py
           python3 scripts/apply-mobile-core.py --source-root build-tmp/upstream --check
@@ -85,8 +85,9 @@ jobs:
           set -euo pipefail
           go test -tags nogui ./internal/access -count=1 -timeout=3m
           go test -json -tags nogui,mobile ./internal/gateway ./internal/gui ./internal/cli ./internal/provider -run '^TestMobile' -count=1 -timeout=3m | tee ../mobile-go-tests.jsonl
+          go test -json -tags nogui,androidhost ./internal/gateway ./internal/gui ./internal/cli ./internal/provider -run '^Test(AndroidHost|Mobile)' -count=1 -timeout=3m | tee ../androidhost-go-tests.jsonl
 
-      - name: Host integration smoke without model inference
+      - name: Host integration smoke with a synthetic upstream
         working-directory: build-tmp/upstream
         env:
           CGO_ENABLED: '0'
@@ -94,8 +95,10 @@ jobs:
           set -euo pipefail
           go build -trimpath -tags nogui,mobile -ldflags '-s -w -X main.version=0.1.3781-mobile.1' -o ../magpie-mobile-host .
           python3 ../../scripts/smoke-mobile-core.py --exe ../magpie-mobile-host
+          go build -trimpath -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.1' -o ../magpie-full-host .
+          python3 ../../scripts/smoke-mobile-core.py --exe ../magpie-full-host --full-admin
 
-      - name: Build the Android ARM64 mobile core
+      - name: Build the Android ARM64 full CLI core
         working-directory: build-tmp/upstream
         env:
           CGO_ENABLED: '1'
@@ -108,7 +111,7 @@ jobs:
           test -n "$ndk"
           export CC="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
           test -x "$CC"
-          go build -trimpath -buildmode=pie -tags nogui,mobile -ldflags '-s -w -X main.version=0.1.3781-mobile.1 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' -o ../magpie-mobile-android-arm64 .
+          go build -trimpath -buildmode=pie -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.1 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' -o ../magpie-mobile-android-arm64 .
           cp ../magpie-mobile-android-arm64 ../../app/src/main/jniLibs/arm64-v8a/libmagpie_exec.so
           sha256sum ../magpie-mobile-android-arm64 > ../mobile-core.sha256
           go version -m ../magpie-mobile-android-arm64 > ../mobile-core-build-info.txt
@@ -122,6 +125,7 @@ jobs:
           name: mobile-core-evidence-${{ github.sha }}
           path: |
             build-tmp/mobile-go-tests.jsonl
+            build-tmp/androidhost-go-tests.jsonl
             build-tmp/mobile-core.sha256
             build-tmp/mobile-core-build-info.txt
           if-no-files-found: warn
@@ -178,7 +182,7 @@ jobs:
           apk_name="magpie-mobile-${version_name}.apk"
           cp app/build/outputs/apk/release/app-release.apk "$apk_name"
           sha256sum "$apk_name" | tee "${apk_name}.sha256"
-          printf 'Commit: %s\nSource: b52c711142a662fe18fedf5a80cb1e4aa94bce62\nCore: 0.1.3781-mobile.1 (nogui,mobile)\nActions run: %s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
+          printf 'Commit: %s\nSource: b52c711142a662fe18fedf5a80cb1e4aa94bce62\nCore: 0.1.3781-androidhost.1 (nogui,androidhost; full official API)\nActions run: %s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
           cat build-tmp/mobile-core.sha256 build-tmp/apk-signature.txt >> build-info.txt
           notes_file="build-tmp/release-notes.md"
           if [ -f "RELEASE_NOTES.md" ]; then

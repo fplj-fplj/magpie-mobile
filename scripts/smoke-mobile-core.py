@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host-only core integration: no provider secret, subscription or model inference."""
+"""Host-only core integration with synthetic credentials and a fake chat upstream."""
 import argparse,json,os,secrets,socket,subprocess,tempfile,threading,time,urllib.request,urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,7 +26,8 @@ def is_listening(p):
         with socket.create_connection(('127.0.0.1',p),timeout=.2): return True
     except OSError: return False
 
-args=argparse.ArgumentParser();args.add_argument('--exe',required=True);opts=args.parse_args()
+args=argparse.ArgumentParser();args.add_argument('--exe',required=True);args.add_argument('--full-admin',action='store_true');opts=args.parse_args()
+core_version='0.1.3781-androidhost.1' if opts.full_admin else '0.1.3781-mobile.1'
 exe=Path(opts.exe).resolve();assert exe.is_file()
 with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
     root=Path(temporary)
@@ -87,9 +88,43 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
             time.sleep(.1)
         else: raise AssertionError('authenticated management never became ready')
         cap=json.loads(body)
-        assert cap=={'schemaVersion':1,'coreVersion':'0.1.3781-mobile.1','mobile':True,
+        expected={'schemaVersion':1,'coreVersion':core_version,'mobile':not opts.full_admin,
                      'loopbackKeys':True,'debugEndpoints':False,'adminLoopbackOnly':True,'nativeAutoUpdate':False,
                      'providerSchemaVersion':1,'providerManagement':True,'providerModelDiscovery':True}
+        if opts.full_admin: expected.update(androidHost=True,fullAdmin=True,webEditor=True)
+        assert cap==expected
+        if opts.full_admin:
+            boot_code,boot_body=request(admin,'/boot.js',headers=cookie)
+            assert boot_code==200 and b'"gateway":true' not in boot_body,'full web UI was hidden by automatic gateway mode'
+            code,body=request(admin,'/api/settings/gateway-mode','POST',{'mode':'off'},cookie)
+            assert code==200,'official settings API was not restored'
+            assert request(admin,'/api/settings/gateway-mode','POST',{'mode':'off'})[0]==401
+            assert request(admin,'/',headers={**cookie,'Accept':'text/html'})[0]==200
+            assert request(admin,'/api/androidhost/browser-session','POST',{})[0]==401
+            code,body=request(admin,'/api/androidhost/browser-session','POST',{},cookie)
+            assert code==200
+            link=json.loads(body)['url']
+            assert link.startswith(admin+'/androidhost/browser-entry?ticket=') and admin_key not in link
+            try:
+                http.open(urllib.request.Request(link,headers={'Accept':'text/html'}),timeout=5)
+                raise AssertionError('browser entry must redirect to a clean root')
+            except urllib.error.HTTPError as entry:
+                assert entry.code==303 and entry.headers['Location']=='/'
+                assert 'HttpOnly' in entry.headers['Set-Cookie']
+                browser_cookie=entry.headers['Set-Cookie'].split(';',1)[0]
+            assert request(admin,'/',headers={'Cookie':browser_cookie,'Accept':'text/html'})[0]==200
+            assert request(admin,link.removeprefix(admin))[0]==401,'browser entry replay accepted'
+            assert request(admin,'/api/update/install','POST',{},cookie)[0]==404
+            # Exercise the real official provider writer on first use, including
+            # composite fields and deletion that the legacy mobile store rejected.
+            web_draft={'id':'web-created','name':'Web created','chat':vendor_base+'/v1',
+                       'key':vendor_key,'models':['web-only-model'],'baseAPI':'chat',
+                       'headers':{'X-Smoke':'web-created'}}
+            assert request(admin,'/api/provider/save','POST',web_draft)[0]==401
+            assert request(admin,'/api/provider/save','POST',web_draft,cookie)[0]==200,'official first-use provider save failed'
+            code,body=request(admin,'/api/mobile/providers/editable/web-created',headers=cookie)
+            assert code==200 and json.loads(body)['name']=='Web created','native editor cannot read web-created provider'
+            assert request(admin,'/api/provider/delete','POST',{'id':'web-created'},cookie)[0]==200,'official provider deletion failed'
         assert request(admin,'/api/mobile/capabilities')[0]==401
         assert request(gateway,'/api/hello')[0]==401
         assert request(gateway,'/v1/models',headers={'Authorization':'Bearer magpie'})[0]==401
@@ -105,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
         own_id=own[0]['id']
         auth={'Authorization':'Bearer '+secret}
         code,body=request(gateway,'/api/hello',headers=auth)
-        assert code==200 and json.loads(body)=={'name':'magpie','version':'0.1.3781-mobile.1'}
+        assert code==200 and json.loads(body)=={'name':'magpie','version':core_version}
         assert request(gateway,'/v1/magpie/goroutines',headers=auth)[0]==404
         assert request(gateway,'/v1/magpie/heap',headers=auth)[0]==404
         assert request(admin,'/api/window/restart','POST',{},cookie)[0]==404
@@ -141,6 +176,26 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
         assert edited['name']=='Host edited' and edited['models']==['probe-model'] and edited['key']['set']
         assert request(admin,'/api/mobile/providers/edit','POST',
                        {'id':'host-provider','revision':original_revision,'name':'stale write'},cookie)[0]==409
+        if opts.full_admin:
+            web_save={'id':'host-provider','name':'Web edited','chat':vendor_base+'/v1',
+                      'models':['probe-model'],'baseAPI':'chat','headers':{'X-Smoke':'web-edit'}}
+            assert request(admin,'/api/provider/save','POST',web_save,cookie)[0]==200,'official web edit failed'
+            code,body=request(admin,'/api/mobile/providers/editable/host-provider',headers=cookie)
+            assert code==200
+            web_edited=json.loads(body)
+            assert web_edited['name']=='Web edited' and web_edited['revision']!=edited['revision']
+            assert web_edited['models']==['probe-model'] and web_edited['key']['set'] and vendor_key not in body.decode()
+            assert request(admin,'/api/mobile/providers/edit','POST',
+                           {'id':'host-provider','revision':edited['revision'],'name':'stale after browser'},cookie)[0]==409
+            code,body=request(admin,'/api/mobile/providers/edit','POST',
+                              {'id':'host-provider','revision':web_edited['revision'],'name':'Native after web'},cookie)
+            assert code==200
+            edited=json.loads(body)
+            files=list((root/'config').rglob('providers.json'))
+            assert len(files)==1
+            canonical=json.loads(files[0].read_text())['providers'][0]
+            assert canonical['headers']=={'X-Smoke':'web-edit'} and canonical['key']==vendor_key
+            assert canonical['models']==['probe-model'],'native edit lost official key/model/composite fields'
         # Reproduce the real chat path end to end with a fake upstream: the gateway must
         # forward base+/chat/completions once and strip only the provider prefix.
         code,body=request(gateway,'/v1/models',headers={'Authorization':'Bearer '+secret})
@@ -154,8 +209,9 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
         assert code==200,'gateway chat failed with HTTP '+str(code)
         assert vendor_calls['chat_paths']==['/v1/chat/completions'],'unexpected upstream chat path'
         assert vendor_calls['chat_models']==['probe-model'],'unexpected upstream model name'
-        assert request(admin,'/api/provider/test','POST',{'id':'host-provider'},cookie)[0]==404
-        assert request(admin,'/api/provider/detect','POST',{'id':'host-provider'},cookie)[0]==404
+        if not opts.full_admin:
+            assert request(admin,'/api/provider/test','POST',{'id':'host-provider'},cookie)[0]==404
+            assert request(admin,'/api/provider/detect','POST',{'id':'host-provider'},cookie)[0]==404
         code,body=request(admin,'/api/mobile/providers/edit','POST',
                           {'id':'host-provider','revision':edited['revision'],'models':[],'noModels':True},cookie)
         assert code==200 and json.loads(body)['noModels'] is True and json.loads(body)['models']==[]
@@ -167,7 +223,7 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
         p.terminate();p.wait(timeout=5);t.join(timeout=1)
         assert not is_listening(admin_port) and not is_listening(gateway_port),'orphan listener after stop'
         passed=True
-        print('PASS: host serve startup, strict key/cookie auth, core-issued key/copy, safe provider create/edit/revision, debug denial, safe CLI output and stop; no inference')
+        print('PASS: host startup, strict auth, provider create/edit/revision, synthetic chat, debug denial and stop; '+('full official provider writes and browser entry' if opts.full_admin else 'legacy mobile policy'))
     finally:
         vendor.shutdown();vendor.server_close()
         if p.poll() is None:

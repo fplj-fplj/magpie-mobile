@@ -4,3 +4,4 @@
 package mobilepolicy
 
 const Enabled = true
+const FullAdmin = false

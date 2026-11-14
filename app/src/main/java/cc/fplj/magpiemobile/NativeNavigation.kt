@@ -1,5 +1,7 @@
 package cc.fplj.magpiemobile
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -10,10 +12,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.launch
 import cc.fplj.magpiemobile.core.EnginePaths
 import cc.fplj.magpiemobile.core.GatewayEngineController
 import cc.fplj.magpiemobile.preferences.AppPage
@@ -29,6 +36,8 @@ fun Dashboard(
     onStartGateway: () -> Unit,
     onStopGateway: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val shell by appShell.state.collectAsStateWithLifecycle()
     val gateway by GatewayRuntime.status.collectAsStateWithLifecycle()
     val connection by NativeCoreSession.status.collectAsStateWithLifecycle()
@@ -53,6 +62,23 @@ fun Dashboard(
     val marketState by marketViewModel.state.collectAsStateWithLifecycle()
     val stabilityViewModel: StabilityViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val stabilityState by stabilityViewModel.state.collectAsStateWithLifecycle()
+    val externalEditor: ExternalEditorViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val externalState by externalEditor.state.collectAsStateWithLifecycle()
+    val providerCache: ProviderListCacheViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, externalEditor, providerCache, appShell) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && externalEditor.awaitingReturn) scope.launch {
+                providerCache.invalidate()
+                if (externalEditor.returned()) appShell.refreshModels()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    fun openBrowserEditor() = externalEditor.open { link ->
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
+    }
 
     LaunchedEffect(layout) {
         pluginViewModel.initialize(layout)
@@ -178,6 +204,10 @@ fun Dashboard(
                 ) {
                     if (section != null) {
                         PageHeading(section.title, section.detail)
+                        if (section == GatewaySection.PLUGINS || section == GatewaySection.ROUTING || section == GatewaySection.SYSTEM) {
+                            EditorChoiceCard(clientReady && connection.webEditor && !providerBusy, externalState,
+                                { appShell.selectPage(AppPage.PROVIDERS) }, ::openBrowserEditor, nativeSelected = false)
+                        }
                         when (section) {
                             GatewaySection.CONNECTION -> {
                                 SectionCard("核心连接") {
@@ -221,7 +251,9 @@ fun Dashboard(
                             { appShell.selectPage(AppPage.PROVIDERS) }, { appShell.selectPage(AppPage.CHAT) },
                         )
                         AppPage.PROVIDERS -> {
-                            PageHeading("你的模型来源。", "管理提供商，选择你想使用的模型。", "PROVIDERS / 02")
+                            PageHeading("模型提供商", "管理连接与可用模型。")
+                            EditorChoiceCard(clientReady && connection.webEditor && !providerBusy, externalState,
+                                { appShell.selectPage(AppPage.PROVIDERS) }, ::openBrowserEditor)
                             if (!clientReady) {
                                 SectionCard("先连接本机网关") {
                                     Text("启动网关并完成核心连接后，即可添加与编辑提供商。", style = MaterialTheme.typography.bodyMedium)
@@ -229,7 +261,9 @@ fun Dashboard(
                                 }
                             }
                             ProvidersPanel(enabled = clientReady, operationBusy = chat.sending,
-                                onBusyChanged = { providerBusy = it }, onProvidersChanged = appShell::refreshModels)
+                                onBusyChanged = { providerBusy = it }, onProvidersChanged = appShell::refreshModels,
+                                externalRevision = externalState.returnRevision,
+                                onExternalEditor = if (clientReady && connection.webEditor) ::openBrowserEditor else null)
                         }
                         AppPage.CHAT -> {
                             PageHeading("从一个问题开始。", "选择模型，继续你的对话。", "CONVERSATIONS / 03")
@@ -248,6 +282,8 @@ fun Dashboard(
                         }
                         AppPage.MORE -> {
                             PageHeading("按你的方式使用。", "模型、工具与本机设置，各有其位。", "WORKSPACE / 04")
+                            EditorChoiceCard(clientReady && connection.webEditor && !providerBusy, externalState,
+                                { appShell.selectPage(AppPage.PROVIDERS) }, ::openBrowserEditor, nativeSelected = false)
                             Column(verticalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
                                 listOf(GatewaySection.MODELS, GatewaySection.PLUGINS, GatewaySection.SYSTEM).forEach { destination ->
                                     DestinationRow(destination.title, destination.detail, destination.symbol, { openSection(destination) })

@@ -215,7 +215,7 @@ class ApplyMobileCoreTests(unittest.TestCase):
             self.assertNotIn(unsafe, branch["new"])
         self.assertRegex(cli["resultSha256"], "^[0-9a-f]{64}$")
         tests = (root / "overlay/internal/cli/mobile_policy_test.go").read_text(encoding="utf-8")
-        self.assertTrue(tests.startswith("//go:build mobile\n"))
+        self.assertTrue(tests.startswith("//go:build mobile || androidhost\n"))
         self.assertIn("func TestMobilePrintWebNoKeyDoesNotPanic", tests)
         self.assertIn("func TestMobilePrintWebDoesNotOutputCredentials", tests)
 
@@ -260,7 +260,7 @@ class ApplyMobileCoreTests(unittest.TestCase):
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["sourceRevision"], patcher.SOURCE_REVISION)
         self.assertEqual(manifest["goVersion"], "1.26.8")
-        self.assertEqual(len(manifest["patches"]), 8)
+        self.assertEqual(len(manifest["patches"]), 9)
         for overlay in manifest["overlays"]:
             data = (root / "overlay" / overlay["path"]).read_bytes()
             patcher.require_hash(data, overlay["sha256"], overlay["path"])
@@ -273,8 +273,9 @@ class ApplyMobileCoreTests(unittest.TestCase):
         for exception in ("ownCallback", "corsPreflight", "keyPageOpen", "imageTokenAsked", "oidcExchange", "proveAsked"):
             self.assertRegex(inserts, "!mobilepolicy.Enabled.*" + exception)
         tests = [(root / "overlay" / o["path"]).read_text() for o in manifest["overlays"] if o["path"].endswith("_test.go")]
-        self.assertEqual(len(tests), 8)
-        self.assertTrue(all(t.startswith("//go:build mobile\n") for t in tests))
+        self.assertEqual(len(tests), 10)
+        constraints = {"//go:build mobile", "//go:build mobile || androidhost", "//go:build androidhost"}
+        self.assertTrue(all(t.splitlines()[0] in constraints for t in tests))
         self.assertGreaterEqual(sum(t.count("func TestMobile") for t in tests), 10)
 
 

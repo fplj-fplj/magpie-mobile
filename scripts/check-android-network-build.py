@@ -2,9 +2,10 @@
 """Static guards, not a substitute for Android runtime network validation."""
 from pathlib import Path
 workflow=Path('.github/workflows/build.yml').read_text()
-step=workflow.split('- name: Build the Android ARM64 mobile core',1)[1].split('- name:',1)[0]
+step=workflow.split('- name: Build the Android ARM64 full CLI core',1)[1].split('- name:',1)[0]
 assert "CGO_ENABLED: '1'" in step, 'Android core requires Bionic/cgo DNS'
 assert 'aarch64-linux-android29-clang' in step and '-linkmode=external' in step
+assert '-tags nogui,androidhost ' in step and '-tags nogui,mobile ' not in step
 service=Path('app/src/main/java/cc/fplj/magpiemobile/GatewayService.kt').read_text()
 assert 'SSL_CERT_DIR' in service
 assert '/apex/com.android.conscrypt/cacerts:/system/etc/security/cacerts' in service

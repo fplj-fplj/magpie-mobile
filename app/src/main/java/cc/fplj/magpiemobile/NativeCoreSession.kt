@@ -14,13 +14,14 @@ import kotlinx.coroutines.flow.asStateFlow
 /** Private credentials never enter Flow, Intent, healthz, logs, clipboard or Compose state. */
 object NativeCoreSession {
     enum class Phase { DISCONNECTED, CONNECTING, READY, ERROR }
-    data class Snapshot(val phase: Phase, val message: String) {
+    data class Snapshot(val phase: Phase, val message: String, val webEditor: Boolean = false) {
         val ready: Boolean get() = phase == Phase.READY
     }
     private data class Binding(val owner: Long, val credential: ManagerCredential) {
         var connecting = false
         var config: GatewayConfig? = null
         var providers: cc.fplj.magpiemobile.core.ProviderManagementClient? = null
+        var webEditor: Boolean = false
     }
     private val lock = Any()
     private var binding: Binding? = null
@@ -59,7 +60,8 @@ object NativeCoreSession {
                 synchronized(lock) {
                     if (binding === current && isRunningOwner(current)) {
                         current.config = config
-                        mutableStatus.value = Snapshot(Phase.READY, "安全能力验证通过；本机客户端密钥已在核心登记并私有保存")
+                        current.webEditor = capabilities.webEditor && capabilities.fullAdmin
+                        mutableStatus.value = Snapshot(Phase.READY, "核心连接已就绪；本机客户端密钥已登记", current.webEditor)
                     }
                 }
             } catch (e: Exception) {
@@ -69,7 +71,7 @@ object NativeCoreSession {
                         current.config = null
                         val reason = when (e) {
                             is cc.fplj.magpiemobile.core.ManagementHttpException -> "管理请求失败：HTTP " + e.httpCode
-                            is cc.fplj.magpiemobile.core.ManagementCapabilitiesMismatch -> "核心移动安全能力不兼容，已拒绝注册密钥"
+                            is cc.fplj.magpiemobile.core.ManagementCapabilitiesMismatch -> "核心宿主能力不兼容，已拒绝注册密钥"
                             is cc.fplj.magpiemobile.core.ManagementExecutionUnknown -> "密钥操作结果未知；下次连接会先重读核心列表，不自动重复写入"
                             is cc.fplj.magpiemobile.core.GatewayKeyProvisioningException -> "密钥已撤销/受限/过期或身份不唯一，不会自动创建替代密钥"
                             is cc.fplj.magpiemobile.core.GatewayCredentialStoreException -> "私有凭据文件异常，未覆盖原文件；请保留数据再排查"
@@ -121,6 +123,19 @@ object NativeCoreSession {
         val current = binding ?: error("请先启动网关")
         check(isRunningOwner(current) && current.config != null) { "核心安全连接尚未完成" }
         current.providers ?: cc.fplj.magpiemobile.core.ProviderManagementClient(current.credential).also { current.providers = it }
+    }
+
+    fun browserEditorLink(): String {
+        val current = synchronized(lock) {
+            val value = binding ?: error("请先启动网关")
+            check(isRunningOwner(value) && value.config != null && value.webEditor) { "官方网页编辑器尚未就绪" }
+            value
+        }
+        val link = CoreManagementClient(current.credential).browserEditorLink()
+        synchronized(lock) {
+            check(binding === current && isRunningOwner(current) && current.config != null) { "核心已断开，请重新打开编辑器" }
+        }
+        return link
     }
 
     fun retry(filesDir: File) {
