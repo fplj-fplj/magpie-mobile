@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -58,10 +57,7 @@ class NetworkConnectivityMonitor(private val context: Context) {
             }
         }
         try {
-            val request = NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .build()
-            connectivityManager.registerNetworkCallback(request, cb)
+            connectivityManager.registerDefaultNetworkCallback(cb)
             callback = cb
         } catch (_: Exception) {
             // In restricted test environments or permission limits, fallback to poll
@@ -98,13 +94,10 @@ class NetworkConnectivityMonitor(private val context: Context) {
             val activeNetwork = cm.activeNetwork
             val capabilities = cm.getNetworkCapabilities(activeNetwork)
             mutableState.value = evaluateNetworkState(capabilities)
-        } catch (e: Exception) {
-            mutableState.value = NetworkState(
-                connected = false,
-                type = NetworkType.NONE,
-                validated = false,
-                description = "检测网络状态异常: " + (e.message ?: "未知错误")
-            )
+        } catch (_: SecurityException) {
+            mutableState.value = NetworkState(description = "缺少网络状态权限，请更新应用后重试")
+        } catch (_: Exception) {
+            mutableState.value = NetworkState(description = "暂时无法读取网络状态，请重新检测")
         }
     }
 

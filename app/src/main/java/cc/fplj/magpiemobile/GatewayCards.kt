@@ -18,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun GatewayEndpointCard(
     running: Boolean,
@@ -27,8 +28,7 @@ internal fun GatewayEndpointCard(
 ) {
     val clipboard = LocalClipboardManager.current
     var notice by remember { mutableStateOf("") }
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ContentCard {
             Text("网关接入与本地端点", style = MaterialTheme.typography.titleMedium)
             Text(
                 if (running) "网关正在运行，监听地址：http://127.0.0.1:3425/v1"
@@ -46,7 +46,7 @@ internal fun GatewayEndpointCard(
                 } else {
                     Text("核心安全连接验证中，正在核对客户端密钥…", style = MaterialTheme.typography.labelSmall)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = {
                         clipboard.setText(AnnotatedString("http://127.0.0.1:3425/v1"))
                         notice = "已复制网关 Base URL：http://127.0.0.1:3425/v1"
@@ -79,9 +79,8 @@ internal fun GatewayEndpointCard(
                 }
             }
             if (notice.isNotEmpty()) {
-                Text(notice, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                Text(notice, color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.bodySmall)
             }
-        }
     }
 }
 
@@ -97,8 +96,7 @@ internal fun GatewayKeysCard(
     var newKeyName by remember { mutableStateOf("") }
     var editingKey by remember { mutableStateOf<RegisteredGatewayKey?>(null) }
 
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ContentCard {
             Text("网关密钥管理 (Caller Keys)", style = MaterialTheme.typography.titleMedium)
             Text(
                 "所有访问网关的客户端均需有效密钥鉴权。您可在此为不同外部应用（如 Chatbox、NextChat、OpenCat 或自动化脚本）查看、复制或签发专属客户端密钥。",
@@ -231,10 +229,9 @@ internal fun GatewayKeysCard(
                     Text(keysState.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 if (notice.isNotEmpty()) {
-                    Text(notice, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                    Text(notice, color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.bodySmall)
                 }
             }
-        }
     }
     editingKey?.let { key ->
         KeyRestrictionsDialog(key = key, viewModel = viewModel, onDismiss = { editingKey = null })
@@ -316,8 +313,7 @@ internal fun RecentRequestsCard(
     viewModel: UsageViewModel,
     usageState: UsageUiState,
 ) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ContentCard {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -381,7 +377,6 @@ internal fun RecentRequestsCard(
             if (usageState.error.isNotEmpty()) {
                 Text(usageState.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
-        }
     }
 }
 

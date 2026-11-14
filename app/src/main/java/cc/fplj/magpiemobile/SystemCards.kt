@@ -9,6 +9,9 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import cc.fplj.magpiemobile.core.GatewayEngineController
 import cc.fplj.magpiemobile.core.SecretRedactor
 import kotlinx.coroutines.CancellationException
@@ -22,23 +25,28 @@ internal fun SystemStabilityCard(
     stabilityState: SystemStabilityUiState,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("设备稳定性与系统保活 (System Stability & LifeCycle)", style = MaterialTheme.typography.titleMedium)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var settingsNotice by remember { mutableStateOf("") }
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.refresh()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    SectionCard("设备与后台运行") {
             Text("网络状态: " + stabilityState.networkState.description, style = MaterialTheme.typography.bodyMedium)
             Text("电源策略: " + stabilityState.batteryStatus.description, style = MaterialTheme.typography.bodySmall)
 
             if (stabilityState.batteryStatus.canRequest) {
                 Button(onClick = {
-                    try {
-                        BatteryOptimizationHelper.createOptimizationSettingsIntent(context)?.let {
-                            context.startActivity(it)
-                        }
-                    } catch (_: Exception) {}
+                    val route = BatteryOptimizationHelper.openOptimizationSettings(context)
+                    settingsNotice = (if (route.intent != null) "已打开${route.label}。" else "") + route.note
                 }) {
-                    Text("前往系统设置忽略电池优化")
+                    Text("设置电池优化白名单")
                 }
             }
+            if (settingsNotice.isNotEmpty()) Text(settingsNotice, style = MaterialTheme.typography.bodyMedium)
 
             if (stabilityState.memoryTrimNotice.isNotEmpty()) {
                 Text(
@@ -52,9 +60,8 @@ internal fun SystemStabilityCard(
             }
 
             TextButton(onClick = { viewModel.refresh() }) {
-                Text("刷新网络与保活状态")
+                Text("重新检测网络与电源策略")
             }
-        }
     }
 }
 
@@ -64,11 +71,10 @@ internal fun PluginMarketCard(
     viewModel: PluginMarketViewModel,
     marketState: PluginMarketUiState,
 ) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("受控插件市场与生态 (Verified Plugin Market)", style = MaterialTheme.typography.titleMedium)
+    ContentCard {
+            Text("插件候选目录", style = MaterialTheme.typography.titleLarge)
             Text(
-                "收录 " + marketState.entries.size + " 个已审计移动安全插件（沙箱隔离与 SHA-256 完整性认证）",
+                "收录 " + marketState.entries.size + " 个候选条目。当前保存的是示例文件，完整插件下载和执行仍待接入。",
                 style = MaterialTheme.typography.bodyMedium
             )
 
@@ -81,14 +87,14 @@ internal fun PluginMarketCard(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(entry.name + " v" + entry.version, style = MaterialTheme.typography.bodyMedium)
                         Text(entry.description, style = MaterialTheme.typography.bodySmall)
-                        Text("作者: " + entry.author + " · " + entry.capabilities.joinToString(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                        Text("作者: " + entry.author + " · " + entry.capabilities.joinToString(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     val isInstalled = marketState.installedIds.contains(entry.id)
                     Button(
                         onClick = { viewModel.installFromMarket(entry) },
                         enabled = !isInstalled
                     ) {
-                        Text(if (isInstalled) "已安装" else "一键安装")
+                        Text(if (isInstalled) "已保存" else "保存示例")
                     }
                 }
             }
@@ -97,9 +103,8 @@ internal fun PluginMarketCard(
                 Text(marketState.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             if (marketState.notice.isNotEmpty()) {
-                Text(marketState.notice, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                Text(marketState.notice, color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.bodySmall)
             }
-        }
     }
 }
 
@@ -115,9 +120,8 @@ internal fun McpServerCard(
     var newEndpoint by remember { mutableStateOf("http://127.0.0.1:8080/mcp") }
     var newDesc by remember { mutableStateOf("") }
 
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("MCP 服务与受控工具 (Model Context Protocol)", style = MaterialTheme.typography.titleMedium)
+    ContentCard {
+            Text("MCP 服务配置", style = MaterialTheme.typography.titleLarge)
             Text(
                 "受控端点: " + mcpState.servers.size + " 个 (已启用: " + mcpState.activeCount + ") · 支持 HTTP/SSE/STDIO 契约",
                 style = MaterialTheme.typography.bodyMedium
@@ -132,7 +136,7 @@ internal fun McpServerCard(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(server.name + " (" + server.transport.name + ")", style = MaterialTheme.typography.bodyMedium)
-                            Text(server.endpoint, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                            Text(server.endpoint, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (server.description.isNotBlank()) {
                                 Text(server.description, style = MaterialTheme.typography.bodySmall)
                             }
@@ -142,7 +146,7 @@ internal fun McpServerCard(
                                 Text(if (server.enabled) "已启用" else "已停用")
                             }
                             TextButton(onClick = { viewModel.deleteServer(server.id) }) {
-                                Text("删除")
+                                Text("删除", color = MaterialTheme.colorScheme.error)
                             }
                         }
                     }
@@ -211,9 +215,8 @@ internal fun McpServerCard(
                 Text(mcpState.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             if (mcpState.notice.isNotEmpty()) {
-                Text(mcpState.notice, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                Text(mcpState.notice, color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.bodySmall)
             }
-        }
     }
 }
 

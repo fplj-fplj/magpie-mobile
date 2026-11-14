@@ -202,8 +202,7 @@ fun ProvidersPanel(
             } finally { create?.clearSecret(); edit?.clearSecret(); if (submitted) key = ""; if (sequence == operationSequence) setBusy(false) }
         }
     }
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ContentCard {
             Text("提供商", style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = enabled && !busy, onClick = { refresh(force = true) }) { Text(if (recoveryRequired) "核对保存结果" else "刷新") }
@@ -239,7 +238,6 @@ fun ProvidersPanel(
                     }) { Text(if (provider.editable) "编辑" else "此类型暂仅支持查看") }
                 } }
             }
-        }
     }
     if (open) Dialog(onDismissRequest = { if (!busy) close() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize()) { Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(16.dp)) {

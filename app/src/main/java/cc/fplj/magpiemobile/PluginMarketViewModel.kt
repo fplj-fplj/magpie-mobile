@@ -62,7 +62,7 @@ class PluginMarketViewModel(application: Application) : AndroidViewModel(applica
             refreshInstalled()
             mutable.update {
                 it.copy(
-                    notice = "已从受控市场安装插件: " + entry.name,
+                    notice = "已保存候选插件的示例文件: " + entry.name + "；完整插件执行仍待接入",
                     error = ""
                 )
             }

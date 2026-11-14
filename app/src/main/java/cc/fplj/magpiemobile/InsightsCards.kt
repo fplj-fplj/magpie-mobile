@@ -58,8 +58,7 @@ internal fun UsageInsightsCard(
     viewModel: UsageViewModel,
     usageState: UsageUiState,
 ) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ContentCard {
             Text("用量洞察（热力图与额度）", style = MaterialTheme.typography.titleMedium)
             Text(
                 "来自核心只读统计端点（/api/usage/heatmap 与 /api/usage/quotas）。仅展示聚合数字与条目计数；不含请求正文或凭据。",
@@ -111,7 +110,6 @@ internal fun UsageInsightsCard(
                     }
                 }
             }
-        }
     }
 }
 

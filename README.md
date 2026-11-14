@@ -2,9 +2,10 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：原生界面覆盖绝大部分可移植功能，提供后台模型网关、其他 App 接入与应用内聊天。完整范围见 [移植计划](plan.md)。
 
-## 当前版本：0.1.30-upstream-3622（CI/真机验收分开）
+## 当前源码版本：0.1.38-paper-ui（CI/真机验收分开）
 
-- **上游核心**：v0.1.3622（commit `02512343`，从 v0.1.3188 基线升级，补丁冲突面为零）；
+- **上游核心**：v0.1.3781（commit `b52c7111`）；
+- **界面更新（P9）**：暖纸色与文楷排版、精简网关首页、二级管理导航、聊天消息分层；修复网络状态与电池设置入口。详见 [界面更新与验收说明](docs/ui-update-0.1.38.md)；
 - **真机稳定性（P4/P5）**：网络热切换监听、电池优化白名单引导、低内存告警、冷启动遥测（<800ms 门槛）、崩溃事后脱敏审计；
 - **功能对齐（P5/P6）**：历史会话重命名/删除、用量洞察四段卡片（聚合/热力图/额度/历史）、开源许可声明查看、密钥可见模型目录；
 - **既有能力（P2/P3）**：多提供商安全接入、模型目录发现、别名路由与降级、Key 轮询池、Bun 订阅插件（回滚可逆）、HTTP MCP 工具、Chat Profiles、多会话持久化。
@@ -13,6 +14,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/ui-update-0.1.38.md](docs/ui-update-0.1.38.md) | P9 界面更新、字体来源与真机验收步骤 |
 | [docs/upgrade-guide-0.1.30.md](docs/upgrade-guide-0.1.30.md) | **安装与验证指南**（安装步骤/healthz 判定/新功能清单/故障排查） |
 | [docs/p5-gap-analysis.md](docs/p5-gap-analysis.md) | 原版功能对齐缺口分析与终审裁定 |
 | [docs/structure-review.md](docs/structure-review.md) | 代码结构评估矩阵 |

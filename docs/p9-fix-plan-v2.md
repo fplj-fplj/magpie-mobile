@@ -1,8 +1,7 @@
 # P9 真机反馈修复方案（目标 goal-62d5bf78）
 
 > 依据：用户 2026-11-12 真机截图 + 源码只读核对。所有根因均带文件行号证据。
-> 状态：诊断完成；代码落地待设备桥授权恢复（当前 write/edit 对已存在文件、bash 均返回
-> `DSHA_DESTRUCTIVE_BLOCKED: DSHA_NATIVE_CONSENT_UNAVAILABLE`）。
+> 2026-11-14 更新：①网络、②电池设置、③字体、④二级导航已在 `0.1.38-paper-ui` 源码中落地，合并为一次界面更新；不做本地编译，沿用 GitHub Actions 回归与签名构建。⑤完整插件执行继续待开发，界面已明确区分文件管理和实际运行。更新详情和验收步骤见 [ui-update-0.1.38.md](ui-update-0.1.38.md)。下文保留原诊断与阶段计划。
 
 ## 问题① 网络状态误报「检测网络状态异常」
 
@@ -90,8 +89,8 @@
 4. ⑤ 插件 P9-1 → 0.1.41-plugins-mw，验证：中间件列表可见、可开关、命中计数非零。
 5. 每期 CI 全绿 + Release 带更新日志（沿用 git/gh 原生发版技能 proc_pre_e7065dc1390）。
 
-## 当前阻塞
+## 上一轮阻塞记录（历史）
 
 设备桥授权状态失效：`write`/`edit` 对**已存在文件**、`bash`、`glob(/tmp/...)` 均返回
 `DSHA_DESTRUCTIVE_BLOCKED: DSHA_NATIVE_CONSENT_UNAVAILABLE: CANCELLED`（新建文件与 memory 通道正常）。
-需在手机 **DSHA 应用 → 设置 → 设备能力授权** 重新确认授权后继续。
+这是上一轮未能修改代码的原因；本轮已完成上述①–④的源码变更。

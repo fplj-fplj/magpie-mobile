@@ -1,5 +1,10 @@
 package cc.fplj.magpiemobile.theme
 
+import android.content.res.Resources
+import android.graphics.Typeface
+import android.graphics.fonts.Font as AndroidFont
+import android.graphics.fonts.FontFamily as AndroidFontFamily
+import android.graphics.fonts.FontStyle
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
@@ -7,7 +12,9 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -20,34 +27,39 @@ import cc.fplj.magpiemobile.R
  * Anthropic 风格设计令牌（anthropic-style-frontend-cn 技能 · Compose 适配 · 工具优先模式）。
  *
  * 设计语言：技术性 × 人文温度 —— 暖米色大地调基底、衬线/无衬线混排、
- * 唯一强调色陶土橙。管理工具界面保持信息密度优先，仅重设色彩/字体/圆角。
- * 字体：Lora（标题与正文，SIL OFL）、Poppins（UI/按钮/标签，SIL OFL），
+ * 唯一强调色陶土橙。首页采用编辑叙事排版，二级管理界面保留功能密度。
+ * 字体：Lora + 霞鹜文楷（标题与正文，SIL OFL）、Poppins（UI/按钮/标签，SIL OFL），
  * 许可文本随包分发在 assets/licenses/。全应用零硬编码颜色，统一经 MaterialTheme 取用。
  */
 
 // —— 字体族 ——
-internal val Serif = FontFamily(
-    Font(R.font.lora, FontWeight.Normal),
-    Font(R.font.lora, FontWeight.Bold),
-)
-internal val SerifItalic = FontFamily(
-    Font(R.font.lora_italic, FontWeight.Normal),
-    Font(R.font.lora_italic, FontWeight.Bold),
-)
+/**
+ * Compose 的 Font 列表是字重匹配表，不能当 CSS 那样按缺字回退。
+ * API 29 的原生 CustomFallbackBuilder 确保拉丁字用 Lora，汉字用文楷，
+ * 文楷缺少的生僻字继续交由系统字体显示。应用最低 API 已是 29。
+ */
+private fun readerFont(resources: Resources): FontFamily {
+    val latin = AndroidFontFamily.Builder(AndroidFont.Builder(resources, R.font.lora).setWeight(400).build())
+        .addFont(AndroidFont.Builder(resources, R.font.lora_italic).setWeight(400).setSlant(FontStyle.FONT_SLANT_ITALIC).build())
+        .build()
+    val chinese = AndroidFontFamily.Builder(AndroidFont.Builder(resources, R.font.lxgw_wenkai).setWeight(400).build()).build()
+    return FontFamily(Typeface.CustomFallbackBuilder(latin)
+        .addCustomFallback(chinese)
+        .setSystemFallback("serif")
+        .setStyle(FontStyle(400, FontStyle.FONT_SLANT_UPRIGHT))
+        .build())
+}
 internal val Sans = FontFamily(
     Font(R.font.poppins, FontWeight.Normal),
-    Font(R.font.poppins, FontWeight.Medium),
-    Font(R.font.poppins, FontWeight.SemiBold),
-    Font(R.font.poppins, FontWeight.Bold),
-)
-internal val SansItalic = FontFamily(
-    Font(R.font.poppins_italic, FontWeight.Normal),
+    Font(R.font.poppins_medium, FontWeight.Medium),
+    Font(R.font.poppins_semibold, FontWeight.SemiBold),
+    Font(R.font.poppins_bold, FontWeight.Bold),
 )
 
 // —— 亮色令牌 ——
 private val LightColors = lightColorScheme(
     primary = Color(0xFFD97757),              // 唯一强调色：陶土橙
-    onPrimary = Color(0xFFFCFAF5),
+    onPrimary = Color(0xFF231810),             // 橙底深色字，满足正文对比度
     primaryContainer = Color(0xFFEBD3C5),
     onPrimaryContainer = Color(0xFF3E2418),
     secondary = Color(0xFF7A6F5D),            // 暖灰褐：次级动作
@@ -115,7 +127,7 @@ private val DarkColors = darkColorScheme(
 )
 
 // —— 排版：标题/正文衬线（Lora），UI/按钮/标签无衬线（Poppins）——
-private val AnthropicTypography = Typography(
+private fun anthropicTypography(Serif: FontFamily) = Typography(
     displayLarge = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 46.sp, lineHeight = 52.sp),
     displayMedium = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 38.sp, lineHeight = 44.sp),
     displaySmall = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 32.sp, lineHeight = 38.sp),
@@ -126,8 +138,8 @@ private val AnthropicTypography = Typography(
     titleMedium = TextStyle(fontFamily = Sans, fontWeight = FontWeight.Medium, fontSize = 16.sp, lineHeight = 22.sp),
     titleSmall = TextStyle(fontFamily = Sans, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp),
     bodyLarge = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 28.sp),
-    bodyMedium = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 22.sp),
-    bodySmall = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 12.sp, lineHeight = 18.sp),
+    bodyMedium = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 15.sp, lineHeight = 26.25.sp),
+    bodySmall = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 13.sp, lineHeight = 22.75.sp),
     labelLarge = TextStyle(fontFamily = Sans, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp),
     labelMedium = TextStyle(fontFamily = Sans, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp),
     labelSmall = TextStyle(fontFamily = Sans, fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 16.sp),
@@ -148,9 +160,12 @@ fun MagpieTheme(
     darkTheme: Boolean,
     content: @Composable () -> Unit,
 ) {
+    val resources = LocalContext.current.resources
+    val reader = remember(resources) { readerFont(resources) }
+    val typography = remember(reader) { anthropicTypography(reader) }
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
-        typography = AnthropicTypography,
+        typography = typography,
         shapes = AnthropicShapes,
         content = content,
     )

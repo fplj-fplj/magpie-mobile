@@ -53,7 +53,7 @@ class SubscriptionPluginViewModel : ViewModel() {
             mutable.update {
                 it.copy(
                     plugins = manager.list(),
-                    notice = "已安装插件: " + plugin.name + " v" + plugin.version,
+                    notice = "已保存插件文件: " + plugin.name + " v" + plugin.version,
                     error = ""
                 )
             }

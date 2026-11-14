@@ -67,8 +67,7 @@ internal fun LicenseNoticesCard(
     viewModel: NoticesViewModel,
     noticesState: NoticesUiState,
 ) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ContentCard {
             Text("开源许可声明", style = MaterialTheme.typography.titleMedium)
             Text(
                 "核心二进制内嵌的第三方许可文本（GET /api/notices）。只读展示，上限 64KB。",
@@ -87,6 +86,5 @@ internal fun LicenseNoticesCard(
                     modifier = Modifier.fillMaxWidth().height(280.dp).verticalScroll(rememberScrollState()),
                 )
             }
-        }
     }
 }

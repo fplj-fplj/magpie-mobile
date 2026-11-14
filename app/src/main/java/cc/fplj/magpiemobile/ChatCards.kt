@@ -27,9 +27,9 @@ internal fun SubscriptionPluginCard(
     val pluginEntry = "index.js"
     val pluginScript = "console.log('Plugin initialized');"
 
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("订阅插件与 Bun 运行时 (Subscription Plugins & Bun)", style = MaterialTheme.typography.titleMedium)
+    ContentCard {
+            Text("插件文件与运行时", style = MaterialTheme.typography.titleLarge)
+            Text("这里管理插件文件与示例记录；登录、模型发现和请求执行链仍待接入。插件与应用同 UID 运行，不提供独立沙箱。", style = MaterialTheme.typography.bodySmall)
             val bunText = if (pluginState.bunStatus.installed) {
                 "Bun 载荷：预置就绪 (" + pluginState.bunStatus.architecture + ")"
             } else {
@@ -38,7 +38,7 @@ internal fun SubscriptionPluginCard(
             Text(bunText, style = MaterialTheme.typography.bodySmall, color = if (pluginState.bunStatus.installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
 
             if (pluginState.plugins.isEmpty()) {
-                Text("暂无已安装订阅插件；可在下方沙箱中录入并执行订阅逻辑。", style = MaterialTheme.typography.bodySmall)
+                Text("暂无插件文件。下方可创建本地示例记录。", style = MaterialTheme.typography.bodySmall)
             } else {
                 pluginState.plugins.forEach { plugin ->
                     Surface(
@@ -70,7 +70,7 @@ internal fun SubscriptionPluginCard(
                                     Text("回滚")
                                 }
                                 TextButton(onClick = { viewModel.removePlugin(plugin.id) }) {
-                                    Text("移除")
+                                    Text("移除", color = MaterialTheme.colorScheme.error)
                                 }
                             }
                         }
@@ -101,7 +101,7 @@ internal fun SubscriptionPluginCard(
                         pluginName = ""
                     }
                 ) {
-                    Text("安装/更新插件")
+                    Text("保存示例插件")
                 }
             }
 
@@ -109,9 +109,8 @@ internal fun SubscriptionPluginCard(
                 Text(pluginState.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             if (pluginState.notice.isNotEmpty()) {
-                Text(pluginState.notice, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                Text(pluginState.notice, color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.bodySmall)
             }
-        }
     }
 }
 
@@ -128,8 +127,7 @@ internal fun ChatProfileCard(
     var newPrompt by remember { mutableStateOf("") }
     var newTemp by remember { mutableStateOf("0.7") }
 
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ContentCard {
             Text("智能体与配置预设 (Agent Profiles)", style = MaterialTheme.typography.titleMedium)
             val active = profileState.activeProfile
             Text(
@@ -220,17 +218,15 @@ internal fun ChatProfileCard(
                 Text(profileState.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             if (profileState.notice.isNotEmpty()) {
-                Text(profileState.notice, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                Text(profileState.notice, color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.bodySmall)
             }
-        }
     }
 }
 
 
 @Composable
 internal fun ModelCatalogCard(shell: AppShellState, ready: Boolean, idle: Boolean, refresh: () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ContentCard {
             Text("模型目录与速览", style = MaterialTheme.typography.titleMedium)
             if (ready) {
                 val modelCountText = "可用模型：${shell.models.size} 个"
@@ -241,6 +237,5 @@ internal fun ModelCatalogCard(shell: AppShellState, ready: Boolean, idle: Boolea
                 Text(shell.modelsNotice, style = MaterialTheme.typography.bodySmall)
             }
             Button(enabled = ready && idle && !shell.loadingModels, onClick = refresh) { Text(if (shell.loadingModels) "读取中…" else "刷新模型列表") }
-        }
     }
 }

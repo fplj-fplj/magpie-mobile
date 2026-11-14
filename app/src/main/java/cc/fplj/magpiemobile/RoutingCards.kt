@@ -26,8 +26,7 @@ internal fun ModelRoutingCard(
     var newTarget by remember { mutableStateOf("") }
     var newFallback by remember { mutableStateOf("") }
 
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ContentCard {
             Text("模型别名与路由降级 (Model Routing)", style = MaterialTheme.typography.titleMedium)
             Text(
                 "配置客户端模型别名映射（例如将 gpt-4o 别名映射至指定提供商模型），并定义备用回退链。",
@@ -66,7 +65,7 @@ internal fun ModelRoutingCard(
                                     Text(if (rule.enabled) "已启用" else "已停用")
                                 }
                                 TextButton(onClick = { viewModel.removeRule(rule.alias) }) {
-                                    Text("删除")
+                                    Text("删除", color = MaterialTheme.colorScheme.error)
                                 }
                             }
                         }
@@ -114,9 +113,8 @@ internal fun ModelRoutingCard(
                 Text(routingState.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             if (routingState.notice.isNotEmpty()) {
-                Text(routingState.notice, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                Text(routingState.notice, color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.bodySmall)
             }
-        }
     }
 }
 
@@ -131,8 +129,7 @@ internal fun KeyPoolingCard(
     var newSecret by remember { mutableStateOf("") }
     var providerInput by remember { mutableStateOf("openai") }
 
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ContentCard {
             Text("多 Key 轮询与账号池 (Key Pooling)", style = MaterialTheme.typography.titleMedium)
             Text(
                 "为提供商配置多枚 API Key 并在本地实现循环轮询负载均衡，支持故障隔离与停用切换。",
@@ -211,9 +208,8 @@ internal fun KeyPoolingCard(
                 Text(poolState.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             if (poolState.notice.isNotEmpty()) {
-                Text(poolState.notice, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                Text(poolState.notice, color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.bodySmall)
             }
-        }
     }
 }
 

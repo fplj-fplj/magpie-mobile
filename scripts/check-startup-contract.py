@@ -7,7 +7,8 @@ a='{http://schemas.android.com/apk/res/android}'
 m=ET.parse(root/'app/src/main/AndroidManifest.xml').getroot()
 permissions={p.attrib[a+'name'] for p in m.findall('uses-permission')}
 assert {'android.permission.INTERNET','android.permission.FOREGROUND_SERVICE',
-        'android.permission.FOREGROUND_SERVICE_SPECIAL_USE','android.permission.POST_NOTIFICATIONS'} <= permissions
+        'android.permission.FOREGROUND_SERVICE_SPECIAL_USE','android.permission.POST_NOTIFICATIONS',
+        'android.permission.ACCESS_NETWORK_STATE','android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS'} <= permissions
 app=m.find('application')
 assert app.attrib[a+'allowBackup']=='false'
 assert app.attrib[a+'networkSecurityConfig']=='@xml/network_security_config'

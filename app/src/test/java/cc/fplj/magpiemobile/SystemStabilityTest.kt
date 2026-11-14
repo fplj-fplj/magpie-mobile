@@ -1,6 +1,7 @@
 package cc.fplj.magpiemobile
 
 import android.app.Application
+import android.net.NetworkCapabilities
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,6 +21,32 @@ class SystemStabilityTest {
         assertEquals(NetworkType.NONE, state.type)
         assertFalse(state.validated)
         assertTrue(state.description.contains("无网络连接"))
+    }
+
+    @Test
+    fun validatedWifiIsReportedAsConnected() {
+        val capabilities = NetworkCapabilities.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            .build()
+        val state = NetworkConnectivityMonitor.evaluateNetworkState(capabilities)
+        assertTrue(state.connected)
+        assertTrue(state.validated)
+        assertEquals(NetworkType.WIFI, state.type)
+    }
+
+    @Test
+    fun cellularWaitingForValidationIsDistinctFromDisconnected() {
+        val capabilities = NetworkCapabilities.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val state = NetworkConnectivityMonitor.evaluateNetworkState(capabilities)
+        assertTrue(state.connected)
+        assertFalse(state.validated)
+        assertEquals(NetworkType.CELLULAR, state.type)
+        assertTrue(state.description.contains("待验证"))
     }
 
     @Test

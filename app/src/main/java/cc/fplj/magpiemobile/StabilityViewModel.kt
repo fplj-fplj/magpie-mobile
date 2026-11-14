@@ -4,9 +4,11 @@ import android.app.Application
 import android.content.ComponentCallbacks2
 import android.content.res.Configuration
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
 data class SystemStabilityUiState(
     val networkState: NetworkState = NetworkState(),
@@ -48,6 +50,11 @@ class StabilityViewModel(application: Application) : AndroidViewModel(applicatio
 
     init {
         networkMonitor.startMonitoring()
+        viewModelScope.launch {
+            networkMonitor.state.collect { network ->
+                mutable.update { it.copy(networkState = network) }
+            }
+        }
         application.registerComponentCallbacks(memoryCallback)
         refresh()
     }
