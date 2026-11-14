@@ -23,10 +23,13 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -53,7 +56,7 @@ fun ChatPanel(
     var modelMenu by remember { mutableStateOf(false) }
     val idle = state.ready && !state.busy && !state.sending
     val messagesScroll = rememberLazyListState()
-    var previousCount by remember(state.selected?.id) { mutableIntStateOf(0) }
+    var previousCount by rememberSaveable(state.selected?.id) { mutableIntStateOf(0) }
     val viewportHeight = (LocalConfiguration.current.screenHeightDp * 0.42f).coerceIn(240f, 480f).dp
     LaunchedEffect(state.messages.size, state.selected?.id, state.viewingOlderMessages) {
         val nearEnd = (messagesScroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= previousCount - 2

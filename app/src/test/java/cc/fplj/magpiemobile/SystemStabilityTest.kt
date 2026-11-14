@@ -10,6 +10,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
+import org.robolectric.shadows.ShadowNetworkCapabilities
 
 @RunWith(RobolectricTestRunner::class)
 class SystemStabilityTest {
@@ -25,11 +27,12 @@ class SystemStabilityTest {
 
     @Test
     fun validatedWifiIsReportedAsConnected() {
-        val capabilities = NetworkCapabilities.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            .build()
+        val capabilities = ShadowNetworkCapabilities.newInstance()
+        Shadows.shadowOf(capabilities).apply {
+            addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        }
         val state = NetworkConnectivityMonitor.evaluateNetworkState(capabilities)
         assertTrue(state.connected)
         assertTrue(state.validated)
@@ -38,10 +41,11 @@ class SystemStabilityTest {
 
     @Test
     fun cellularWaitingForValidationIsDistinctFromDisconnected() {
-        val capabilities = NetworkCapabilities.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
+        val capabilities = ShadowNetworkCapabilities.newInstance()
+        Shadows.shadowOf(capabilities).apply {
+            addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+            addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
         val state = NetworkConnectivityMonitor.evaluateNetworkState(capabilities)
         assertTrue(state.connected)
         assertFalse(state.validated)
