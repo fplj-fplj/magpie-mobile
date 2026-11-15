@@ -8,6 +8,11 @@ import cc.fplj.magpiemobile.core.PluginSnapshot
 import java.io.File
 import java.io.InputStream
 import java.util.UUID
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 internal data class PluginDocument(val uri: Uri, val name: String, val directory: Boolean)
 
@@ -23,8 +28,10 @@ internal class PluginImporter(
     private val source: PluginDocumentSource,
     private val byteLimit: Long = 64L * 1024 * 1024,
     private val fileLimit: Int = 1024,
+    private val coreList: File? = null,
 ) {
-    constructor(context: Context) : this(File(context.filesDir, "plugin-imports"), AndroidPluginDocuments(context))
+    constructor(context: Context) : this(File(context.filesDir, "plugin-imports"), AndroidPluginDocuments(context),
+        coreList = File(context.filesDir, "config/magpie/plugins.json"))
 
     fun importPlugin(uri: Uri, tree: Boolean): String {
         check(root.isDirectory || root.mkdirs()) { "无法创建插件导入目录" }
@@ -107,12 +114,13 @@ internal class PluginImporter(
 
     fun removeIfUnreferenced(spec: String, snapshot: PluginSnapshot) {
         val stage = importedStage(spec) ?: return
-        if (snapshot.entries.none { importedStage(it.spec)?.canonicalFile == stage.canonicalFile }) removeImported(spec)
+        val referenced = references(snapshot) ?: return
+        if (stage.canonicalPath !in referenced) removeImported(spec)
     }
 
     /** Run after a successful read or authoritative write result, with no unresolved native write. */
     fun reconcile(snapshot: PluginSnapshot) {
-        val referenced = snapshot.entries.mapNotNull { importedStage(it.spec)?.canonicalPath }.toSet()
+        val referenced = references(snapshot) ?: return
         for (stage in root.listFiles().orEmpty()) {
             if (!stage.isDirectory || stage.canonicalFile.parentFile != root.canonicalFile) continue
             val id = stage.name.removeSuffix(".pending")
@@ -134,6 +142,30 @@ internal class PluginImporter(
                 // Older snapshots have no journal. Preserve until observed in a core read.
             }
         }
+    }
+
+    private fun references(snapshot: PluginSnapshot): Set<String>? {
+        val references = snapshot.entries.map { it.spec }.toMutableList()
+        if (coreList != null) {
+            // Official Load can project an unreadable file as an empty list. An empty API
+            // response alone must not authorize deleting the user's imported source files.
+            val diskSpecs = runCatching {
+                require(coreList.isFile && coreList.length() in 1..8L * 1024 * 1024)
+                val json = Json.parseToJsonElement(coreList.readText()) as JsonObject
+                val rows = when (val value = json["plugins"]) {
+                    JsonNull -> emptyList()
+                    is JsonArray -> value.toList()
+                    else -> error("插件清单不完整")
+                }
+                rows.map { row ->
+                    val spec = (row as JsonObject)["spec"] as JsonPrimitive
+                    require(spec.isString && spec.content.isNotBlank())
+                    spec.content
+                }
+            }.getOrNull() ?: return null
+            references.addAll(diskSpecs)
+        }
+        return references.mapNotNull { importedStage(it)?.canonicalPath }.toSet()
     }
 
     private fun importedStage(spec: String): File? {

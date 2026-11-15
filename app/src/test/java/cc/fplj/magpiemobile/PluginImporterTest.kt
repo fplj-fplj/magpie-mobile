@@ -134,4 +134,25 @@ class PluginImporterTest {
             assertFalse(File(spec).exists())
         } finally { root.deleteRecursively() }
     }
+
+    @Test fun unreadableCoreListOrANewerDiskReferenceCannotAuthorizeDeletingSources() {
+        val root = kotlin.io.path.createTempDirectory().toFile()
+        try {
+            val list = File(root, "plugins.json")
+            val importer = PluginImporter(root, Source(mapOf("content://file/code" to ("plugin.ts" to "code"))), coreList = list)
+            val spec = importer.importPlugin(Uri.parse("content://file/code"), false)
+            importer.markSubmitted(spec)
+            list.writeText("{\"plugins\":[{\"spec\":\"$spec\"}]}")
+            importer.reconcile(PluginSnapshot(entries = listOf(ManagedPlugin(spec))))
+            importer.removeIfUnreferenced(spec, PluginSnapshot())
+            assertTrue(File(spec).exists()) // the disk list can be newer than the API response
+            list.writeText("broken json")
+            importer.reconcile(PluginSnapshot())
+            importer.removeIfUnreferenced(spec, PluginSnapshot())
+            assertTrue(File(spec).exists())
+            list.writeText("{\"plugins\":[]}")
+            importer.reconcile(PluginSnapshot())
+            assertFalse(File(spec).exists())
+        } finally { root.deleteRecursively() }
+    }
 }
