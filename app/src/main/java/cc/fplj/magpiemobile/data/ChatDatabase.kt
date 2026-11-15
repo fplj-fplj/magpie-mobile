@@ -2,6 +2,7 @@ package cc.fplj.magpiemobile.data
 
 import androidx.room.Dao
 import androidx.room.Database
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -58,6 +59,7 @@ data class ChatMessageEntity(
     val text: String,
     val engine: String,
     val ts: Long,
+    @ColumnInfo(defaultValue = "''")
     val reasoning: String = "",
 )
 
