@@ -207,12 +207,16 @@ internal class PluginManagementViewModel(
                 if (revision == generation) {
                     val unknown = !known && (e is ManagementExecutionUnknown || e is PluginWriteUnknownException)
                     if (!known && !unknown && edit is PluginEdit.Add) {
-                        rejectImport(edit.spec)
+                        try { rejectImport(edit.spec) } catch (cancel: CancellationException) { throw cancel }
+                        catch (_: Exception) { /* Preserve the submitted journal if disk cleanup fails. */ }
                         // A definite HTTP rejection still needs a successful read before deleting files.
                         val actual = try { readPlugins() } catch (cancel: CancellationException) { throw cancel }
                             catch (_: Exception) { null }
                         if (owner == session && revision == generation && actual != null &&
-                            actual.entries.none { sameSpec(it.spec, edit.spec) }) removeImport(edit.spec)
+                            actual.entries.none { sameSpec(it.spec, edit.spec) }) {
+                            try { removeImport(edit.spec) } catch (cancel: CancellationException) { throw cancel }
+                            catch (_: Exception) { /* Retry via a later successful reconciliation. */ }
+                        }
                     }
                     if (owner != session || revision != generation) return@launch
                     if (!unknown) clearPending()

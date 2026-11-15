@@ -240,6 +240,7 @@ class OfficialPluginsInstrumentedTest {
                     device.pressBack() // close the input method
                     device.findObject(By.text("保存参数")).click()
                     await("native options editor save") { client.plugins().entries.single { it.spec == provider.absolutePath }.options["fromNativeUI"].toString() == "true" }
+                    assertTrue(device.wait(Until.hasObject(By.text("保存参数").enabled(true)), 15_000))
                     assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-options.png")))
                     val browserUiRead = JSONObject(http("http://127.0.0.1:3430/api/plugins", "", cookie = browserCookie).second).getJSONArray("plugins")
                     assertTrue((0 until browserUiRead.length()).map { browserUiRead.getJSONObject(it) }
@@ -262,6 +263,10 @@ class OfficialPluginsInstrumentedTest {
                     assertEquals(200, http("http://127.0.0.1:3425/api/hello", auth).first)
                     device.executeShellCommand("am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10200000 -n cc.fplj.magpiemobile/.MainActivity")
                     scenario.recreate()
+                    // ActivityScenario's background invoker can leave its EmptyActivity on top.
+                    // Restore the launcher task after recreation before checking the real app UI.
+                    device.executeShellCommand("am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10200000 -n cc.fplj.magpiemobile/.MainActivity")
+                    assertTrue(device.wait(Until.hasObject(By.pkg("cc.fplj.magpiemobile").depth(0)), 15_000))
                     if (!device.wait(Until.hasObject(By.text("官方外部插件")), 2000)) {
                         assertTrue(device.wait(Until.hasObject(By.text("插件与工具")), 10_000))
                         device.findObject(By.text("插件与工具")).click()
@@ -269,12 +274,15 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue(device.wait(Until.hasObject(By.text("官方外部插件")), 15_000))
                     assertEquals("activity recreation restarted the core session", connectedOwner, NativeCoreSession.providerSessionId())
                     assertEquals("true", client.plugins().entries.single { it.spec == provider.absolutePath }.options["fromNativeUI"].toString())
-                    device.findObject(By.res("plugin-installed-filter")).text = ""
+                    device.findObject(By.res("plugin-installed-filter")).clear()
+                    await("installed filter cleared in Compose") { device.findObject(By.res("plugin-installed-filter"))?.text.orEmpty().isEmpty() }
                     val previousScale = device.executeShellCommand("settings get system font_scale").trim()
                         .takeIf { it.matches(Regex("[0-9]+(\\.[0-9]+)?")) } ?: "1.0"
                     try {
                         device.executeShellCommand("settings put system font_scale 1.3")
                         await("Android font scale change") { context.resources.configuration.fontScale > 1.25f }
+                        device.waitForIdle()
+                        SystemClock.sleep(500) // allow configuration and dialog-window animations to finish
                         device.waitForIdle()
                         assertTrue(device.takeScreenshot(File(artifacts, "native-plugins-large-font.png")))
                     } finally { device.executeShellCommand("settings put system font_scale $previousScale") }

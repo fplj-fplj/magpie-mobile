@@ -31,8 +31,10 @@ internal class PluginImporter(
         val id = UUID.randomUUID().toString()
         val pending = File(root, "$id.pending")
         val published = File(root, id)
-        check(pending.mkdir()) { "无法创建插件暂存目录" }
-        synchronized(activeStages) { activeStages.add(published.absolutePath) }
+        synchronized(activeStages) {
+            check(pending.mkdir()) { "无法创建插件暂存目录" }
+            activeStages.add(published.absolutePath)
+        }
         var bytes = 0L
         var files = 0
         fun copy(document: PluginDocument, parent: File, depth: Int): File {
