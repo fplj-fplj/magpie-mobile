@@ -12,7 +12,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -260,10 +259,7 @@ fun ProvidersPanel(
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         FullScreenDialogSystemBars()
         Surface(Modifier.fillMaxSize()) {
-            Column(
-                Modifier.fillMaxWidth().height(LocalConfiguration.current.screenHeightDp.dp)
-                    .safeDrawingPadding().imePadding().padding(horizontal = UiSpacing.medium),
-            ) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = UiSpacing.medium)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = UiSpacing.small), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(enabled = !busy, onClick = ::close) { AppIcon(AppSymbol.BACK, description = "返回提供商列表") }
                     Column(Modifier.weight(1f)) {
@@ -372,14 +368,14 @@ fun ProvidersPanel(
                         }
                     }
                     if (message.isNotEmpty()) Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    Button(
+                        modifier = Modifier.fillMaxWidth().padding(top = UiSpacing.medium),
+                        enabled = enabled && !operationBusy && !busy && listHealthy && !recoveryRequired && normalized.isNotEmpty() && !newOriginNeedsKey && !discoveryLoading &&
+                            (snapshot != null || key.isNotBlank()) && (selected.isNotEmpty() || selectedModelEdit?.isEmpty() == true || (snapshot != null && selectedModelEdit == null)) &&
+                            (snapshot != null || discoveryDone || manual),
+                        onClick = { focus.clearFocus(); if (selected.isEmpty() && selectedModelEdit?.isEmpty() == true) confirmDisable = true else submit() },
+                    ) { Text(if (busy) "保存中…" else "保存连接") }
                 }
-                Button(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = UiSpacing.small),
-                    enabled = enabled && !operationBusy && !busy && listHealthy && !recoveryRequired && normalized.isNotEmpty() && !newOriginNeedsKey && !discoveryLoading &&
-                        (snapshot != null || key.isNotBlank()) && (selected.isNotEmpty() || selectedModelEdit?.isEmpty() == true || (snapshot != null && selectedModelEdit == null)) &&
-                        (snapshot != null || discoveryDone || manual),
-                    onClick = { focus.clearFocus(); if (selected.isEmpty() && selectedModelEdit?.isEmpty() == true) confirmDisable = true else submit() },
-                ) { Text(if (busy) "保存中…" else "保存连接") }
             }
         }
     }
