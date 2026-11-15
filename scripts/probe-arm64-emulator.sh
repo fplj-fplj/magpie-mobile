@@ -49,6 +49,7 @@ LD_LIBRARY_PATH="$emulator_library_path" ldd "$backend_bin" > "$report/backend-d
 LD_LIBRARY_PATH="$emulator_library_path" ANDROID_EMULATOR_LAUNCHER_DIR="$sdk_root/emulator" ANDROID_I_WANT_MY_TCG=yes \
   "$backend_bin" -avd magpie-arm64-probe -port 5580 \
   -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect \
+  -feature -VirtioInput,-VirtioWifi,-VirtioVsockPipe,-VirtioSndCard \
   -accel off -memory 2048 -cores 2 > "$report/emulator.log" 2>&1 &
 emulator_pid=$!
 booted=false
