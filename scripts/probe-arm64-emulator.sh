@@ -8,6 +8,7 @@ sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK missing}}"
 export PATH="$sdk_root/cmdline-tools/latest/bin:$sdk_root/platform-tools:$sdk_root/emulator:$PATH"
 emulator_bin="$sdk_root/emulator/emulator"
 backend_bin="$sdk_root/emulator/qemu/linux-x86_64/qemu-system-aarch64-headless"
+emulator_library_path="$sdk_root/emulator/lib64:$sdk_root/emulator/lib64/gles_swiftshader:$sdk_root/emulator/lib64/vulkan:$sdk_root/emulator/lib64/libstdc++${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 serial=emulator-5580
 emulator_pid=''
 cleanup() {
@@ -20,7 +21,8 @@ printf 'no\n' | avdmanager create avd --force --name magpie-arm64-probe \
   --package 'system-images;android-30;default;arm64-v8a' --device pixel_5
 started=$(date +%s)
 test -x "$backend_bin"
-ANDROID_EMULATOR_LAUNCHER_DIR="$sdk_root/emulator" ANDROID_I_WANT_MY_TCG=yes \
+LD_LIBRARY_PATH="$emulator_library_path" ldd "$backend_bin" > "$report/backend-dependencies.txt"
+LD_LIBRARY_PATH="$emulator_library_path" ANDROID_EMULATOR_LAUNCHER_DIR="$sdk_root/emulator" ANDROID_I_WANT_MY_TCG=yes \
   "$backend_bin" -avd magpie-arm64-probe -port 5580 \
   -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect \
   -accel off -memory 2048 -cores 2 > "$report/emulator.log" 2>&1 &
