@@ -103,6 +103,11 @@ fun Dashboard(
     val clientReady = running && !stopping && connection.ready
     val owner = if (clientReady) NativeCoreSession.providerSessionId() else null
     LaunchedEffect(owner) { officialPlugins.attach(owner) }
+    LaunchedEffect(section, owner) {
+        if (section == GatewaySection.PLUGINS && owner != null && !officialPlugins.state.value.loading && !officialPlugins.state.value.busy) {
+            officialPlugins.refresh()
+        }
+    }
 
     fun openSection(destination: GatewaySection) {
         if (shell.page == AppPage.MORE) moreSectionName = destination.name

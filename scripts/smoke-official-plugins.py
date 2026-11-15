@@ -140,7 +140,10 @@ export const FixturePlugin = async () => ({
   },
 })
 """
-MIDDLEWARE_JS = """export function onRequest(body) { return { ...body, note: "recalled" } }
+MIDDLEWARE_JS = """export function onRequest(body) {
+  body.messages[body.messages.length - 1].content += "|middleware-rewritten"
+  return body
+}
 """
 HOOKS_JS = """export async function onRequest(body, ctx) {
   const plain = await fetch(ctx.options.modelsURL)
@@ -150,14 +153,19 @@ HOOKS_JS = """export async function onRequest(body, ctx) {
   await fetch(ctx.options.hookURL, { signal: ctx.signal }).catch(() => {})
   let models = 0
   if (plain.ok) { try { models = JSON.parse(await plain.text()).data.length } catch {} }
-  return { ...body, tag: "hooked", bridge: {
+  const bridge = {
     status: plain.status, placeholder: placeholder.status,
     explicit: explicit.status, requestForm: viaRequest.status, models,
-  } }
+  }
+  const fs = await import("node:fs")
+  fs.appendFileSync(ctx.options.bridgeOutput, JSON.stringify(bridge) + "\\n")
+  ctx.state.link = "linked"
+  body.messages[body.messages.length - 1].content += "|hook-rewritten"
+  return body
 }
 export async function onResponse(reply, ctx) {
   const fs = await import("node:fs")
-  fs.appendFileSync(ctx.options.output, JSON.stringify(reply) + "\\n")
+  fs.appendFileSync(ctx.options.output, JSON.stringify({reply, success:ctx.success, state:ctx.state.link}) + "\\n")
 }
 """
 TOOLS_JS = """export const ToolsPlugin = async () => ({
@@ -232,9 +240,12 @@ def bridge_key_id(root):
     check(isinstance(key_id, str) and key_id, "the bridge key record has no id: " + json.dumps(data))
     return key_id
 
+bridge_report = None
+
 def last_bridge():
-    with Vendor.lock:
-        return (Vendor.bodies[-1] if Vendor.bodies else {}).get("bridge") or {}
+    if bridge_report is None or not bridge_report.is_file(): return {}
+    lines = bridge_report.read_text().splitlines()
+    return json.loads(lines[-1]) if lines else {}
 
 def main(exe, bun):
     assert exe.is_file(), "core executable missing: " + str(exe)
@@ -310,8 +321,11 @@ def run_suite(core, root, hooks_base):
         specs[name] = str(path)
 
     out = root / "responses.jsonl"
+    global bridge_report
+    bridge_report = root / "bridge-reports.jsonl"
     core.api("/api/plugins/options", "POST", {"Spec": specs["hooks"], "Options": {
         "output": str(out), "hookURL": hooks_base + "/hook-hit",
+        "bridgeOutput": str(bridge_report),
         "modelsURL": core.gateway + "/v1/models", "gatewayTimeoutMs": 20000}})
 
     # community npm packages and the GitHub plugin, from the real outside.
@@ -388,14 +402,19 @@ def run_suite(core, root, hooks_base):
     with Vendor.lock: bodies = list(Vendor.bodies)
     check(len(bodies) >= 4, "the vendor saw " + str(len(bodies)) + " chats")
     for body in bodies:
-        check(body.get("note") == "recalled", "the middleware's note is missing: " + json.dumps(body)[:300])
-        check(body.get("tag") == "hooked", "the hooks' tag is missing: " + json.dumps(body)[:300])
-        bridge = body.get("bridge") or {}
+        text = json.dumps(body.get("messages", []))
+        check("middleware-rewritten" in text, "the middleware's request rewrite is missing")
+        check("hook-rewritten" in text, "the async hook's request rewrite is missing")
+    check(bridge_report.is_file(), "async hook produced no bridge reports")
+    for line in bridge_report.read_text().splitlines():
+        bridge = json.loads(line)
         check(bridge.get("status") == 200, "the authless fetch was not authenticated: " + json.dumps(bridge))
         check(bridge.get("placeholder") == 200, "the Bearer magpie placeholder was not replaced: " + json.dumps(bridge))
         check(bridge.get("explicit") == 401, "an explicit key was not left as sent: " + json.dumps(bridge))
         check(bridge.get("requestForm") == 200, "fetch(Request, init) lost the bridge: " + json.dumps(bridge))
     check(out.is_file() and '"content":"OK"' in out.read_text(), "onResponse wrote no reply lines")
+    check(any(json.loads(line).get("success") is True and json.loads(line).get("state") == "linked"
+              for line in out.read_text().splitlines()), "onResponse lost successful completion or request-owned state")
     verify_actual_bridge_redirect(core, root, hooks_base)
 
     # MCP tools: the names are <plugin>_<tool>, so take them from the list.
@@ -421,7 +440,7 @@ def run_suite(core, root, hooks_base):
     time.sleep(1.5)
     chat("syncvendor/sync-model", False)
     with Vendor.lock: last = Vendor.bodies[-1]
-    check(last.get("tag") != "hooked", "the off plugin's hooks still ran")
+    check("hook-rewritten" not in json.dumps(last.get("messages", [])), "the off plugin's hooks still ran")
     core.api("/api/plugins/off", "POST", {"Spec": specs["hooks"], "Off": False})
     time.sleep(1.5)
 

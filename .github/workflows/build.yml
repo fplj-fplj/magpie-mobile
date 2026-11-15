@@ -249,19 +249,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: |
-            set -euo pipefail
-            trap 'mkdir -p build-tmp/android-plugin-runtime; adb pull /sdcard/Android/data/cc.fplj.magpiemobile/files/plugin-runtime build-tmp/android-plugin-runtime || true; adb logcat -d -s AndroidRuntime:E > build-tmp/android-plugin-runtime/android-errors.txt || true' EXIT
-            adb shell settings put global hidden_api_policy 1
-            gradle :app:connectedDebugAndroidTest -PmagpieTestAbi=x86_64 --no-daemon --stacktrace
-      - name: Collect Android runtime screenshots and evidence
-        if: always()
-        run: |
-          mkdir -p build-tmp/android-plugin-runtime
-          if command -v adb >/dev/null; then
-            adb pull /sdcard/Android/data/cc.fplj.magpiemobile/files/plugin-runtime build-tmp/android-plugin-runtime || true
-            adb logcat -d -s AndroidRuntime:E > build-tmp/android-plugin-runtime/android-errors.txt || true
-          fi
+          script: bash scripts/run-android-plugin-tests.sh
       - name: Upload actual Android runtime reports
         if: always()
         uses: actions/upload-artifact@v4

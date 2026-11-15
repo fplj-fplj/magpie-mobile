@@ -193,7 +193,7 @@ internal fun PluginManagementPanel(
     removingSpec?.let { spec -> AlertDialog(onDismissRequest = { removingSpec = null }, title = { Text("移除此插件？") },
         text = { Text("它提供的模型、工具和网关 hooks 将停止使用。") },
         confirmButton = { TextButton(enabled = canWrite, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error), onClick = {
-            viewModel.edit(PluginEdit.Remove(spec)) { scope.launch(Dispatchers.IO) { importer.removeImported(spec) } }
+            viewModel.edit(PluginEdit.Remove(spec)) { scope.launch(NonCancellable + Dispatchers.IO) { importer.removeImported(spec) } }
             removingSpec = null; selectedSpec = null
         }) { Text("移除插件") } }, dismissButton = { TextButton(onClick = { removingSpec = null }) { Text("保留") } }) }
 

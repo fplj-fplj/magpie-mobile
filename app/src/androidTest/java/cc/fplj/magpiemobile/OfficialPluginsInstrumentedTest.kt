@@ -64,6 +64,24 @@ class OfficialPluginsInstrumentedTest {
                             snapshot.entries.any { it.spec == hooks.absolutePath && it.isGateway } &&
                             client.providers().any { it.pid == "androidfixture" }
                     }
+                    val browserEntry = URL(NativeCoreSession.browserEditorLink()).openConnection(Proxy.NO_PROXY) as HttpURLConnection
+                    val browserCookie = try {
+                        browserEntry.instanceFollowRedirects = false
+                        browserEntry.setRequestProperty("Accept", "text/html")
+                        assertEquals(303, browserEntry.responseCode)
+                        requireNotNull(browserEntry.getHeaderField("Set-Cookie")).substringBefore(';')
+                    } finally { browserEntry.disconnect() }
+                    val browserOptions = JSONObject().put("spec", provider.absolutePath)
+                        .put("options", JSONObject().put("base", upstream.base).put("fromBrowser", true))
+                    assertEquals(200, http("http://127.0.0.1:3430/api/plugins/options", "", browserOptions.toString(), browserCookie).first)
+                    val nativeRead = client.plugins().entries.single { it.spec == provider.absolutePath }
+                    assertEquals("true", nativeRead.options["fromBrowser"].toString())
+                    client.saveOptions(provider.absolutePath, kotlinx.serialization.json.JsonObject(nativeRead.options +
+                        ("fromNative" to kotlinx.serialization.json.JsonPrimitive(true))))
+                    val browserRead = JSONObject(http("http://127.0.0.1:3430/api/plugins", "", cookie = browserCookie).second).getJSONArray("plugins")
+                    val shared = (0 until browserRead.length()).map { browserRead.getJSONObject(it) }
+                        .single { it.getString("spec") == provider.absolutePath }.getJSONObject("options")
+                    assertTrue(shared.getBoolean("fromBrowser") && shared.getBoolean("fromNative"))
                     val pid = client.providers().single { it.pid == "androidfixture" }.pid
                     val login = client.signIn(pid, 0, emptyMap(), "android-synthetic-key")
                     await("real plugin API sign-in") { client.signInState(login.id).state == "done" }
@@ -139,11 +157,14 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue(device.wait(Until.hasObject(By.text("插件与工具")), 10_000))
                     device.findObject(By.text("插件与工具")).click()
                     assertTrue(device.wait(Until.hasObject(By.text("官方外部插件")), 15_000))
+                    val expectedCount = client.plugins().entries.size
+                    assertTrue(device.wait(Until.hasObject(By.text("$expectedCount 个已安装")), 20_000))
                     assertTrue(device.takeScreenshot(File(artifacts, "native-plugins.png")))
                     File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
                 } finally {
+                    File(artifacts, "core-status.txt").writeText(GatewayRuntime.status.value.toString())
                     runCatching { installed.reversed().forEach { NativeCoreSession.pluginClient().remove(it) } }
                     context.startService(Intent(context, GatewayService::class.java).setAction(GatewayService.ACTION_STOP))
                     await("Android core and Bun shutdown", 30_000) {
@@ -152,6 +173,7 @@ class OfficialPluginsInstrumentedTest {
                                 line.contains("libmagpie_exec.so") || line.contains("libbun_exec.so")
                             }
                     }
+                    File(artifacts, "shutdown.txt").writeText("PASS: core and Bun processes stopped\n")
                 }
             }
         }
@@ -173,13 +195,14 @@ class OfficialPluginsInstrumentedTest {
         throw AssertionError("Timed out: $description (${failure?.javaClass?.simpleName ?: "no exception"})")
     }
 
-    private fun http(url: String, key: String, body: String? = null): Pair<Int, String> {
+    private fun http(url: String, key: String, body: String? = null, cookie: String? = null): Pair<Int, String> {
         val connection = URL(url).openConnection(Proxy.NO_PROXY) as HttpURLConnection
         try {
             connection.connectTimeout = 10_000
             connection.readTimeout = 30_000
             connection.instanceFollowRedirects = false
-            connection.setRequestProperty("Authorization", "Bearer $key")
+            if (key.isNotBlank()) connection.setRequestProperty("Authorization", "Bearer $key")
+            if (cookie != null) connection.setRequestProperty("Cookie", cookie)
             connection.setRequestProperty("Accept", "application/json, text/event-stream")
             if (body != null) {
                 connection.requestMethod = "POST"
