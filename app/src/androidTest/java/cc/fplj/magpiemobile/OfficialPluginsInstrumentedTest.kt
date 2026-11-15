@@ -2,6 +2,7 @@ package cc.fplj.magpiemobile
 
 import android.content.Intent
 import android.os.SystemClock
+import android.provider.DocumentsContract
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -139,6 +140,20 @@ class OfficialPluginsInstrumentedTest {
                     val snapshot = client.plugins()
                     assertTrue(snapshot.entries.single { it.spec == middleware.absolutePath }.middleware!!.calls > 0)
                     assertTrue(snapshot.entries.single { it.spec == hooks.absolutePath }.gateway!!.calls > 0)
+                    val failedHookBody = JSONObject(body.toString()).put("messages",
+                        JSONArray().put(JSONObject().put("role", "user").put("content", "hook-throw")))
+                    assertEquals(200, http("http://127.0.0.1:3425/v1/chat/completions", auth, failedHookBody.toString()).first)
+                    assertEquals("error", client.plugins().entries.single { it.spec == hooks.absolutePath }.gateway!!.lastOutcome)
+                    client.saveOptions(hooks.absolutePath, kotlinx.serialization.json.Json.parseToJsonElement(
+                        "{\"base\":\"${upstream.base}\",\"gatewayTimeoutMs\":500}") as kotlinx.serialization.json.JsonObject)
+                    val timeoutBody = JSONObject(failedHookBody.toString()).put("messages",
+                        JSONArray().put(JSONObject().put("role", "user").put("content", "hook-timeout")))
+                    val timeoutStarted = SystemClock.elapsedRealtime()
+                    assertEquals(200, http("http://127.0.0.1:3425/v1/chat/completions", auth, timeoutBody.toString()).first)
+                    assertTrue("hook timeout did not bound the request", SystemClock.elapsedRealtime() - timeoutStarted < 10_000)
+                    assertEquals("timeout", client.plugins().entries.single { it.spec == hooks.absolutePath }.gateway!!.lastOutcome)
+                    client.saveOptions(hooks.absolutePath, kotlinx.serialization.json.Json.parseToJsonElement(
+                        "{\"base\":\"${upstream.base}\"}") as kotlinx.serialization.json.JsonObject)
                     client.setOff(middleware.absolutePath, true)
                     assertEquals(200, http("http://127.0.0.1:3425/v1/chat/completions", auth, rejectedBody.toString()).first)
                     client.setOff(middleware.absolutePath, false)
@@ -153,6 +168,43 @@ class OfficialPluginsInstrumentedTest {
                         installed.add(entry.spec)
                         assertTrue("remote plugin did not load", entry.error.isBlank())
                     }
+                    val communityTools = JSONObject(http(mcp, auth, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}").second)
+                        .getJSONObject("result").getJSONArray("tools")
+                    val calc = (0 until communityTools.length()).map { communityTools.getJSONObject(it) }.first {
+                        it.getString("name").contains("calc") && it.getJSONObject("inputSchema").getJSONObject("properties").has("expression")
+                    }
+                    val calcRequest = JSONObject().put("jsonrpc", "2.0").put("id", 4).put("method", "tools/call")
+                        .put("params", JSONObject().put("name", calc.getString("name"))
+                            .put("arguments", JSONObject().put("expression", "0.1+0.2")))
+                    val calcResult = JSONObject(http(mcp, auth, calcRequest.toString()).second).getJSONObject("result")
+                    assertEquals("3/10", JSONObject(calcResult.getJSONArray("content").getJSONObject(0).getString("text")).getString("exact"))
+
+                    val importer = PluginImporter(context)
+                    val safFile = importer.importPlugin(DocumentsContract.buildDocumentUri(
+                        FixturePluginDocumentsProvider.AUTHORITY, FixturePluginDocumentsProvider.DOC_SINGLE), false)
+                    val safTree = importer.importPlugin(DocumentsContract.buildTreeDocumentUri(
+                        FixturePluginDocumentsProvider.AUTHORITY, FixturePluginDocumentsProvider.DOC_TREE), true)
+                    for (spec in listOf(safFile, safTree)) { client.add(spec); installed.add(spec) }
+                    assertTrue(File(safTree, "node_modules/is-number/index.js").isFile)
+                    val safReply = http("http://127.0.0.1:3425/v1/chat/completions", auth, body.toString())
+                    assertEquals(200, safReply.first)
+                    assertTrue("SAF single-file hook did not execute", safReply.second.contains("saf-file-rewritten"))
+                    val safTools = JSONObject(http(mcp, auth, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/list\"}").second)
+                        .getJSONObject("result").getJSONArray("tools")
+                    val safName = (0 until safTools.length()).map { safTools.getJSONObject(it).getString("name") }.first { it.endsWith("_saf_describe") }
+                    val safCall = JSONObject().put("jsonrpc", "2.0").put("id", 6).put("method", "tools/call")
+                        .put("params", JSONObject().put("name", safName).put("arguments", JSONObject()))
+                    assertTrue(http(mcp, auth, safCall.toString()).second.contains("saf-fixture isNumber(42)=true"))
+                    client.setOff(safTree, true)
+                    val offTools = JSONObject(http(mcp, auth, "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/list\"}").second)
+                        .getJSONObject("result").getJSONArray("tools")
+                    assertFalse((0 until offTools.length()).any { offTools.getJSONObject(it).getString("name") == safName })
+                    client.setOff(safTree, false)
+                    client.remove(safTree)
+                    assertTrue(client.plugins().entries.none { it.spec == safTree })
+                    importer.removeImported(safTree)
+                    assertFalse(File(safTree).exists())
+                    installed.remove(safTree)
                     device.findObject(By.text("更多"))?.click()
                     assertTrue(device.wait(Until.hasObject(By.text("插件与工具")), 10_000))
                     device.findObject(By.text("插件与工具")).click()
@@ -160,12 +212,32 @@ class OfficialPluginsInstrumentedTest {
                     val expectedCount = client.plugins().entries.size
                     assertTrue(device.wait(Until.hasObject(By.text("$expectedCount 个已安装")), 20_000))
                     assertTrue(device.takeScreenshot(File(artifacts, "native-plugins.png")))
+                    device.findObject(By.clazz("android.widget.EditText")).text = client.plugins().entries.single { it.spec == provider.absolutePath }.name
+                    assertTrue(device.wait(Until.hasObject(By.text(client.plugins().entries.single { it.spec == provider.absolutePath }.name)), 10_000))
+                    device.findObject(By.text(client.plugins().entries.single { it.spec == provider.absolutePath }.name)).click()
+                    assertTrue(device.wait(Until.hasObject(By.text("参数")), 10_000))
+                    assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-detail.png")))
+                    device.findObject(By.text("参数")).click()
+                    val uiOptions = JSONObject().put("base", upstream.base).put("fromBrowser", true).put("fromNative", true).put("fromNativeUI", true)
+                    device.findObject(By.clazz("android.widget.EditText")).click()
+                    device.waitForIdle()
+                    device.findObject(By.clazz("android.widget.EditText")).text = uiOptions.toString()
+                    device.pressBack() // close the input method
+                    device.findObject(By.text("保存参数")).click()
+                    await("native options editor save") { client.plugins().entries.single { it.spec == provider.absolutePath }.options["fromNativeUI"].toString() == "true" }
+                    assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-options.png")))
+                    val browserUiRead = JSONObject(http("http://127.0.0.1:3430/api/plugins", "", cookie = browserCookie).second).getJSONArray("plugins")
+                    assertTrue((0 until browserUiRead.length()).map { browserUiRead.getJSONObject(it) }
+                        .single { it.getString("spec") == provider.absolutePath }.getJSONObject("options").getBoolean("fromNativeUI"))
                     File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
                 } finally {
                     File(artifacts, "core-status.txt").writeText(GatewayRuntime.status.value.toString())
-                    runCatching { installed.reversed().forEach { NativeCoreSession.pluginClient().remove(it) } }
+                    installed.reversed().forEach { spec -> runCatching {
+                        NativeCoreSession.pluginClient().remove(spec)
+                        PluginImporter(context).removeImported(spec)
+                    } }
                     context.startService(Intent(context, GatewayService::class.java).setAction(GatewayService.ACTION_STOP))
                     await("Android core and Bun shutdown", 30_000) {
                         !GatewayRuntime.stopping.value && NativeCoreSession.status.value.phase == NativeCoreSession.Phase.DISCONNECTED &&
@@ -327,6 +399,12 @@ class OfficialPluginsInstrumentedTest {
         private val HOOKS = """
             import { appendFileSync } from "node:fs"
             export async function onRequest(body, ctx) {
+              const text = String(body.messages.at(-1).content)
+              if (text.includes("hook-throw")) throw new Error("fixture hook failure")
+              if (text.includes("hook-timeout")) await new Promise((resolve, reject) => {
+                const timer = setTimeout(resolve, 30000)
+                ctx.signal.addEventListener("abort", () => {clearTimeout(timer);reject(new DOMException("fixture aborted","AbortError"))}, {once:true})
+              })
               const recalled = await fetch(ctx.options.base + "/recall").then(r => r.json())
               ctx.state.link = "linked"
               body.messages[body.messages.length - 1].content += "|" + recalled.context

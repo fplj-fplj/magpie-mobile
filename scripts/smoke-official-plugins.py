@@ -52,6 +52,13 @@ def request(base, path, method="GET", body=None, headers=None, timeout=120):
 def check(condition, message):
     if not condition: raise AssertionError(message)
 
+def await_check(condition, message, timeout=20):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition(): return
+        time.sleep(0.1)
+    raise AssertionError(message)
+
 def must(base, path, method="GET", body=None, headers=None, expect=200, timeout=120):
     code, raw = request(base, path, method, body, headers, timeout)
     check(code == expect, f"{method} {path}: HTTP {code}: {raw[:500].decode(errors='replace')}")
@@ -146,6 +153,20 @@ MIDDLEWARE_JS = """export function onRequest(body) {
 }
 """
 HOOKS_JS = """export async function onRequest(body, ctx) {
+  const text = String(body.messages?.at(-1)?.content || "")
+  if (text.includes("hook-throw")) throw new Error("fixture failure")
+  if (text.includes("hook-timeout") || text.includes("hook-cancel")) {
+    const fs = await import("node:fs")
+    fs.appendFileSync(ctx.options.failureOutput, "started\\n")
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, 30000)
+      ctx.signal.addEventListener("abort", () => {
+        clearTimeout(timer)
+        fs.appendFileSync(ctx.options.failureOutput, "aborted\\n")
+        reject(new DOMException("fixture aborted", "AbortError"))
+      }, {once:true})
+    })
+  }
   const plain = await fetch(ctx.options.modelsURL)
   const placeholder = await fetch(ctx.options.modelsURL, { headers: { Authorization: "Bearer magpie" } })
   const explicit = await fetch(ctx.options.modelsURL, { headers: { Authorization: "Bearer not-a-real-key" } })
@@ -323,10 +344,13 @@ def run_suite(core, root, hooks_base):
     out = root / "responses.jsonl"
     global bridge_report
     bridge_report = root / "bridge-reports.jsonl"
-    core.api("/api/plugins/options", "POST", {"Spec": specs["hooks"], "Options": {
+    failure_output = root / "hook-aborts.txt"
+    hook_options = {
         "output": str(out), "hookURL": hooks_base + "/hook-hit",
         "bridgeOutput": str(bridge_report),
-        "modelsURL": core.gateway + "/v1/models", "gatewayTimeoutMs": 20000}})
+        "failureOutput": str(failure_output),
+        "modelsURL": core.gateway + "/v1/models", "gatewayTimeoutMs": 20000}
+    core.api("/api/plugins/options", "POST", {"Spec": specs["hooks"], "Options": hook_options})
 
     # community npm packages and the GitHub plugin, from the real outside.
     for spec in COMMUNITY_NPM:
@@ -380,7 +404,7 @@ def run_suite(core, root, hooks_base):
         "id": "syncvendor", "name": "Sync vendor", "key": VENDOR_KEY,
         "chat": vendor_base + "/v1", "baseAPI": "chat", "models": ["sync-model"]})
 
-    def chat(model, stream):
+    def chat(model, stream, expected="OK"):
         body = {"model": model, "stream": stream, "messages": [{"role": "user", "content": "hello"}]}
         raw = must(core.gateway, "/v1/chat/completions", "POST", body, {"Authorization": "Bearer " + user_key})
         said = ""
@@ -391,7 +415,7 @@ def run_suite(core, root, hooks_base):
                     said += json.loads(p)["choices"][0]["delta"].get("content") or ""
         else:
             said = json.loads(raw)["choices"][0]["message"]["content"]
-        check(said == "OK", "chat " + model + " said: " + repr(said) + " body: " + raw[:400].decode(errors="replace"))
+        check(said == expected, "chat " + model + " said: " + repr(said) + " body: " + raw[:400].decode(errors="replace"))
 
     for model in ("fixpath/m-path", "syncvendor/sync-model"):
         code, raw = request(core.gateway, "/v1/models", headers={"Authorization": "Bearer " + user_key})
@@ -417,6 +441,24 @@ def run_suite(core, root, hooks_base):
               for line in out.read_text().splitlines()), "onResponse lost successful completion or request-owned state")
     verify_actual_bridge_redirect(core, root, hooks_base)
 
+    community_state = json.loads(core.api("/api/plugins"))
+    word_guard = next(e for e in community_state["plugins"] if e.get("package") == "@magpie-community/middleware-word-guard")
+    check(word_guard.get("middleware", {}).get("calls", 0) > 0, "community middleware did not run")
+    core.api("/api/plugins/options", "POST", {"Spec": word_guard["spec"], "Options": {
+        "words": ["community-block"], "action": "reject"}})
+    with Vendor.lock: before_reject = len(Vendor.bodies)
+    rejected = request(core.gateway, "/v1/chat/completions", "POST", {
+        "model": "syncvendor/sync-model", "stream": False,
+        "messages": [{"role": "user", "content": "community-block"}]}, {"Authorization": "Bearer " + user_key})
+    check(rejected[0] == 400, "community word guard did not reject its configured word")
+    with Vendor.lock: check(len(Vendor.bodies) == before_reject, "rejected community request reached the vendor")
+    core.api("/api/plugins/options", "POST", {"Spec": word_guard["spec"], "Options": {
+        "words": ["OK"], "action": "mask", "replies": True, "mask": "community-mask"}})
+    chat("syncvendor/sync-model", False, "community-mask")
+    chat("syncvendor/sync-model", True, "community-mask")
+    core.api("/api/plugins/options", "POST", {"Spec": word_guard["spec"], "Options": {}})
+    print("community word guard reject, response and SSE transform: PASS")
+
     # MCP tools: the names are <plugin>_<tool>, so take them from the list.
     listed = json.loads(must(core.gateway, "/mcp/magpie/tools", "POST",
                              {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, {"Authorization": "Bearer " + user_key}))
@@ -431,6 +473,60 @@ def run_suite(core, root, hooks_base):
                               "params": {"name": echo_name, "arguments": {"q": "hi"}}},
                              {"Authorization": "Bearer " + user_key}))
     check("echo:hi" in json.dumps(called.get("result", {})), "the tool call failed: " + json.dumps(called)[:400])
+    calc = next((t for t in tool_items if "calc" in t.get("name", "") and
+                 "expression" in t.get("inputSchema", {}).get("properties", {})), None)
+    check(calc, "community calculator expression tool was not found")
+    calculated = json.loads(must(core.gateway, "/mcp/magpie/tools", "POST", {
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": calc["name"], "arguments": {"expression": "0.1+0.2"}}},
+        {"Authorization": "Bearer " + user_key}))
+    calc_text = "".join(c.get("text", "") for c in calculated.get("result", {}).get("content", []))
+    check(json.loads(calc_text).get("exact") == "3/10", "community calculator did not execute exact arithmetic")
+    print("community tools-calc real MCP execution: PASS")
+
+    core.api("/api/plugins/off", "POST", {"Spec": specs["tools"], "Off": True})
+    off_tools = json.loads(must(core.gateway, "/mcp/magpie/tools", "POST", {
+        "jsonrpc": "2.0", "id": 4, "method": "tools/list"}, {"Authorization": "Bearer " + user_key}))
+    check(echo_name not in [t["name"] for t in off_tools.get("result", {}).get("tools", [])],
+          "disabled fixture tool is still advertised")
+    core.api("/api/plugins/off", "POST", {"Spec": specs["tools"], "Off": False})
+
+    def hook_failure(text):
+        raw = must(core.gateway, "/v1/chat/completions", "POST", {
+            "model": "syncvendor/sync-model", "stream": False,
+            "messages": [{"role": "user", "content": text}]}, {"Authorization": "Bearer " + user_key})
+        check(json.loads(raw)["choices"][0]["message"]["content"] == "OK", "failed hook prevented the request")
+        with Vendor.lock: last = Vendor.bodies[-1]
+        check("hook-rewritten" not in json.dumps(last.get("messages", [])), "failed hook committed a rewrite")
+
+    hook_failure("hook-throw")
+    state = json.loads(core.api("/api/plugins"))
+    diag = next(e for e in state["plugins"] if e["spec"] == specs["hooks"])["gateway"]
+    check(diag["lastOutcome"] == "error" and diag["failures"] > 0, "hook exception was not diagnosed")
+    core.api("/api/plugins/options", "POST", {"Spec": specs["hooks"], "Options": {**hook_options, "gatewayTimeoutMs": 500}})
+    started = time.monotonic()
+    hook_failure("hook-timeout")
+    check(time.monotonic() - started < 10, "hook timeout did not bound the gateway request")
+    await_check(lambda: failure_output.is_file() and "aborted" in failure_output.read_text(), "timed-out hook was not signalled")
+    state = json.loads(core.api("/api/plugins"))
+    diag = next(e for e in state["plugins"] if e["spec"] == specs["hooks"])["gateway"]
+    check(diag["lastOutcome"] == "timeout", "hook timeout was not diagnosed")
+
+    core.api("/api/plugins/options", "POST", {"Spec": specs["hooks"], "Options": hook_options})
+    failure_output.write_text("")
+    with Vendor.lock: count_before_cancel = len(Vendor.bodies)
+    cancelled_body = json.dumps({"model": "syncvendor/sync-model", "stream": False,
+                                "messages": [{"role": "user", "content": "hook-cancel"}]}).encode()
+    with socket.create_connection(("127.0.0.1", core.gateway_port), timeout=10) as cancelled:
+        head = ("POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:" + str(core.gateway_port) +
+                "\r\nAuthorization: Bearer " + user_key + "\r\nContent-Type: application/json\r\nContent-Length: " +
+                str(len(cancelled_body)) + "\r\nConnection: close\r\n\r\n").encode()
+        cancelled.sendall(head + cancelled_body)
+        await_check(lambda: "started" in failure_output.read_text(), "cancelled request never reached the hook")
+        cancelled.shutdown(socket.SHUT_RDWR)
+    await_check(lambda: "aborted" in failure_output.read_text(), "client disconnect did not cancel the Bun hook", timeout=10)
+    with Vendor.lock: check(len(Vendor.bodies) == count_before_cancel, "cancelled hook request reached the vendor")
+    print("async hook exception, timeout and client cancellation: PASS")
 
     # off and on.
     core.api("/api/plugins/off", "POST", {"Spec": specs["hooks"], "Off": True})

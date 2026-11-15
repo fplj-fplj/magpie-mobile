@@ -6,7 +6,7 @@
 
 ## 1. 技术路线与固定基线
 
-- 应用当前提交：`17a1edd8f1e320231ba71743e954bb01ae37df96`，版本 `0.1.39-full-core-editors`。
+- 实施起点：`17a1edd8f1e320231ba71743e954bb01ae37df96`，版本 `0.1.39-full-core-editors`。插件接入候选使用 `0.1.40-official-plugins`／code 41，核心 `0.1.3781-androidhost.2`。
 - 上游：Magpie `v0.1.3781`，commit `b52c711142a662fe18fedf5a80cb1e4aa94bce62`；Go `1.26.8`。
 - APK 继续使用完整官方源码的 `nogui,androidhost` 构建与官方管理网页，复用既有 Android 前台服务和进程监督。
 - Bun 随 APK 固定版本与 SHA-256，使用 Android 对应的可执行载荷，从安装目录启动。
@@ -94,27 +94,26 @@ flowchart TD
 - 编辑 options 前后校验快照只能发现部分冲突，不能保证原子性。若要求阻止并发覆盖，给核心保存路径增加可选 revision 校验，浏览器和原生共用；测试同时编辑的真实竞态。
 - 写入超时或连接中断后只读核对，不自动重放安装、更新、登录、删除。旧会话的完成响应必须被丢弃。
 
-## 6. 实施阶段、已有草稿与缺口
+## 6. 实施状态与剩余验收
 
 | 阶段 | 工作与主要文件 | 当前情况 | 进入下一阶段的门槛 |
 | --- | --- | --- | --- |
-| P1：客户端契约 | `PluginModels.kt`、`PluginManagementClient.kt`、`NativeCoreSession.kt` | 已有草稿及 JVM 用例；未在本轮 CI 编译 | 固定上游响应解析、鉴权、失败／未知写、登录契约通过 |
-| P2：宿主与导入 | `patches/mobile`、`PluginImport.kt`、`GatewayService.kt` | 网关桥和目录依赖准备有草稿 | 桥生命周期与来源测试通过；导入补丁已接入 manifest；Go 插件包测试确实执行 |
-| P3：原生管理 | `PluginManagementViewModel.kt`、`PluginManagementPanel.kt`、`NativeNavigation.kt` | 已有真实 API 接线草稿 | 完整管理流程、状态恢复、双编辑一致性、手机交互通过 |
-| P4：运行回归 | 官方插件 smoke、Android instrumentation、workflow | x86_64 载荷准备脚本及 ABI 校验有草稿；instrumentation 与 job 未完成 | 三类插件实际运行、安装来源与生命周期验证全部通过 |
-| P5：候选 APK 与发布 | 构建／发布 job、版本、说明和验收报告 | 现有发布仍直接位于 build job | 发布依赖验证结果；产物、签名、来源 SHA 与报告对应同一提交 |
+| P1：客户端契约 | `PluginModels.kt`、`PluginManagementClient.kt`、`NativeCoreSession.kt` | 已接线，Actions JVM 测试通过（`6a2c6da`、`8b44cfd`） | 固定上游响应解析、鉴权、失败／未知写、登录契约通过 |
+| P2：宿主与导入 | `patches/mobile`、`PluginImport.kt`、`GatewayService.kt` | 网关桥、Key 生命周期、目录依赖准备已接入 hash manifest；Actions Go 回归通过（`6a2c6da`） | 完整 Go+Bun 运行测试及 Android SAF 实测通过 |
+| P3：原生管理 | `PluginManagementViewModel.kt`、`PluginManagementPanel.kt`、`NativeNavigation.kt` | 真实 API 与界面已实现，Android instrumentation 验收进行中 | 完整管理流程、状态恢复、双编辑一致性、手机交互通过 |
+| P4：运行回归 | 官方插件 smoke、Android instrumentation、workflow | 固定社区 npm／GitHub 安装已实测；x86_64 Go／Bun 与测试 APK 构建通过；运行失败仍在修复 | 三类插件实际运行、安装来源与生命周期验证全部通过 |
+| P5：候选 APK 与发布 | 构建／发布 job、版本、说明和验收报告 | 发布已独立为依赖 build 和 runtime-emulator 的 job；版本已统一 | 发布依赖验证结果；产物、签名、来源 SHA 与报告对应同一提交 |
 
-子代理分别负责客户端状态处理、网关与 Bun 宿主测试、Android 实际运行测试。以真实任务状态决定继续或重启，不因等待超时重做已完成工作。
+主代理负责整合与 CI 修复，子代理辅助源码审查和 SAF 测试支持。以实际代码和 Actions 报告判断结果，代理任务完成不等于集成验收通过。
 
 目前具体待办包括：
 
-1. 将 `androidhost_import.go/test` 和 `internal/plugin/store.go` 精确替换接入补丁 manifest；刷新 overlay 清单、哈希及应用器测试。
-2. 审查网关桥仅在 FullAdmin 模式启用、撤销／缓存语义与跨站重定向；修正草稿中不成立的隔离声明。
-3. 将 `./internal/plugin` 纳入 Go CI；现有过滤仅匹配 AndroidHost／Mobile，桥用例以 TestBridge 命名，必须明确纳入执行。
-4. Android `runtimeprobe.py` 的 ELF `PT_INTERP` 字段偏移已在草稿中修正；仍需 CI 验证 `p_offset` 与 `p_filesz` 的解析和实际 APK 载荷。
-5. 完成真实 Bun 官方插件 smoke 与 Android instrumentation。第三类必须是异步 Hooks；自定义页面只能补测。
-6. 原生列表、options 编辑、登录恢复和 SAF 残留清理在 CI 验证后收口。
-7. 拆分构建和发布 job。建议应用候选版本 `0.1.40-official-plugins`／code 41，核心 `0.1.3781-androidhost.2`；版本和报告统一后再提交。
+1. 跟进完整 Go+Bun smoke；使用官方协议保留的 messages 验证改写，不能为测试自造字段改变核心转换行为。
+2. 验证异常／超时／取消、工具停用与社区计算工具调用、社区中间件拒绝和响应／SSE 改写。
+3. Android instrumentation 通过实际文档提供者验证 SAF 单文件与带依赖目录导入、运行及删除后的快照清理。
+4. 原生参数页面实际操作、浏览器 Cookie 入口和双向读取在 Android 验证后收口，保存截图与 XML。
+5. 签名候选 APK、证书、固定载荷与来源提交须对应同一轮通过的 Actions。
+6. ARM64 hosted runner 实测没有 `/dev/kvm`，当前也无注册的真机 runner。ARM64 真机与第三方个人账号验收仍需独立证据。
 
 ## 7. GitHub Actions 验收矩阵
 

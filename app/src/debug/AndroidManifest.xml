@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug-only provider; merged into the debug APK only, never release.
+     The debug APK shares UID with the instrumentation target so
+     ContentResolver queries reach this provider without cross-app grants. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <provider
+            android:name="cc.fplj.magpiemobile.FixturePluginDocumentsProvider"
+            android:authorities="cc.fplj.magpiemobile.fixtures"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS" />
+    </application>
+</manifest>
