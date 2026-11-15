@@ -442,7 +442,10 @@ def run_suite(core, root, hooks_base):
     verify_actual_bridge_redirect(core, root, hooks_base)
 
     community_state = json.loads(core.api("/api/plugins"))
-    word_guard = next(e for e in community_state["plugins"] if e.get("package") == "@magpie-community/middleware-word-guard")
+    word_guard = next(e for e in community_state["plugins"] if
+                      e["spec"] == "@magpie-community/middleware-word-guard" or
+                      e["spec"].startswith("@magpie-community/middleware-word-guard@") or
+                      e.get("package") == "@magpie-community/middleware-word-guard")
     check(word_guard.get("middleware", {}).get("calls", 0) > 0, "community middleware did not run")
     core.api("/api/plugins/options", "POST", {"Spec": word_guard["spec"], "Options": {
         "words": ["community-block"], "action": "reject"}})

@@ -85,7 +85,8 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue(shared.getBoolean("fromBrowser") && shared.getBoolean("fromNative"))
                     val pid = client.providers().single { it.pid == "androidfixture" }.pid
                     val login = client.signIn(pid, 0, emptyMap(), "android-synthetic-key")
-                    await("real plugin API sign-in") { client.signInState(login.id).state == "done" }
+                    assertEquals("API-key login completes synchronously", "done", login.state)
+                    await("real plugin API signed-in provider") { client.providers().any { it.pid == pid && it.signedIn } }
                     val oauth = client.signIn(pid, 1, emptyMap())
                     assertEquals("waiting", oauth.state)
                     client.submitCallback(oauth.id, "good")
@@ -157,8 +158,6 @@ class OfficialPluginsInstrumentedTest {
                     client.setOff(middleware.absolutePath, true)
                     assertEquals(200, http("http://127.0.0.1:3425/v1/chat/completions", auth, rejectedBody.toString()).first)
                     client.setOff(middleware.absolutePath, false)
-                    client.upgrade(provider.absolutePath)
-                    assertTrue(client.plugins().entries.any { it.spec == provider.absolutePath })
                     for (remote in listOf("@magpie-community/tools-calc@0.1.0",
                         "github:guotree/magpie-websearch#3ff2a8deec6742d1f74e3a65c3b006405ac27615")) {
                         val added = client.add(remote)
@@ -168,6 +167,12 @@ class OfficialPluginsInstrumentedTest {
                         installed.add(entry.spec)
                         assertTrue("remote plugin did not load", entry.error.isBlank())
                     }
+                    val calcPackage = "@magpie-community/tools-calc"
+                    val calcBefore = client.plugins().entries.single { it.spec == calcPackage || it.spec.substringBeforeLast('@') == calcPackage }
+                    val calcAfter = client.upgrade(calcBefore.spec).entries.single { it.spec == calcPackage || it.spec.substringBeforeLast('@') == calcPackage }
+                    assertTrue("upgraded npm plugin did not load", calcAfter.error.isBlank())
+                    installed.remove(calcBefore.spec)
+                    installed.add(calcAfter.spec)
                     val communityTools = JSONObject(http(mcp, auth, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}").second)
                         .getJSONObject("result").getJSONArray("tools")
                     val calc = (0 until communityTools.length()).map { communityTools.getJSONObject(it) }.first {
@@ -229,23 +234,41 @@ class OfficialPluginsInstrumentedTest {
                     val browserUiRead = JSONObject(http("http://127.0.0.1:3430/api/plugins", "", cookie = browserCookie).second).getJSONArray("plugins")
                     assertTrue((0 until browserUiRead.length()).map { browserUiRead.getJSONObject(it) }
                         .single { it.getString("spec") == provider.absolutePath }.getJSONObject("options").getBoolean("fromNativeUI"))
+                    device.findObject(By.text("连接与工具")).click()
+                    assertTrue(device.wait(Until.hasObject(By.text("Test API key")), 10_000))
+                    device.findObject(By.text("Test API key")).click()
+                    assertTrue(device.wait(Until.hasObject(By.text("API 密钥")), 10_000))
+                    assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-login.png")))
+                    device.findObject(By.clazz("android.widget.EditText")).click()
+                    device.findObject(By.clazz("android.widget.EditText")).text = "synthetic-ui-key"
+                    device.pressBack()
+                    device.findObject(By.text("保存并连接")).click()
+                    assertTrue(device.wait(Until.hasObject(By.text("连接成功")), 20_000))
+                    device.findObject(By.text("返回插件")).click()
                     File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
                 } finally {
-                    File(artifacts, "core-status.txt").writeText(GatewayRuntime.status.value.toString())
-                    installed.reversed().forEach { spec -> runCatching {
-                        NativeCoreSession.pluginClient().remove(spec)
-                        PluginImporter(context).removeImported(spec)
-                    } }
-                    context.startService(Intent(context, GatewayService::class.java).setAction(GatewayService.ACTION_STOP))
-                    await("Android core and Bun shutdown", 30_000) {
-                        !GatewayRuntime.stopping.value && NativeCoreSession.status.value.phase == NativeCoreSession.Phase.DISCONNECTED &&
-                            device.executeShellCommand("ps -A -o ARGS").lineSequence().none { line ->
-                                line.contains("libmagpie_exec.so") || line.contains("libbun_exec.so")
-                            }
+                    try {
+                        File(artifacts, "core-status.txt").writeText(GatewayRuntime.status.value.toString())
+                        installed.reversed().forEach { spec -> runCatching {
+                            NativeCoreSession.pluginClient().remove(spec)
+                            PluginImporter(context).removeImported(spec)
+                        } }
+                        context.startService(Intent(context, GatewayService::class.java).setAction(GatewayService.ACTION_STOP))
+                        await("Android core and Bun shutdown", 30_000) {
+                            !GatewayRuntime.stopping.value && NativeCoreSession.status.value.phase == NativeCoreSession.Phase.DISCONNECTED &&
+                                device.executeShellCommand("ps -A -o ARGS").lineSequence().none { line ->
+                                    line.contains("libmagpie_exec.so") || line.contains("libbun_exec.so")
+                                }
+                        }
+                        File(artifacts, "shutdown.txt").writeText("PASS: core and Bun processes stopped\n")
+                    } finally {
+                        // AGP removes app storage when it uninstalls the test APK. Keep the
+                        // evidence under the test shell's directory before returning to AGP.
+                        device.executeShellCommand("mkdir -p /data/local/tmp/magpie-plugin-runtime")
+                        device.executeShellCommand("cp -R '${artifacts.absolutePath}/.' /data/local/tmp/magpie-plugin-runtime/")
                     }
-                    File(artifacts, "shutdown.txt").writeText("PASS: core and Bun processes stopped\n")
                 }
             }
         }

@@ -246,8 +246,9 @@ private fun PluginDetailDialog(
                         0 -> {
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
                                 FilterChip(selected = !plugin.off, enabled = canWrite, onClick = toggle, label = { Text(if (plugin.off) "启用插件" else "已启用 · 点击停用") })
-                                OutlinedButton(enabled = canWrite, onClick = upgrade) { Text("更新插件") }
+                                if (!plugin.isLocal) OutlinedButton(enabled = canWrite, onClick = upgrade) { Text("更新插件") }
                             }
+                            if (plugin.isLocal) Text("本地插件保留导入时的副本。需要替换文件时，请移除后重新导入。", style = MaterialTheme.typography.bodySmall)
                             state.providers.filter { it.spec == plugin.spec }.forEach { provider ->
                                 ContentCard {
                                     Text(provider.name, style = MaterialTheme.typography.titleMedium)

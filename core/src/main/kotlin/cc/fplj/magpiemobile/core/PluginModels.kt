@@ -51,6 +51,9 @@ data class ManagedPlugin(
     val latest: String = "",
     val optionsExample: JsonObject = JsonObject(emptyMap()),
 ) {
+    /** Same path forms as upstream plugin.IsPath, including paths restored from another OS. */
+    val isLocal: Boolean get() = spec.startsWith("file://") || spec.startsWith(".") ||
+        spec.startsWith("/") || spec.startsWith("\\") || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(spec)
     override fun toString(): String = "ManagedPlugin(spec=$spec, off=$off, error=<redacted>)"
 }
 
