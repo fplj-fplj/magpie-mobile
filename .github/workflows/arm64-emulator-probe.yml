@@ -2,6 +2,11 @@ name: ARM64 Android emulator probe
 
 on:
   workflow_dispatch:
+    inputs:
+      run_plugins:
+        description: Run the installed ARM64 Go/Bun plugin test after boot
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -11,7 +16,7 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 70
     permissions:
       contents: read
     steps:
@@ -20,6 +25,30 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        if: inputs.run_plugins
+        with:
+          gradle-version: '8.10.2'
+      - name: Build test APK with the verified production ARM64 payloads
+        if: inputs.run_plugins
+        run: |
+          set -euo pipefail
+          mkdir -p build-tmp/arm64-emulator-probe
+          curl -fL --retry 2 --max-time 300 https://github.com/fplj-fplj/magpie-mobile/releases/download/v0.1.40-official-plugins-3f4f78da/magpie-mobile-0.1.40-official-plugins.apk -o build-tmp/arm64-emulator-probe/source-candidate.apk
+          printf '%s  build-tmp/arm64-emulator-probe/source-candidate.apk\n' 488cf77ebe7988e8ddbe078fa2abdf37cc1513ae61029d38837e2fd237cd1085 | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          dest = Path('app/src/main/jniLibs/arm64-v8a')
+          dest.mkdir(parents=True, exist_ok=True)
+          with ZipFile('build-tmp/arm64-emulator-probe/source-candidate.apk') as archive:
+              for name in ('libmagpie_exec.so', 'libbun_exec.so'):
+                  (dest / name).write_bytes(archive.read('lib/arm64-v8a/' + name))
+          PY
+          chmod 755 app/src/main/jniLibs/arm64-v8a/*.so
+          sha256sum app/src/main/jniLibs/arm64-v8a/*.so | tee build-tmp/arm64-emulator-probe/payload-sha256.txt
+          gradle :app:assembleDebug :app:assembleDebugAndroidTest -PmagpieTestAbi=arm64-v8a --no-daemon --stacktrace
+          python3 scripts/runtimeprobe.py --apk app/build/outputs/apk/debug/app-debug.apk --abi arm64-v8a | tee build-tmp/arm64-emulator-probe/apk-runtime-probe.txt
       - name: Install emulator audio library dependency
         run: |
           sudo apt-get update
@@ -30,10 +59,16 @@ jobs:
           mkdir -p build-tmp/arm64-emulator-probe
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" "system-images;android-30;default;arm64-v8a" 2>&1 | tee build-tmp/arm64-emulator-probe/sdk-install.log
       - name: Try actual ARM64 boot with software CPU emulation
+        env:
+          MAGPIE_ARM64_RUN_PLUGINS: ${{ inputs.run_plugins && 'true' || 'false' }}
         run: bash scripts/probe-arm64-emulator.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: arm64-emulator-probe-${{ github.sha }}
-          path: build-tmp/arm64-emulator-probe/
+          path: |
+            build-tmp/arm64-emulator-probe/
+            app/build/outputs/androidTest-results/
+            app/build/reports/androidTests/
+            build-tmp/android-plugin-runtime/
           if-no-files-found: error
