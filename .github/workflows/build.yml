@@ -276,6 +276,35 @@ jobs:
             build-tmp/test-core-x86_64-build-info.txt
           if-no-files-found: warn
 
+  runtime-arm64-capabilities:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Inspect actual ARM64 runner virtualization support
+        run: |
+          python3 - <<'PY'
+          import fcntl, json, os, platform
+          result = {'hostMachine': platform.machine(), 'kvmDevice': os.path.exists('/dev/kvm'),
+                    'kvmReadableWritable': os.access('/dev/kvm', os.R_OK | os.W_OK),
+                    'androidRuntimeVerified': False}
+          if result['kvmDevice']:
+              try:
+                  with open('/dev/kvm', 'rb', buffering=0) as device:
+                      result['kvmApiVersion'] = fcntl.ioctl(device.fileno(), 0xAE00)
+              except Exception as error:
+                  result['kvmErrorType'] = type(error).__name__
+          with open('arm64-runner-capabilities.json', 'w') as output:
+              json.dump(result, output, indent=2)
+          print(json.dumps(result, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arm64-runner-capabilities-${{ github.sha }}
+          path: arm64-runner-capabilities.json
+          if-no-files-found: error
+
   publish:
     needs: [build, runtime-emulator]
     runs-on: ubuntu-latest

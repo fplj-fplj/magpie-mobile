@@ -66,7 +66,7 @@ class PayloadVerifierTest {
     fun fromSupportedAbiResolvesDeviceFirstAbi() {
         assertEquals(PayloadVerifier.Architecture.X86_64, PayloadVerifier.Architecture.fromSupportedAbi(arrayOf("x86_64")))
         assertEquals(
-            PayloadVerifier.Architecture.X86_64,
+            PayloadVerifier.Architecture.ARM64,
             PayloadVerifier.Architecture.fromSupportedAbi(arrayOf("arm64-v8a", "x86_64", "armeabi-v7a")),
         )
         assertEquals(PayloadVerifier.Architecture.ARM64, PayloadVerifier.Architecture.fromSupportedAbi(arrayOf("arm64-v8a")))

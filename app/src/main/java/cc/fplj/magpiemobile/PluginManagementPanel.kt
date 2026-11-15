@@ -187,7 +187,8 @@ internal fun PluginManagementPanel(
         { removingSpec = selected.spec },
         { value -> viewModel.saveOptions(selected.spec, value) },
         { provider, method -> selectedSpec = null; viewModel.selectLogin(provider, method) },
-        { provider -> viewModel.edit(PluginEdit.Prefer(selected.spec, provider)) }, onBrowserEditor)
+        { provider -> viewModel.edit(PluginEdit.Prefer(selected.spec, provider)) }, onBrowserEditor,
+        { viewModel.edit(PluginEdit.RestoreGatewayAccess) })
 
     removingSpec?.let { spec -> AlertDialog(onDismissRequest = { removingSpec = null }, title = { Text("移除此插件？") },
         text = { Text("它提供的模型、工具和网关 hooks 将停止使用。") },
@@ -212,6 +213,7 @@ private fun PluginDetailDialog(
     plugin: ManagedPlugin, state: OfficialPluginsState, canWrite: Boolean,
     close: () -> Unit, toggle: () -> Unit, upgrade: () -> Unit, remove: () -> Unit,
     saveOptions: (String) -> Unit, login: (PluginProvider, Int) -> Unit, prefer: (String) -> Unit, browser: () -> Unit,
+    restoreGateway: () -> Unit,
 ) {
     var tab by remember(plugin.spec) { mutableStateOf(0) }
     val baseOptions = remember(plugin.spec) { plugin.options }
@@ -304,7 +306,7 @@ private fun PluginDetailDialog(
                                 Text("${diagnostic.calls} 次调用 · ${diagnostic.failures} 次失败")
                                 Text("平均 ${diagnostic.avgMillis} ms · ${diagnostic.lastOutcome}", style = MaterialTheme.typography.bodySmall)
                             } }
-                            OutlinedButton(enabled = canWrite, onClick = { viewModel.edit(PluginEdit.RestoreGatewayAccess) }) {
+                            OutlinedButton(enabled = canWrite, onClick = restoreGateway) {
                                 Text("恢复插件网关连接")
                             }
                             Text("重新创建插件宿主的网关调用密钥，适用于该密钥被删除或停用之后。", style = MaterialTheme.typography.bodySmall)

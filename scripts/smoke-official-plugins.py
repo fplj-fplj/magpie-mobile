@@ -337,7 +337,8 @@ def run_suite(core, root, hooks_base):
     while time.monotonic() < deadline:
         state = json.loads(core.api("/api/plugins"))
         prov = next((e for e in state["plugins"] if e["spec"] == specs["provider"]), None)
-        if prov and prov.get("named") and "fixpath" in (prov.get("providers") or []): break
+        providers = json.loads(core.api("/api/providers")).get("plugins", [])
+        if prov and prov.get("named") and any(p.get("pid") == "fixpath" for p in providers): break
         time.sleep(0.5)
     else:
         raise AssertionError("the provider never appeared: " + json.dumps(prov))
@@ -345,7 +346,12 @@ def run_suite(core, root, hooks_base):
     # api sign-in: the method has no authorize, so the key is stored
     # directly as the auth (the normal api path, not keyless).
     done = json.loads(core.api("/api/plugin-signin", "POST", {"Provider": "fixpath", "Method": 0, "Key": VENDOR_KEY}))
-    check(done.get("state") == "done", "api sign-in: " + json.dumps(done))
+    deadline = time.monotonic() + 30
+    while done.get("state") != "done" and time.monotonic() < deadline:
+        check(done.get("state") not in ("failed", "canceled"), "API sign-in failed")
+        time.sleep(0.2)
+        done = json.loads(core.api("/api/signin/" + done["id"]))
+    check(done.get("state") == "done", "API sign-in did not finish")
     started = json.loads(core.api("/api/plugin-signin", "POST", {"Provider": "fixpath", "Method": 1}))
     check(started.get("id") and started.get("state") in ("installing", "waiting"), "oauth sign-in: " + json.dumps(started))
     core.api("/api/signin/" + started["id"] + "/cancel", "POST", {}, expect=204)
