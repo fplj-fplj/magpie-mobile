@@ -23,6 +23,15 @@ printf 'no\n' | avdmanager create avd --force --name magpie-arm64-probe \
   --package 'system-images;android-30;default;arm64-v8a' --device pixel_5
 test -f "$ANDROID_AVD_HOME/magpie-arm64-probe.ini"
 cp "$ANDROID_AVD_HOME/magpie-arm64-probe.ini" "$report/avd-location.ini"
+python3 - "$ANDROID_AVD_HOME/magpie-arm64-probe.avd/config.ini" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+settings = dict(line.split('=', 1) for line in path.read_text().splitlines() if '=' in line)
+settings.update({'hw.audioInput': 'no', 'hw.audioOutput': 'no',
+                 'hw.lcd.width': '480', 'hw.lcd.height': '800', 'hw.lcd.density': '160'})
+path.write_text(''.join(key.strip() + '=' + value.strip() + '\n' for key, value in settings.items()))
+PY
 started=$(date +%s)
 test -x "$backend_bin"
 LD_LIBRARY_PATH="$emulator_library_path" ldd "$backend_bin" > "$report/backend-dependencies.txt"
