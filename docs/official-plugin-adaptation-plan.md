@@ -104,7 +104,7 @@ flowchart TD
 | P4：运行回归 | 官方插件 smoke、Android instrumentation、workflow | Linux 完整 Go+Bun、race、Android x86_64 三类插件实际运行均通过 | ARM64 实际运行须另有设备或兼容模拟器证据 |
 | P5：候选 APK 与发布 | 构建／发布 job、版本、说明和验收报告 | 同一提交的固定签名、载荷哈希、PIE／16 KB 和候选发布通过 | 最新实现的构建、运行与发布已在同一 SHA 上通过 |
 
-完整通过基线为 [`654ce191` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43677903987)，[候选发布](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-654ce191)与该 SHA 对应。Android XML 为 1 test、0 failure／error／skipped，停止结果明确确认 Go 与 Bun 进程全部退出。该轮同时验证导入回收补丁；后续提交仍以自身结果为准。
+完整通过基线为 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)，[候选发布](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-05072a47)与该 SHA 对应。Android XML 为 1 test、0 failure／error／skipped，停止结果明确确认 Go 与 Bun 进程全部退出。该轮同时验证导入回收补丁；后续提交仍以自身结果为准。
 
 已覆盖的社区包为 `@magpie-community/tools-calc@0.1.0`、`@magpie-community/middleware-word-guard@0.1.1`、`@magpie-community/gateway-powercontext@0.2.1` 和固定提交的 `guotree/magpie-websearch`。验证包含计算工具精确结果、中间件拒绝与响应／SSE 变换、Hooks 异常／超时／取消、PowerContext 真实召回／会话关联／完成后写入、网关桥撤销和显式恢复。PowerContext 允许在插件 options 中提供 `authorization`，环境变量是它的回退路径。
 

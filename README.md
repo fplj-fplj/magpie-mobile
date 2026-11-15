@@ -47,6 +47,6 @@
 
 CI 执行 Python 应用器、JVM 测试、legacy mobile 与完整宿主 Go 回归、真实 Go+Bun 插件宿主测试和 Android APK 运行测试，再发布固定 v0.1.3781/Go1.26.8 `nogui,androidhost` Android ARM64 PIE 核心 `0.1.3781-androidhost.2`（16KB 页对齐）与固定签名候选 APK。发布等待构建和运行检查通过，附载荷 SHA-256 与签名证书；ARM64 真机证据和个人账号验证分别列出，不由 x86_64 测试推断。本地不运行编译。
 
-官方插件完整通过基线：[`654ce191` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43677903987) 与[对应签名候选](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-654ce191)。候选 APK 与构建／运行证据对应同一提交；运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
+官方插件完整通过基线：[`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460) 与[对应签名候选](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-05072a47)。候选 APK 与构建／运行证据对应同一提交；运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 
 本地大版本升级基线：v0.1.3622 起步（旧基线 v0.1.3188 的 24 个补丁目标文件零变更，升级流程见技能库与 gap-analysis §5）。
