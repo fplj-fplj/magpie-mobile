@@ -46,7 +46,7 @@
 
 ## 验证与操作
 
-CI 执行 Python 应用器、JVM 测试、legacy mobile 与完整宿主 Go 回归、真实 Go+Bun 插件宿主测试和 Android APK 运行测试，再发布固定 v0.1.3781/Go1.26.8 `nogui,androidhost` Android ARM64 PIE 核心 `0.1.3781-androidhost.2`（16KB 页对齐）与固定签名候选 APK。发布等待构建和运行检查通过，附载荷 SHA-256 与签名证书；ARM64 真机证据和个人账号验证分别列出，不由 x86_64 测试推断。本地不运行编译。
+`Build and release` 负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，成功后自动发布对应提交的 Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止成功 APK 发布。文档修改不触发重复编译。本地不运行编译。
 
 官方插件完整通过基线：[`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460) 与[对应签名候选](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-05072a47)。候选 APK 与构建／运行证据对应同一提交；运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 

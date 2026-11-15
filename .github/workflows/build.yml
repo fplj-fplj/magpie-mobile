@@ -1,18 +1,26 @@
-name: build
+name: Build and release
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'app/**'
+      - 'core/**'
+      - 'patches/**'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+      - '*.gradle.kts'
+      - 'gradle.properties'
   workflow_dispatch:
 
 concurrency:
   group: magpie-mobile-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
@@ -35,7 +43,25 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Identify Android compiler version
+        id: ndk
+        run: |
+          ndk_root="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          test -n "$ndk_root"
+          printf 'version=%s\n' "$(basename "$ndk_root")" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the exact Android ARM64 core
+        id: core-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-tmp/magpie-mobile-android-arm64
+            build-tmp/mobile-core.sha256
+            build-tmp/mobile-core-build-info.txt
+          key: ${{ runner.os }}-androidhost-arm64-go1.26.8-ndk${{ steps.ndk.outputs.version }}-b52c7111-${{ hashFiles('patches/mobile/**', 'scripts/apply-mobile-core.py', 'scripts/build-android-release-runtime.sh') }}
+
       - uses: actions/setup-go@v5
+        if: steps.core-cache.outputs.cache-hit != 'true'
         with:
           go-version-file: build-tmp/upstream/go.mod
           cache-dependency-path: build-tmp/upstream/go.sum
@@ -55,98 +81,19 @@ jobs:
           python3 scripts/apply-mobile-core.py --source-root build-tmp/upstream --check
           python3 scripts/apply-mobile-core.py --source-root build-tmp/upstream
 
+      - name: Restore verified Android Bun archive
+        uses: actions/cache@v4
+        with:
+          path: build-tmp/bun.zip
+          key: bun-android-arm64-1.4.2-a1c7e2983f1bb651
+
       - name: Fetch verified Bun runtime
         run: bash scripts/fetch-assets.sh --bun-only
 
-      - name: Run core and app JVM regression tests
-        run: |
-          set -euo pipefail
-          gradle :core:test :app:testDebugUnitTest --no-daemon --stacktrace
-          python3 scripts/check-room-schema.py
-
-      - name: Upload JVM regression reports even on failure
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: regression-reports-${{ github.sha }}
-          path: |
-            core/build/test-results/test/
-            core/build/reports/tests/test/
-            app/build/test-results/testDebugUnitTest/
-            app/build/reports/tests/testDebugUnitTest/
-            app/schemas/
-          if-no-files-found: warn
-
-      - name: Run actual mobile Go safety tests
-        working-directory: build-tmp/upstream
+      - name: Prepare the fixed Android ARM64 core
         env:
-          CGO_ENABLED: '0'
-        run: |
-          set -euo pipefail
-          go test -tags nogui ./internal/access -count=1 -timeout=3m
-          go test -json -tags nogui,mobile ./internal/gateway ./internal/gui ./internal/cli ./internal/provider -run '^TestMobile' -count=1 -timeout=3m | tee ../mobile-go-tests.jsonl
-          go test -json -tags nogui,androidhost ./internal/gateway ./internal/gui ./internal/cli ./internal/provider ./internal/plugin -run '^Test(AndroidHost|Mobile)' -count=1 -timeout=3m | tee ../androidhost-go-tests.jsonl
-
-      - name: Host integration smoke with a synthetic upstream
-        working-directory: build-tmp/upstream
-        env:
-          CGO_ENABLED: '0'
-        run: |
-          set -euo pipefail
-          go build -trimpath -tags nogui,mobile -ldflags '-s -w -X main.version=0.1.3781-mobile.1' -o ../magpie-mobile-host .
-          python3 ../../scripts/smoke-mobile-core.py --exe ../magpie-mobile-host
-          go build -trimpath -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.2' -o ../magpie-full-host .
-          python3 ../../scripts/smoke-mobile-core.py --exe ../magpie-full-host --full-admin
-
-      - name: Fetch hash-pinned Linux Bun for plugin integration
-        run: bash scripts/fetch-host-bun.sh
-
-      - name: Run real official plugin host integration
-        run: |
-          set -euo pipefail
-          python3 scripts/smoke-official-plugins.py --exe build-tmp/magpie-full-host --bun build-tmp/bun-linux-host | tee build-tmp/official-plugin-smoke.txt
-
-      - name: Run plugin host race regression
-        working-directory: build-tmp/upstream
-        env:
-          CGO_ENABLED: '1'
-        run: |
-          set -euo pipefail
-          go test -race -tags nogui,androidhost ./internal/plugin ./internal/gui -run '^TestAndroidHost(Bridge|HostJS|PluginGateway|Imported|ImportFailure|OtherLocal)' -count=1 -timeout=3m | tee ../plugin-host-race.txt
-
-      - name: Build the Android ARM64 full CLI core
-        working-directory: build-tmp/upstream
-        env:
-          CGO_ENABLED: '1'
-          GOOS: android
-          GOARCH: arm64
-        run: |
-          set -euo pipefail
-          # Android DNS uses Bionic/netd; CGO0 cannot use that resolver.
-          ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
-          test -n "$ndk"
-          export CC="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
-          test -x "$CC"
-          go build -trimpath -buildmode=pie -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.2 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' -o ../magpie-mobile-android-arm64 .
-          cp ../magpie-mobile-android-arm64 ../../app/src/main/jniLibs/arm64-v8a/libmagpie_exec.so
-          sha256sum ../magpie-mobile-android-arm64 > ../mobile-core.sha256
-          go version -m ../magpie-mobile-android-arm64 > ../mobile-core-build-info.txt
-          mkdir -p ../../app/src/main/assets/licenses/magpie
-          cp LICENSE ../../app/src/main/assets/licenses/magpie/LICENSE.txt
-
-      - name: Upload core safety evidence even on failure
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mobile-core-evidence-${{ github.sha }}
-          path: |
-            build-tmp/mobile-go-tests.jsonl
-            build-tmp/androidhost-go-tests.jsonl
-            build-tmp/mobile-core.sha256
-            build-tmp/mobile-core-build-info.txt
-            build-tmp/official-plugin-smoke.txt
-            build-tmp/plugin-host-race.txt
-          if-no-files-found: warn
+          MAGPIE_CORE_CACHE_HIT: ${{ steps.core-cache.outputs.cache-hit }}
+        run: bash scripts/build-android-release-runtime.sh build-tmp/upstream
 
       - name: Restore fixed release signing key
         env:
@@ -162,7 +109,7 @@ jobs:
         env:
           MAGPIE_SIGNING_STORE: ${{ runner.temp }}/magpie-release.jks
           MAGPIE_SIGNING_PASSWORD: ${{ secrets.MAGPIE_SIGNING_PASSWORD }}
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: gradle :app:assembleRelease --no-daemon --stacktrace --build-cache
 
       - name: Verify pinned APK signing certificate
         run: |
@@ -189,7 +136,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: magpie-mobile-poc-apk
+          name: apk-${{ github.sha }}
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
@@ -202,99 +149,10 @@ jobs:
             build-tmp/mobile-core.sha256
             build-tmp/mobile-core-build-info.txt
             build-tmp/apk-signature.txt
-            build-tmp/official-plugin-smoke.txt
-            build-tmp/plugin-host-race.txt
-          if-no-files-found: error
-
-  runtime-emulator:
-    runs-on: ubuntu-latest
-    timeout-minutes: 55
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: yetone/magpie
-          ref: b52c711142a662fe18fedf5a80cb1e4aa94bce62
-          path: build-tmp/upstream
-          persist-credentials: false
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.10.2'
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: build-tmp/upstream/go.mod
-          cache-dependency-path: build-tmp/upstream/go.sum
-      - name: Build actual Android test payloads from fixed source
-        run: |
-          set -euo pipefail
-          python3 scripts/apply-mobile-core.py --source-root build-tmp/upstream
-          bash scripts/build-android-test-runtime.sh build-tmp/upstream
-          gradle :app:assembleDebug :app:assembleDebugAndroidTest -PmagpieTestAbi=x86_64 --no-daemon --stacktrace
-          python3 scripts/runtimeprobe.py --apk app/build/outputs/apk/debug/app-debug.apk --abi x86_64 | tee build-tmp/android-runtime-probe.txt
-      - name: Enable KVM for Android emulator
-        run: |
-          sudo chmod 666 /dev/kvm
-      - name: Run real Android Go and Bun plugin tests
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          target: google_apis
-          profile: pixel_6
-          disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: bash scripts/run-android-plugin-tests.sh
-      - name: Upload actual Android runtime reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-plugin-runtime-${{ github.sha }}
-          path: |
-            app/build/outputs/androidTest-results/
-            app/build/reports/androidTests/
-            build-tmp/android-plugin-runtime/
-            build-tmp/android-runtime-probe.txt
-            build-tmp/test-core-x86_64.sha256
-            build-tmp/test-core-x86_64-build-info.txt
-          if-no-files-found: warn
-
-  runtime-arm64-capabilities:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Inspect actual ARM64 runner virtualization support
-        run: |
-          python3 - <<'PY'
-          import fcntl, json, os, platform
-          result = {'hostMachine': platform.machine(), 'kvmDevice': os.path.exists('/dev/kvm'),
-                    'kvmReadableWritable': os.access('/dev/kvm', os.R_OK | os.W_OK),
-                    'androidRuntimeVerified': False}
-          if result['kvmDevice']:
-              try:
-                  with open('/dev/kvm', 'rb', buffering=0) as device:
-                      result['kvmApiVersion'] = fcntl.ioctl(device.fileno(), 0xAE00)
-              except Exception as error:
-                  result['kvmErrorType'] = type(error).__name__
-          with open('arm64-runner-capabilities.json', 'w') as output:
-              json.dump(result, output, indent=2)
-          print(json.dumps(result, indent=2))
-          PY
-      - uses: actions/upload-artifact@v4
-        with:
-          name: arm64-runner-capabilities-${{ github.sha }}
-          path: arm64-runner-capabilities.json
           if-no-files-found: error
 
   publish:
-    needs: [build, runtime-emulator]
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -307,7 +165,7 @@ jobs:
           name: signed-release-${{ github.sha }}
           path: release-artifacts
 
-      - name: Publish tested candidate APK
+      - name: Publish every successfully built signed APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -319,16 +177,18 @@ jobs:
           sha256sum "$apk_name" | tee "${apk_name}.sha256"
           printf 'Commit: %s\nSource: b52c711142a662fe18fedf5a80cb1e4aa94bce62\nCore: 0.1.3781-androidhost.2 (nogui,androidhost; official plugins)\nActions run: %s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
           cat release-artifacts/build-tmp/mobile-core.sha256 release-artifacts/build-tmp/apk-signature.txt >> build-info.txt
-          printf 'Android runtime: x86_64 instrumentation; production ARM64 hardware verification pending.\n' >> build-info.txt
+          printf 'Validation workflow runs independently; its result does not gate this release.\n' >> build-info.txt
           notes_file="release-artifacts/release-notes.md"
           if [ -f "RELEASE_NOTES.md" ]; then
             cp "RELEASE_NOTES.md" "$notes_file"
           else
             printf 'Magpie-Mobile 自动化发布 %s\n提交：%s\n' "$version_name" "$GITHUB_SHA" > "$notes_file"
           fi
+          printf '\n构建提交：`%s`\n\n签名与载荷校验通过；运行测试在独立 Validation 流程查看，不阻止 APK 发布。\n\n[构建流程](%s/%s/actions/runs/%s) · [同提交验证结果](%s/%s/actions/workflows/validate.yml?query=sha%%3A%s)\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> "$notes_file"
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --title "Magpie-Mobile ${version_name} (${GITHUB_SHA:0:8})" --notes-file "$notes_file" --target "$GITHUB_SHA" --prerelease
           else
             gh release edit "$tag" --title "Magpie-Mobile ${version_name} (${GITHUB_SHA:0:8})" --notes-file "$notes_file" --prerelease
           fi
-          gh release upload "$tag" "$apk_name" "${apk_name}.sha256" build-info.txt release-artifacts/build-tmp/mobile-core-build-info.txt release-artifacts/build-tmp/official-plugin-smoke.txt --clobber
+          gh release upload "$tag" "$apk_name" "${apk_name}.sha256" build-info.txt release-artifacts/build-tmp/mobile-core-build-info.txt --clobber
+          printf '已发布 [%s](%s/%s/releases/tag/%s)\n' "$apk_name" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"

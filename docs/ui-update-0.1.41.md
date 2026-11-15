@@ -19,3 +19,5 @@
 本地只做字体哈希、TTF／cmap／字重及许可核对和源码检查。编译、JVM、Go 及 Android 运行全部由 GitHub Actions 执行。
 
 Android instrumentation 使用唯一开关启动真实 Go/Bun 核心，在横屏与竖屏保存关闭／运行截图；完整插件流程结束后以同一开关关闭核心，核对开关状态、进程与端口清理。参数、登录与 1.3 倍字体页面也保留截图，供检查字体覆盖与换行。
+
+发布由独立 Build and release 流程执行，APK 编译与固定签名／载荷检查成功即进入 Release。Validation 保存运行结果与截图，失败不会阻止已经构建成功的安装包发布。核心载荷与 Bun 依赖按固定来源缓存。

@@ -125,11 +125,11 @@ flowchart TD
 | 原生 UI | instrumentation 操作安装页、详情、登录和返回 | Android 测试报告与截图，可核对小屏与字体布局 |
 | 生产载荷 | ARM64 ELF、PIE、16 KB 对齐、APK 打包哈希与证书验证 | 签名 APK 与构建证据对应同一 SHA |
 
-CI 分层：Python 补丁／资产检查 → JVM 与 Go 契约／回归 → Linux 上真实 Go+Bun 宿主插件 smoke → Android x86_64 APK 模拟器运行 → ARM64 生产载荷与运行验收 → 发布。
+CI 分为两条：Build and release 执行源码／资产检查、ARM64 核心与 APK 编译、签名／载荷校验并发布；Validation 独立执行 JVM、Go、Linux 插件及 Android 模拟器运行。
 
 Linux smoke 能证明核心协议链路，x86_64 Android 模拟器能证明 Android 宿主执行；二者都不能替代 ARM64 实际运行证据。当前没有已验证的 ARM64 真机 runner／设备农场。实施需安排真实 ARM64 设备验证并保存结果；取得证据前可以产出候选 APK，但不声明 ARM64 三类插件全面通过。付费／个人账号的第三方请求也应与可自动运行的本机测试上游分开记录。
 
-发布 job 依赖构建和运行测试，下载同一提交的签名 APK 及完整构建证据。任何关键验收失败不得沿旧流程仅凭 APK 编译成功直接发布。
+最新用户要求构建成功即发布。发布 job 只依赖构建和签名／载荷校验，下载同一提交的签名 APK 及构建来源；运行测试独立保留真实成功／失败结果，发布不表示所有运行项目已通过。
 
 ## 8. 源码依据
 

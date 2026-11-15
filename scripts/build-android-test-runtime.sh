@@ -14,16 +14,19 @@ test -n "$ndk" || { echo "NDK not found: set ANDROID_NDK_LATEST_HOME or ANDROID_
 CC="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang"
 test -x "$CC" || { echo "missing NDK compiler: $CC" >&2; exit 2; }
 
-(
-  cd "$UPSTREAM"
-  export CGO_ENABLED=1 GOOS=android GOARCH=amd64 CC="$CC"
-  go build -trimpath -buildmode=pie -tags nogui,androidhost \
-    -ldflags '-s -w -X main.version=0.1.3781-androidhost.2 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
-    -o "$OLDPWD/build-tmp/magpie-mobile-android-x86_64" .
-)
+if [[ "${MAGPIE_TEST_CORE_CACHE_HIT:-false}" != true ]]; then
+  (
+    cd "$UPSTREAM"
+    export CGO_ENABLED=1 GOOS=android GOARCH=amd64 CC="$CC"
+    go build -trimpath -buildmode=pie -tags nogui,androidhost \
+      -ldflags '-s -w -X main.version=0.1.3781-androidhost.2 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
+      -o "$OLDPWD/build-tmp/magpie-mobile-android-x86_64" .
+  )
+  sha256sum build-tmp/magpie-mobile-android-x86_64 > build-tmp/test-core-x86_64.sha256
+  go version -m build-tmp/magpie-mobile-android-x86_64 > build-tmp/test-core-x86_64-build-info.txt
+fi
+sha256sum -c build-tmp/test-core-x86_64.sha256
 cp build-tmp/magpie-mobile-android-x86_64 "$DEST/libmagpie_exec.so"
-sha256sum build-tmp/magpie-mobile-android-x86_64 | tee build-tmp/test-core-x86_64.sha256
-go version -m build-tmp/magpie-mobile-android-x86_64 > build-tmp/test-core-x86_64-build-info.txt
 
 MAGPIE_X86_BUN_ZIP_SHA256=fe36d8d4795e0eadc22fb6696d44d168491c2e5b9b7cbb12b8c96b0c0c40a4f9
 BUN_X86_URL=https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64-android-baseline.zip
