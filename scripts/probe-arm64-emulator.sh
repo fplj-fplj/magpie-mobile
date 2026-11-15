@@ -23,6 +23,17 @@ printf 'no\n' | avdmanager create avd --force --name magpie-arm64-probe \
   --package 'system-images;android-30;default;arm64-v8a' --device pixel_5
 test -f "$ANDROID_AVD_HOME/magpie-arm64-probe.ini"
 cp "$ANDROID_AVD_HOME/magpie-arm64-probe.ini" "$report/avd-location.ini"
+python3 - "$ANDROID_AVD_HOME/magpie-arm64-probe.ini" "$report" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+settings = dict(line.split('=', 1) for line in path.read_text().splitlines() if '=' in line)
+# Host metadata only: avoid QEMU's unconditional API>=26 HDA device on a PCI-less ARM machine.
+# The installed boot/system/vendor images remain Android API 30; verify the guest's actual API.
+settings['target'] = 'android-25'
+path.write_text(''.join(key.strip() + '=' + value.strip() + '\n' for key, value in settings.items()))
+Path(sys.argv[2], 'avd-host-target-override.ini').write_text(path.read_text())
+PY
 python3 - "$ANDROID_AVD_HOME/magpie-arm64-probe.avd/config.ini" <<'PY'
 from pathlib import Path
 import sys
@@ -50,6 +61,7 @@ done
 if [[ "$booted" == true ]]; then
   timeout 10s adb -s "$serial" shell getprop ro.product.cpu.abi > "$report/guest-abi.txt"
   timeout 10s adb -s "$serial" shell uname -m > "$report/guest-machine.txt"
+  timeout 10s adb -s "$serial" shell getprop ro.build.version.sdk > "$report/guest-api.txt"
 fi
 python3 - "$report" "$booted" "$started" <<'PY'
 import json, pathlib, platform, sys, time
@@ -58,10 +70,12 @@ booted = sys.argv[2] == 'true'
 abi = (root / 'guest-abi.txt').read_text().strip() if booted else ''
 result = {'hostMachine': platform.machine(), 'bootCompleted': booted,
           'launchMethod': 'official-qemu2-aarch64-backend',
+          'hostTargetOverride': 25, 'installedSystemImageAPI': 30,
+          'guestAPI': (root / 'guest-api.txt').read_text().strip() if booted else '',
           'guestABI': abi, 'elapsedSeconds': int(time.time()) - int(sys.argv[3]),
           'androidPluginRuntimeVerified': False}
 (root / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
 print(json.dumps(result, indent=2))
-if not booted or abi != 'arm64-v8a':
+if not booted or abi != 'arm64-v8a' or int(result['guestAPI']) < 29:
     raise SystemExit('ARM64 emulator boot did not pass; see emulator.log')
 PY
