@@ -16,11 +16,13 @@ class SessionStoreTest {
     fun appendAndReadRoundTrip() {
         val store = SessionStore(File(tmp, "chat.jsonl"))
         store.append(SessionRecord(1_700_000_000_000, "user", "chat", "你好"))
-        store.append(SessionRecord(1_700_000_000_001, "assistant", "chat", "line1\nline2 \"quoted\""))
+        store.append(SessionRecord(1_700_000_000_001, "assistant", "chat",
+            "line1\nline2 \"quoted\"", reasoning = "先拆解\n再回答"))
         val all = store.readAll()
         assertEquals(2, all.size)
         assertEquals("你好", all[0].text)
         assertEquals("line1\nline2 \"quoted\"", all[1].text)
+        assertEquals("先拆解\n再回答", all[1].reasoning)
     }
 
     @Test
@@ -36,6 +38,19 @@ class SessionStoreTest {
         assertEquals(2, all.size)
         assertEquals("ok", all[0].text)
         assertEquals("fine", all[1].text)
+        assertEquals("", all[1].reasoning)
+    }
+
+    @Test
+    fun oldLineWithoutReasoningRemainsCompatibleAndNullIsNeverLiteralText() {
+        val f = File(tmp, "legacy.jsonl")
+        f.writeText(
+            "{\"ts\":1,\"role\":\"assistant\",\"engine\":\"chat\",\"text\":\"old\"}\n" +
+                "{\"ts\":2,\"role\":\"assistant\",\"engine\":\"chat\",\"text\":\"new\"," +
+                "\"reasoning\":null}\n",
+        )
+        val all = SessionStore(f).readAll()
+        assertEquals(listOf("", ""), all.map { it.reasoning })
     }
 
     @Test

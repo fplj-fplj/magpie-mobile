@@ -155,6 +155,7 @@ jobs:
             build-tmp/mobile-core.sha256
             build-tmp/mobile-core-build-info.txt
             build-tmp/apk-signature.txt
+            app/schemas/
           if-no-files-found: error
 
   publish:

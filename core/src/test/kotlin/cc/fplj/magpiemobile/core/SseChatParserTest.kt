@@ -37,7 +37,8 @@ class SseChatParserTest {
     @Test
     fun reasoningNullAndRoleOnlyDeltasNeverBecomeLiteralNull() {
         val deltas = mutableListOf<String>()
-        val p = SseChatParser { deltas.add(it) }
+        val reasonings = mutableListOf<String>()
+        val p = SseChatParser(onDelta = deltas::add, onReasoning = reasonings::add)
         // aapi.ai DeepSeek-V4.1 Flash 的典型顺序：先发 role/推理空正文，再发真正回答。
         assertFalse(p.feedLine(
             """data: {"choices":[{"delta":{"role":"assistant","content":null,"reasoning_content":null}}]}""",
@@ -51,7 +52,34 @@ class SseChatParserTest {
         assertFalse(p.feedLine("""data: {"choices":[{"delta":{"content":"笑"}}]}"""))
         assertTrue(p.feedLine("data: [DONE]"))
         assertEquals(listOf("哈哈", "笑"), deltas)
+        assertEquals(listOf("thinking", "still thinking"), reasonings)
         assertEquals("哈哈笑", p.fullText())
+        assertEquals("thinkingstill thinking", p.fullReasoningText())
+    }
+
+    @Test
+    fun reasoningAndContentInSameEventUseIndependentCallbacks() {
+        val content = mutableListOf<String>()
+        val wasReasoning = mutableListOf<String>()
+        val events = mutableListOf<String>()
+        val p = SseChatParser(
+            onDelta = {
+                events.add("content:$it")
+                content.add(it)
+            },
+            onReasoning = {
+                events.add("reasoning:$it")
+                wasReasoning.add(it)
+            },
+        )
+        p.feedLine(
+            """data: {"choices":[{"delta":{"reasoning_content":"plan","content":"answer"}}]}""",
+        )
+        assertEquals(listOf("reasoning:plan", "content:answer"), events)
+        assertEquals(listOf("plan"), wasReasoning)
+        assertEquals(listOf("answer"), content)
+        assertEquals("plan", p.fullReasoningText())
+        assertEquals("answer", p.fullText())
     }
 
     @Test

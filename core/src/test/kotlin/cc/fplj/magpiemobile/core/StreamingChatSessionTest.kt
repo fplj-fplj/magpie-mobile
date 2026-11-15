@@ -67,14 +67,29 @@ class StreamingChatSessionTest {
         val n = AtomicInteger(0)
         server.createContext("/v1/chat/completions") { ex ->
             n.incrementAndGet()
-            respond(ex, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")
+            respond(
+                ex,
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think \"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"first\"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n" +
+                    "data: [DONE]\n\n",
+            )
         }
         val store = SessionStore(File(tmp, "s.jsonl"))
         val s = session(store)
+        val reasonings = mutableListOf<String>()
         val deltas = mutableListOf<String>()
-        assertEquals("hi", s.send("hello") { deltas.add(it) })
+        assertEquals("hi", s.sendWithReasoning(
+            text = "hello",
+            onReasoning = reasonings::add,
+            onDelta = deltas::add,
+        ))
+        assertEquals(listOf("think ", "first"), reasonings)
         assertEquals(listOf("hi"), deltas)
         assertEquals(listOf("user", "assistant"), store.readAll().map { it.role })
+        assertEquals("think first", store.readAll().last().reasoning)
+        assertEquals(listOf("user", "assistant"), s.messages().map { it.role })
+        assertEquals("hi", s.messages().last().content)
         assertTrue(store.readAll()[1].engine.contains(":stream"))
         assertEquals(1, n.get())
     }

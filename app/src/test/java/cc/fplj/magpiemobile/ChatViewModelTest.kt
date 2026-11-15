@@ -165,7 +165,7 @@ class ChatViewModelTest {
     }
 
     @Test fun failedStreamKeepsDraftAndDoesNotReplayOnRefreshOrRecreation() {
-        Probe(success = false).use { probe ->
+        Probe(success = false, reasoning = "尚未完成的思考").use { probe ->
             val vm = vm { ChatConnection(probe.config) { true } }
             vm.editDraft("retry only by user")
             vm.send("provider/model")
@@ -173,12 +173,33 @@ class ChatViewModelTest {
             probe.release.countDown(); settled(vm)
             assertEquals("retry only by user", vm.state.value.draft)
             assertTrue(vm.state.value.notice.contains("未自动重发"))
+            assertEquals("尚未完成的思考", vm.state.value.partialReasoning)
+            assertEquals("answer", vm.state.value.partial)
             assertEquals(1, probe.requests.get())
             vm.refresh(); settled(vm)
             val reopened = vm { ChatConnection(probe.config) { true } }
             assertFalse(reopened.state.value.sending)
             assertEquals(1, probe.requests.get())
             assertTrue(runBlocking(Dispatchers.IO) { repo.context(vm.state.value.selected!!.id) }.isEmpty())
+        }
+    }
+
+    @Test fun successfulReasoningIsShownInHistoryButExcludedFromNextContext() {
+        Probe(reasoning = "先理解问题，再组织答案。").use { probe ->
+            val vm = vm { ChatConnection(probe.config) { true } }
+            vm.editDraft("哈哈哈")
+            vm.send("provider/model")
+            assertTrue(probe.started.await(10, TimeUnit.SECONDS))
+            probe.release.countDown()
+            val completed = settled(vm)
+            val assistant = completed.messages.single { it.role == "assistant" }
+            assertEquals("answer", assistant.text)
+            assertEquals("先理解问题，再组织答案。", assistant.reasoning)
+            assertEquals("", completed.partial)
+            assertEquals("", completed.partialReasoning)
+            val context = runBlocking(Dispatchers.IO) { repo.context(vm.state.value.selected!!.id) }
+            assertEquals(listOf("哈哈哈", "answer"), context.map { it.content })
+            assertFalse(context.any { it.content.contains("先理解问题") })
         }
     }
 
@@ -198,7 +219,7 @@ class ChatViewModelTest {
     }
 
     /** Local synthetic SSE only: no vendor key, DNS, inference, or public network. */
-    private class Probe(val success: Boolean = true) : AutoCloseable {
+    private class Probe(val success: Boolean = true, val reasoning: String? = null) : AutoCloseable {
         private val socket = ServerSocket(0)
         val started = CountDownLatch(1)
         val release = CountDownLatch(1)
@@ -220,7 +241,11 @@ class ChatViewModelTest {
                 repeat(length) { input.read() } // ASCII synthetic request only.
                 started.countDown()
                 check(release.await(10, TimeUnit.SECONDS))
-                val body = "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n" +
+                val reasoningBody = reasoning?.let {
+                    "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"$it\"}}]}\n\n"
+                }.orEmpty()
+                val body = reasoningBody +
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n" +
                     if (success) "data: [DONE]\n\n" else ""
                 val bytes = body.toByteArray()
                 val header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: " + bytes.size + "\r\nConnection: close\r\n\r\n"

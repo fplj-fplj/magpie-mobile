@@ -9,6 +9,8 @@ import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Entity(tableName = "conversation")
 data class ConversationEntity(
@@ -56,6 +58,7 @@ data class ChatMessageEntity(
     val text: String,
     val engine: String,
     val ts: Long,
+    val reasoning: String = "",
 )
 
 @Entity(tableName = "metadata")
@@ -109,7 +112,8 @@ interface ChatDao {
     fun recoverPending(ts: Long): Int
 
     @Query("""
-        SELECT m.id, m.role, m.text, m.engine, m.ts, COALESCE(o.state, 'LEGACY') AS state
+        SELECT m.id, m.role, m.text, m.reasoning, m.engine, m.ts,
+               COALESCE(o.state, 'LEGACY') AS state
         FROM message m LEFT JOIN operation o ON o.id = m.operationId
         WHERE m.conversationId = :conversationId AND (:beforeId IS NULL OR m.id < :beforeId)
         ORDER BY m.id DESC LIMIT :limit
@@ -136,9 +140,16 @@ interface ChatDao {
 @Database(
     entities = [ConversationEntity::class, ChatMessageEntity::class,
         ChatOperationEntity::class, ChatMetadataEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class ChatDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
+}
+
+/** v2 appends reasoning to assistant rows; existing messages receive an empty value. */
+internal val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE `message` ADD COLUMN `reasoning` TEXT NOT NULL DEFAULT ''")
+    }
 }

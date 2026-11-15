@@ -15,7 +15,9 @@
 
 数据库存于 App 私有目录，受 Android FBE 保护，不宣称逐字段加密。系统备份关闭；本阶段没有明文导出或网络同步。失败摘要只接受固定 HTTP 状态/流分类和部分长度，不保存上游自由错误正文、异常栈或 partial。用户主动输入的聊天正文仍可能包含敏感信息，请勿把 API Key 当聊天内容发送。
 
-Room schemaVersion=1，已从实际通过的 KSP 构建导出结构并提交版本化 schema；CI 在测试后校验重新生成结构与基线一致，变化必须经过显式迁移审查。未来升级必须提供显式迁移并验证旧数据。不设置 destructive migration；打开或校验失败保留原库并阻止发送，不删除重建。
+Room schemaVersion=2，已从实际通过的 KSP 构建导出结构并提交版本化 schema；v2 为成功 assistant 消息增加独立 `reasoning` 列，并提供显式 1→2 `ALTER TABLE` 迁移。CI 在测试后校验重新生成结构与基线一致，变化必须经过显式迁移审查。未来升级必须提供显式迁移并验证旧数据。不设置 destructive migration；打开或校验失败保留原库并阻止发送，不删除重建。
+
+思考内容只随成功 assistant 记录保存，可在聊天历史中折叠查看；成功上下文查询仍只选择 user 与 assistant 的正式 `text`，不把 `reasoning` 发给后续模型。失败轮次的思考 partial 只留在当前 UI 内存，不进入数据库。
 
 ## 有意保留的边界
 

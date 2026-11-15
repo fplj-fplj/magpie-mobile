@@ -37,6 +37,7 @@ data class ChatUiState(
     val viewingOlderMessages: Boolean = false,
     val draft: String = "",
     val partial: String = "",
+    val partialReasoning: String = "",
     val notice: String = "",
     val importNotice: String = "",
     val contextBlocked: Boolean = false,
@@ -159,7 +160,10 @@ class ChatViewModel internal constructor(
             try {
                 val target = if (create) withContext(Dispatchers.IO) { checkNotNull(repository).createConversation() } else id
                 loadLatest(target)
-                mutable.update { it.copy(draft = drafts[it.selected?.id].orEmpty(), partial = "", notice = "") }
+                mutable.update {
+                    it.copy(draft = drafts[it.selected?.id].orEmpty(), partial = "",
+                        partialReasoning = "", notice = "")
+                }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { mutable.update { it.copy(notice = "会话读取失败；未切换上下文，请重试。") } }
             finally { mutable.update { it.copy(busy = false) } }
@@ -223,7 +227,7 @@ class ChatViewModel internal constructor(
         // Capture a current private connection, never store its key in Room or public state.
         val connection = try { currentConnection() } catch (_: Exception) { null } ?: return
         val config = connection.config
-        mutable.update { it.copy(sending = true, partial = "", notice = "") }
+        mutable.update { it.copy(sending = true, partial = "", partialReasoning = "", notice = "") }
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -239,14 +243,26 @@ class ChatViewModel internal constructor(
                         StreamingChatClient(config), ChatClient(config), store = null, defaultModel = model,
                         turnStore = guardedTurns, initialMessages = context,
                     )
-                    session.send(snapshot.draft, model) { delta ->
-                        sendContext.ensureActive()
-                        // Direct atomic update; no unlimited channel or delayed Activity callback.
-                        mutable.update { it.copy(partial = (it.partial + delta).take(65536)) }
-                    }
+                    session.sendWithReasoning(
+                        text = snapshot.draft,
+                        model = model,
+                        onReasoning = { delta ->
+                            sendContext.ensureActive()
+                            mutable.update {
+                                it.copy(partialReasoning = (it.partialReasoning + delta).take(65536))
+                            }
+                        },
+                        onDelta = { delta ->
+                            sendContext.ensureActive()
+                            // Direct atomic update; no unlimited channel or delayed Activity callback.
+                            mutable.update { it.copy(partial = (it.partial + delta).take(65536)) }
+                        },
+                    )
                 }
                 drafts.remove(selected.id)
-                mutable.update { it.copy(draft = "", partial = "", notice = "本轮已保存。") }
+                mutable.update {
+                    it.copy(draft = "", partial = "", partialReasoning = "", notice = "本轮已保存。")
+                }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 val status = when (e) {

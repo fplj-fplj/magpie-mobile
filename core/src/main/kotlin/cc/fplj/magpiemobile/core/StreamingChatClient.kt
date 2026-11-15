@@ -24,6 +24,17 @@ class StreamingChatClient(private val config: GatewayConfig) {
         onDelta: (String) -> Unit = {},
     ): String = streamWithOptions(model, messages, null, null, null, onDelta)
 
+    /**
+     * 同时收集正文和 reasoning_content。
+     * onReasoning 与 onDelta 各自接收增量；返回值仍是完整正文，保持既有调用方兼容。
+     */
+    fun streamWithReasoning(
+        model: String,
+        messages: List<ChatClient.Message>,
+        onReasoning: (String) -> Unit = {},
+        onDelta: (String) -> Unit = {},
+    ): String = streamInternal(model, messages, null, null, null, onDelta, onReasoning)
+
     /** 流式一轮（带采样与长度控制参数）。 */
     fun streamWithOptions(
         model: String,
@@ -32,6 +43,16 @@ class StreamingChatClient(private val config: GatewayConfig) {
         temperature: Double? = null,
         topP: Double? = null,
         onDelta: (String) -> Unit = {},
+    ): String = streamInternal(model, messages, maxTokens, temperature, topP, onDelta, {})
+
+    private fun streamInternal(
+        model: String,
+        messages: List<ChatClient.Message>,
+        maxTokens: Int?,
+        temperature: Double?,
+        topP: Double?,
+        onDelta: (String) -> Unit,
+        onReasoning: (String) -> Unit,
     ): String {
         val body = buildJsonObject {
             put("model", model)
@@ -42,7 +63,7 @@ class StreamingChatClient(private val config: GatewayConfig) {
             if (temperature != null) put("temperature", temperature)
             if (topP != null) put("top_p", topP)
         }.toString()
-        val parser = SseChatParser(onDelta)
+        val parser = SseChatParser(onDelta, onReasoning)
         var conn: HttpURLConnection? = null
         var httpCode: Int? = null
         try {
@@ -68,28 +89,53 @@ class StreamingChatClient(private val config: GatewayConfig) {
             }
             val mediaType = connection.contentType?.substringBefore(';')?.trim()
             if (!mediaType.equals("text/event-stream", ignoreCase = true)) {
-                throw StreamingChatException(StreamingChatFailure.UNEXPECTED_CONTENT_TYPE, parser.fullText(), code)
+                throw StreamingChatException(
+                    StreamingChatFailure.UNEXPECTED_CONTENT_TYPE,
+                    parser.fullText(),
+                    code,
+                    parser.fullReasoningText(),
+                )
             }
             try {
                 connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
                     while (true) {
                         val line = reader.readLine()
-                            ?: throw StreamingChatException(StreamingChatFailure.EOF_BEFORE_DONE, parser.fullText(), code)
+                            ?: throw StreamingChatException(
+                                StreamingChatFailure.EOF_BEFORE_DONE,
+                                parser.fullText(),
+                                code,
+                                parser.fullReasoningText(),
+                            )
                         // 必须先判断 DONE 再读下一行；长连接不需要关闭才算完成。
                         if (parser.feedLine(line)) break
                     }
                 }
             } catch (_: ChatException) {
                 // SSE error 不属于 HTTP 405/501；不保留原始 JSON/message/cause。
-                throw StreamingChatException(StreamingChatFailure.SSE_ERROR, parser.fullText(), code)
+                throw StreamingChatException(
+                    StreamingChatFailure.SSE_ERROR,
+                    parser.fullText(),
+                    code,
+                    parser.fullReasoningText(),
+                )
             } catch (e: StreamingChatException) {
                 // parser 的回调失败使用真实响应 code，不采用回调自报的 HTTP 状态。
-                throw StreamingChatException(e.failure, parser.fullText(), code)
+                throw StreamingChatException(
+                    e.failure,
+                    parser.fullText(),
+                    code,
+                    parser.fullReasoningText(),
+                )
             }
             return parser.fullText()
         } catch (_: IOException) {
             // Throwable cause/类型名也可能夹带自由文本，安全边界只保留固定分类。
-            throw StreamingChatException(StreamingChatFailure.IO_FAILURE, parser.fullText(), httpCode)
+            throw StreamingChatException(
+                StreamingChatFailure.IO_FAILURE,
+                parser.fullText(),
+                httpCode,
+                parser.fullReasoningText(),
+            )
         } finally {
             conn?.disconnect()
         }
@@ -111,4 +157,5 @@ class StreamingChatException(
     val failure: StreamingChatFailure,
     val partialText: String,
     val httpCode: Int? = null,
+    val partialReasoning: String = "",
 ) : RuntimeException(failure.safeMessage)

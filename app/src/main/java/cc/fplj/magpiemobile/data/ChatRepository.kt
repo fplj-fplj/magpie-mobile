@@ -12,7 +12,15 @@ import java.util.WeakHashMap
 import java.util.concurrent.Callable
 
 data class ConversationSummary(val id: String, val title: String, val updatedAt: Long, val legacy: Boolean)
-data class StoredChatMessage(val id: Long, val role: String, val text: String, val engine: String, val ts: Long, val state: String)
+data class StoredChatMessage(
+    val id: Long,
+    val role: String,
+    val text: String,
+    val reasoning: String,
+    val engine: String,
+    val ts: Long,
+    val state: String,
+)
 data class LegacyImportReport(val imported: Int = 0, val skipped: Int = 0, val warning: String? = null)
 
 /** No free text, caller-supplied message or cause is accepted. */
@@ -200,6 +208,7 @@ class ChatRepository(val database: ChatDatabase) {
 
     private fun validateRecord(record: SessionRecord, role: String) {
         require(record.role == role && record.ts >= 0 && record.text.length <= MAX_MESSAGE_CHARACTERS &&
+            record.reasoning.length <= MAX_MESSAGE_CHARACTERS &&
             ChatRecordPolicy.engineIsIdentifier(record.engine)) {
             "Invalid chat record"
         }
@@ -207,7 +216,7 @@ class ChatRepository(val database: ChatDatabase) {
 
     private fun SessionRecord.entity(conversationId: String, operationId: String?) =
         ChatMessageEntity(conversationId = conversationId, operationId = operationId,
-            role = role, text = text, engine = engine, ts = ts)
+            role = role, text = text, engine = engine, ts = ts, reasoning = reasoning)
 
     private fun ConversationEntity.summary() = ConversationSummary(id, title, updatedAt, legacy)
     private fun <T> transaction(action: () -> T): T = database.runInTransaction(Callable { action() })
@@ -225,7 +234,9 @@ class ChatRepository(val database: ChatDatabase) {
         /** Process singleton; Activity rotation must not trigger pending recovery again. */
         fun open(context: Context): ChatRepository = instance ?: synchronized(this) {
             instance ?: ChatRepository(Room.databaseBuilder(context.applicationContext,
-                ChatDatabase::class.java, "chat.db").build()).also { instance = it }
+                ChatDatabase::class.java, "chat.db")
+                .addMigrations(MIGRATION_1_2)
+                .build()).also { instance = it }
         }
     }
 }

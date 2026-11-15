@@ -1,3 +1,13 @@
+## Magpie-Mobile 0.1.45-reasoning-ui（思考过程与聊天布局）
+
+- 聊天测试页会独立解析并显示 OpenAI 兼容接口返回的 `reasoning_content`；思考卡在生成时实时预览，正式回答开始或本轮完成后自动折叠，点击可随时展开并选择复制。
+- 思考内容与正式回答分开持久化；历史消息再次打开仍可查看，但不会拼进 assistant 正文，也不会加入后续模型上下文。
+- Room 升级到 schemaVersion 2，新增 assistant 思考内容列和显式 1→2 迁移；旧消息默认空思考内容，不重建或覆盖数据库。
+- 聊天页重新采用 RikkaHub 主页面式的左右消息层级与底部输入面板，保留暖纸色、陶土橙和霞鹜文楷屏幕阅读版。
+- 流式、非流式降级、JSONL、Room、ViewModel 与失败 partial 预览均增加思考内容回归覆盖。
+
+版本：versionCode 46；备份文档 appVersion `0.1.45`；核心保持 `0.1.3781-androidhost.2`。
+
 ## Magpie-Mobile 0.1.44-null-delta（推理流空正文修复）
 
 - 修复 DeepSeek-V4.1 Flash 等推理模型通过 OpenAI 兼容流返回 `delta.content: null` 时，聊天预览把每个空值拼成字符串 `null` 的问题。

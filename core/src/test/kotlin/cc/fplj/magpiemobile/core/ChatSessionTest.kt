@@ -117,4 +117,19 @@ class ChatSessionTest {
         }
         assertTrue(e.message.orEmpty().contains("content missing"))
     }
+
+    @Test
+    fun nonStreamingCompletionExtractsReasoningWithoutMixingItIntoReply() {
+        val completion = ChatSession.extractCompletion(
+            """{"choices":[{"message":{"role":"assistant","content":"answer","reasoning_content":"thinking"}}]}""",
+        )
+        assertEquals("answer", completion.content)
+        assertEquals("thinking", completion.reasoning)
+        assertEquals("answer", ChatSession.extractReply(
+            """{"choices":[{"message":{"content":"answer","reasoning_content":"thinking"}}]}""",
+        ))
+        assertEquals("thinking", ChatSession.extractReasoning(
+            """{"choices":[{"message":{"content":"answer","reasoning_content":"thinking"}}]}""",
+        ))
+    }
 }

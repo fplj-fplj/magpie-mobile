@@ -46,8 +46,13 @@ class ChatRepositoryTest {
     }
 
     private fun <T> io(action: () -> T): T = worker.submit(Callable { action() }).get(30, TimeUnit.SECONDS)
-    private fun record(role: String, text: String, ts: Long = 1, engine: String = "chat:test") =
-        SessionRecord(ts, role, engine, text)
+    private fun record(
+        role: String,
+        text: String,
+        ts: Long = 1,
+        engine: String = "chat:test",
+        reasoning: String = "",
+    ) = SessionRecord(ts, role, engine, text, reasoning)
     private fun source(vararg lines: String): File = temporary.newFile().apply { writeText(lines.joinToString("\n")) }
     private fun succeeded(id: String, user: String = "question", assistant: String = "answer", ts: Long = 1) {
         val store = repository.turnStore(id)
@@ -92,10 +97,12 @@ class ChatRepositoryTest {
         assertEquals("RUNNING", database.chatDao().operation(turn)?.state)
         assertEquals(listOf("user"), repository.messages(id).map { it.role })
         assertTrue(repository.context(id).isEmpty())
-        store.complete(turn, record("assistant", "world", 11, "chat:test:stream"))
+        store.complete(turn, record("assistant", "world", 11, "chat:test:stream",
+            reasoning = "private reasoning"))
         assertEquals("SUCCEEDED", database.chatDao().operation(turn)?.state)
         assertNull(database.chatDao().operation(turn)?.runningConversationId)
         assertEquals(listOf("SUCCEEDED", "SUCCEEDED"), repository.messages(id).map { it.state })
+        assertEquals("private reasoning", repository.messages(id).last().reasoning)
         assertEquals(listOf(ChatClient.Message("user", "hello"), ChatClient.Message("assistant", "world")), repository.context(id))
         assertEquals("hello", repository.conversation(id)?.title)
     }
@@ -329,6 +336,21 @@ class ChatRepositoryTest {
         assertEquals("RUNNING", database.chatDao().operation(turn)?.state)
         store.complete(turn, record("assistant", "x".repeat(256 * 1024)))
         assertEquals(256 * 1024, repository.messages(id).last().text.length)
+    }
+
+    @Test fun reasoningHasTheSameBoundedStorageButNeverCountsAsContextText(): Unit = io {
+        val id = repository.createConversation()
+        val store = repository.turnStore(id)
+        val turn = store.begin(record("user", "question"))
+        assertThrows(IllegalArgumentException::class.java) {
+            store.complete(turn, record("assistant", "answer",
+                reasoning = "r".repeat(256 * 1024 + 1)))
+        }
+        store.complete(turn, record("assistant", "answer",
+            reasoning = "r".repeat(256 * 1024)))
+        val assistant = repository.messages(id).last()
+        assertEquals(256 * 1024, assistant.reasoning.length)
+        assertEquals(listOf("question", "answer"), repository.context(id).map { it.content })
     }
 
     @Test fun beginBeforeInitializeRecoversOldPendingOnceButNeverItsOwnNewTurn(): Unit = io {

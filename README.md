@@ -2,9 +2,10 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
-## 当前源码版本：0.1.44-null-delta（流式空值修复）
+## 当前源码版本：0.1.45-reasoning-ui（思考过程与聊天布局）
 
 - **上游核心**：v0.1.3781（commit `b52c7111`）；
+- **思考过程**：聊天测试页独立显示可折叠的 `reasoning_content`；生成中实时预览，完成后自动收起。历史中可重新展开，但思考内容不会进入下一轮模型上下文。详见 [0.1.45 思考内容说明](docs/chat-reasoning-ui-0.1.45.md)；
 - **流式空值修复**：推理模型在正文前返回的 `delta.content: null` 不再被拼成 `"null"`；流式与非流式正文均只接受 JSON 字符串。详见 [0.1.44 修复说明](docs/chat-null-delta-fix-0.1.44.md)；
 - **新技术路线**：官方完整 CLI 核心 + Android 宿主适配，APK 使用 `nogui,androidhost`，不再使用 `mobile` 构建标签；官方浏览器编辑与原生提供商的选择卡片仅在“模型提供商”和“更多”主页显示。详见 [路线与双编辑说明](docs/full-core-dual-editors.md)；
 - **屏幕阅读与启停**：全原生界面采用较厚笔画的霞鹜文楷屏幕阅读版，顶部品牌文字保留 Poppins；网关状态卡改为固定位置的单一开关。详见 [本轮界面说明](docs/ui-update-0.1.41.md)；
@@ -19,6 +20,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/chat-reasoning-ui-0.1.45.md](docs/chat-reasoning-ui-0.1.45.md) | 思考过程折叠卡、独立持久化、上下文边界与聊天页布局 |
 | [docs/chat-null-delta-fix-0.1.44.md](docs/chat-null-delta-fix-0.1.44.md) | DeepSeek 推理流空正文导致界面出现大量 `null` 的根因、修复与回归 |
 | [docs/release-policy.md](docs/release-policy.md) | 普通构建、手动发布、Latest 标记与 Release 清理规则 |
 | [docs/full-core-dual-editors.md](docs/full-core-dual-editors.md) | 完整 CLI 路线、双编辑入口、RikkaHub 提供商结构参考与验收 |

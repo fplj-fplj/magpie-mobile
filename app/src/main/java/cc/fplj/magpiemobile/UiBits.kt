@@ -112,6 +112,8 @@ internal enum class AppSymbol(val path: String) {
     DEVICE("M7,2 L17,2 L17,22 L7,22 Z M10,18 L14,18"),
     MODELS("M12,2 L22,7 L12,12 L2,7 Z M2,12 L12,17 L22,12 M2,17 L12,22 L22,17"),
     SEND("M12,20 L12,4 M5,11 L12,4 L19,11"),
+    DOWN("M5,9 L12,16 L19,9"),
+    UP("M5,15 L12,8 L19,15"),
 }
 
 @Composable

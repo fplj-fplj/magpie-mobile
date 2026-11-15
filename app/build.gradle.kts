@@ -16,8 +16,8 @@ android {
         applicationId = "cc.fplj.magpiemobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 45
-        versionName = "0.1.44-null-delta"
+        versionCode = 46
+        versionName = "0.1.45-reasoning-ui"
         buildConfigField("String", "CORE_VERSION", "\"0.1.3781-androidhost.2\"")
         buildConfigField("String", "GIT_SHA", "\"" + (System.getenv("GITHUB_SHA")?.take(8) ?: "local") + "\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

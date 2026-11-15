@@ -40,6 +40,7 @@ internal object ChatRecordPolicy {
             val ts = (json.get("ts") as? Number)?.toString()?.toLongOrNull() ?: return null
             if (ts < 0 || json.get("role") !is String || json.get("text") !is String) return null
             if (json.has("engine") && json.get("engine") !is String) return null
+            if (json.has("reasoning") && json.get("reasoning") !is String) return null
             if (record.role !in setOf("user", "assistant", "error", "system")) return null
             if (!engineIsIdentifier(record.engine)) return null
             // Old error records are never inference input, but must not become an

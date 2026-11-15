@@ -60,7 +60,7 @@ class StreamingChatClientTest {
     }
 
     @Test
-    fun streamIgnoresReasoningEventsWithNullContent() {
+    fun streamSeparatesReasoningEventsFromContent() {
         server.createContext("/v1/chat/completions") { ex ->
             respond(
                 ex,
@@ -72,13 +72,16 @@ class StreamingChatClientTest {
                     "data: [DONE]\n\n",
             )
         }
+        val reasonings = mutableListOf<String>()
         val deltas = mutableListOf<String>()
-        val full = StreamingChatClient(config()).stream(
-            "deepseek-v4.1-flash",
-            listOf(ChatClient.Message("user", "哈哈哈")),
-            deltas::add,
+        val full = StreamingChatClient(config()).streamWithReasoning(
+            model = "deepseek-v4.1-flash",
+            messages = listOf(ChatClient.Message("user", "哈哈哈")),
+            onReasoning = reasonings::add,
+            onDelta = deltas::add,
         )
         assertEquals(listOf("哈", "哈"), deltas)
+        assertEquals(listOf("think 1", "think 2"), reasonings)
         assertEquals("哈哈", full)
     }
 

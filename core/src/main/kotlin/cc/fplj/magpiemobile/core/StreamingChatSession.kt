@@ -40,6 +40,17 @@ class StreamingChatSession(
         text: String,
         model: String = defaultModel,
         onDelta: (String) -> Unit = {},
+    ): String = sendWithReasoning(text, model, onDelta = onDelta)
+
+    /**
+     * 与 send 相同，同时把 reasoning_content 增量交给独立回调。
+     * 思考内容只随成功 assistant 记录持久化，不加入 history，也不会进入后续模型上下文。
+     */
+    fun sendWithReasoning(
+        text: String,
+        model: String = defaultModel,
+        onReasoning: (String) -> Unit = {},
+        onDelta: (String) -> Unit = {},
     ): String {
         val sequence = synchronized(lock) {
             check(activeSendSequence == null) { "A send is already in progress" }
@@ -49,6 +60,7 @@ class StreamingChatSession(
         var pendingUser: PendingUser? = null
         var turnId: String? = null
         var engine = engineId(model, true)
+        val reasoning = StringBuilder()
         try {
             val requestMessages = synchronized(lock) {
                 // begin 必须成功返回，才能把本轮 user 交给网络；失败不调用 fail。
@@ -66,18 +78,32 @@ class StreamingChatSession(
             }
             val reply = try {
                 // 返回值已经是纯文本，不能再过非流式 extractReply。
-                streaming.stream(model, requestMessages, onDelta)
+                streaming.streamWithReasoning(
+                    model = model,
+                    messages = requestMessages,
+                    onReasoning = { delta ->
+                        reasoning.append(delta)
+                        onReasoning(delta)
+                    },
+                    onDelta = onDelta,
+                )
             } catch (e: ChatException) {
                 // Client 只在真正非 2xx HTTP 响应上抛此异常；SSE/回调无法进入降级分支。
                 if (e.httpCode != 405 && e.httpCode != 501) throw e
                 engine = engineId(model, false) + ":fallback"
-                ChatSession.extractReply(fallback.complete(model, requestMessages))
+                val completion = ChatSession.extractCompletion(fallback.complete(model, requestMessages))
+                completion.reasoning.takeIf { it.isNotEmpty() }?.let { delta ->
+                    reasoning.append(delta)
+                    onReasoning(delta)
+                }
+                completion.content
             }
             synchronized(lock) {
                 check(pendingMatches(checkNotNull(pendingUser))) { "Pending user changed during send" }
                 // 存储异常不在流式 HTTP fallback 的 catch 中，也不携带原始异常文本。
                 persist {
-                    val assistant = SessionRecord(now(), "assistant", engine, reply)
+                    val assistant = SessionRecord(now(), "assistant", engine, reply,
+                        reasoning = reasoning.toString())
                     if (turnStore != null) turnStore.complete(checkNotNull(turnId), assistant)
                     else store?.append(assistant)
                 }

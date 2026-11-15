@@ -29,10 +29,11 @@ class ChatSession(
         history.add(ChatClient.Message("user", text))
         try {
             val raw = chat.complete(model, history.toList())
-            val reply = extractReply(raw)
-            history.add(ChatClient.Message("assistant", reply))
-            store.append(SessionRecord(now(), "assistant", engineId(model), reply))
-            return reply
+            val completion = extractCompletion(raw)
+            history.add(ChatClient.Message("assistant", completion.content))
+            store.append(SessionRecord(now(), "assistant", engineId(model), completion.content,
+                reasoning = completion.reasoning))
+            return completion.content
         } catch (e: ChatException) {
             store.append(SessionRecord(now(), "error", engineId(model), "HTTP " + e.httpCode))
             throw e
@@ -49,21 +50,34 @@ class ChatSession(
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
 
+        data class Completion(val content: String, val reasoning: String)
+
         /** OpenAI Chat Completions 标准形状 choices[0].message.content；形状不符抛 ChatException 由上层展示。 */
-        fun extractReply(raw: String): String = try {
+        fun extractCompletion(raw: String): Completion = try {
             val root = json.parseToJsonElement(raw).jsonObject
             val choice0 = (root["choices"] as? kotlinx.serialization.json.JsonArray)?.firstOrNull()?.jsonObject
                 ?: throw IllegalArgumentException("choices missing")
             // 非流式降级也遵守同一正文契约：JSON null/数字不是可展示文本。
-            (choice0["message"]?.jsonObject?.get("content")
+            val message = choice0["message"]?.jsonObject
+            val content = (message?.get("content")
                 as? kotlinx.serialization.json.JsonPrimitive)
                 ?.takeIf { it.isString }
                 ?.content
                 ?: throw IllegalArgumentException("content missing")
+            val reasoning = (message?.get("reasoning_content")
+                as? kotlinx.serialization.json.JsonPrimitive)
+                ?.takeIf { it.isString }
+                ?.content
+                .orEmpty()
+            Completion(content = content, reasoning = reasoning)
         } catch (e: ChatException) {
             throw e
         } catch (e: Exception) {
             throw ChatException("reply shape unexpected: " + e.message, 200)
         }
+
+        fun extractReply(raw: String): String = extractCompletion(raw).content
+
+        fun extractReasoning(raw: String): String = extractCompletion(raw).reasoning
     }
 }
