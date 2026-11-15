@@ -254,8 +254,12 @@ class OfficialPluginsInstrumentedTest {
                     val connectedOwner = NativeCoreSession.providerSessionId()
                     device.pressHome()
                     assertEquals(200, http("http://127.0.0.1:3425/api/hello", auth).first)
-                    device.executeShellCommand("am start -n cc.fplj.magpiemobile/.MainActivity")
+                    device.executeShellCommand("am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10200000 -n cc.fplj.magpiemobile/.MainActivity")
                     scenario.recreate()
+                    if (!device.wait(Until.hasObject(By.text("官方外部插件")), 2000)) {
+                        assertTrue(device.wait(Until.hasObject(By.text("插件与工具")), 10_000))
+                        device.findObject(By.text("插件与工具")).click()
+                    }
                     assertTrue(device.wait(Until.hasObject(By.text("官方外部插件")), 15_000))
                     assertEquals("activity recreation restarted the core session", connectedOwner, NativeCoreSession.providerSessionId())
                     assertEquals("true", client.plugins().entries.single { it.spec == provider.absolutePath }.options["fromNativeUI"].toString())
