@@ -307,13 +307,16 @@ class OfficialPluginsInstrumentedTest {
                     } finally { device.executeShellCommand("settings put system font_scale $previousScale") }
                     File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
-                    await("provider navigation after font scale restore") {
+                    await("provider tab after font scale restore") {
                         dismissEmulatorLauncherAnr()
-                        device.findObject(By.text("提供商"))?.click() == true
+                        device.hasObject(By.text("提供商"))
                     }
+                    device.findObject(By.text("提供商")).click()
                     await("provider list visible") { device.hasObject(By.text("模型提供商")) }
-                    await("provider add button visible") { device.findObject(By.text("添加"))?.click() == true }
-                    await("provider advanced tab visible") { device.findObject(By.text("高级"))?.click() == true }
+                    await("provider add button visible") { device.hasObject(By.text("添加")) }
+                    device.findObject(By.text("添加")).click()
+                    await("provider advanced tab visible") { device.hasObject(By.text("高级")) }
+                    device.findObject(By.text("高级")).click()
                     await("provider save button fully visible") {
                         val save = device.findObject(By.text("保存连接")) ?: return@await false
                         save.visibleBounds.bottom <= device.displayHeight - 24
