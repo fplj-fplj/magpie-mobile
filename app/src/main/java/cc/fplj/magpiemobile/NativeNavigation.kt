@@ -223,10 +223,6 @@ fun Dashboard(
                 ) {
                     if (section != null) {
                         if (section != GatewaySection.PLUGINS) PageHeading(section.title, section.detail)
-                        if (section == GatewaySection.ROUTING || section == GatewaySection.SYSTEM) {
-                            EditorChoiceCard(clientReady && connection.webEditor && !providerBusy, externalState,
-                                { appShell.selectPage(AppPage.PROVIDERS) }, ::openBrowserEditor, nativeSelected = false)
-                        }
                         when (section) {
                             GatewaySection.CONNECTION -> {
                                 SectionCard("核心连接") {
