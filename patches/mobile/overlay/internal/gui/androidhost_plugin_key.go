@@ -136,4 +136,3 @@ func androidHostBridgeNeedsRefresh() bool {
 	defer bridgeMu.Unlock()
 	return !bridgeGood.IsZero() && !time.Now().Add(time.Minute).Before(bridgeGood)
 }
-

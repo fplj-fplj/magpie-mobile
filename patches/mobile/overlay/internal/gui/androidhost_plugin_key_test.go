@@ -152,4 +152,3 @@ func TestAndroidHostBridgeRenewsActiveExpiringKeyAndPreservesOtherKeys(t *testin
 		t.Fatal("a user key sharing the name was removed")
 	}
 }
-
