@@ -1,4 +1,4 @@
-name: Build and release
+name: Build signed APK (manual release)
 
 on:
   push:
@@ -12,6 +12,12 @@ on:
       - '*.gradle.kts'
       - 'gradle.properties'
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish this verified signed APK as the Latest GitHub Release
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: magpie-mobile-${{ github.ref }}
@@ -153,6 +159,7 @@ jobs:
 
   publish:
     needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -165,7 +172,7 @@ jobs:
           name: signed-release-${{ github.sha }}
           path: release-artifacts
 
-      - name: Publish every successfully built signed APK
+      - name: Publish the manually approved signed APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -175,20 +182,20 @@ jobs:
           apk_name="magpie-mobile-${version_name}.apk"
           cp release-artifacts/app/build/outputs/apk/release/app-release.apk "$apk_name"
           sha256sum "$apk_name" | tee "${apk_name}.sha256"
-          printf 'Commit: %s\nSource: b52c711142a662fe18fedf5a80cb1e4aa94bce62\nCore: 0.1.3781-androidhost.2 (nogui,androidhost; official plugins)\nActions run: %s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
+          printf 'Commit: %s\nSource: b52c711142a662fe18fedf5a80cb1e4aa94bce62\nCore: 0.1.3781-androidhost.2 (nogui,androidhost; official plugins)\nActions run: %s/%s/actions/runs/%s\nPublication: manually approved via workflow_dispatch publish_release=true\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
           cat release-artifacts/build-tmp/mobile-core.sha256 release-artifacts/build-tmp/apk-signature.txt >> build-info.txt
           printf 'Validation workflow runs independently; its result does not gate this release.\n' >> build-info.txt
           notes_file="release-artifacts/release-notes.md"
           if [ -f "RELEASE_NOTES.md" ]; then
-            cp "RELEASE_NOTES.md" "$notes_file"
+            awk 'BEGIN { section = 0 } /^## / { section++ } section == 1 { print } section == 2 { exit }' "RELEASE_NOTES.md" > "$notes_file"
           else
             printf 'Magpie-Mobile 自动化发布 %s\n提交：%s\n' "$version_name" "$GITHUB_SHA" > "$notes_file"
           fi
           printf '\n构建提交：`%s`\n\n签名与载荷校验通过；运行测试在独立 Validation 流程查看，不阻止 APK 发布。\n\n[构建流程](%s/%s/actions/runs/%s) · [同提交验证结果](%s/%s/actions/workflows/validate.yml?query=sha%%3A%s)\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> "$notes_file"
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "Magpie-Mobile ${version_name} (${GITHUB_SHA:0:8})" --notes-file "$notes_file" --target "$GITHUB_SHA" --prerelease
+            gh release create "$tag" --title "Magpie-Mobile ${version_name} (${GITHUB_SHA:0:8})" --notes-file "$notes_file" --target "$GITHUB_SHA" --latest
           else
-            gh release edit "$tag" --title "Magpie-Mobile ${version_name} (${GITHUB_SHA:0:8})" --notes-file "$notes_file" --prerelease
+            gh release edit "$tag" --title "Magpie-Mobile ${version_name} (${GITHUB_SHA:0:8})" --notes-file "$notes_file" --prerelease=false --latest
           fi
           gh release upload "$tag" "$apk_name" "${apk_name}.sha256" build-info.txt release-artifacts/build-tmp/mobile-core-build-info.txt --clobber
           printf '已发布 [%s](%s/%s/releases/tag/%s)\n' "$apk_name" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"

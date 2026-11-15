@@ -20,6 +20,7 @@
 | 文档 | 内容 |
 | :--- | :--- |
 | [docs/chat-null-delta-fix-0.1.44.md](docs/chat-null-delta-fix-0.1.44.md) | DeepSeek 推理流空正文导致界面出现大量 `null` 的根因、修复与回归 |
+| [docs/release-policy.md](docs/release-policy.md) | 普通构建、手动发布、Latest 标记与 Release 清理规则 |
 | [docs/full-core-dual-editors.md](docs/full-core-dual-editors.md) | 完整 CLI 路线、双编辑入口、RikkaHub 提供商结构参考与验收 |
 | [docs/official-plugin-integration.md](docs/official-plugin-integration.md) | 官方三类外部插件、原生管理、运行边界与候选发布 |
 | [docs/official-plugin-adaptation-plan.md](docs/official-plugin-adaptation-plan.md) | 实施要求、阶段与完整验收矩阵 |
@@ -51,7 +52,7 @@
 
 ## 验证与操作
 
-`Build and release` 负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，成功后自动发布对应提交的 Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止成功 APK 发布。文档修改不触发重复编译。本地不运行编译。
+`Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`，才会把同一轮验证产物发布为 Latest Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
 当前屏幕阅读版：[`0.1.41-reader-switch` 签名候选](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.41-reader-switch-84554557)。[构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43687912271)、[缓存命中构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43688502899)和[独立验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43687912256)全部通过；566 项 JVM、Go、官方插件及 Android 启停运行结果与下载核对记录见[本轮验收](docs/ui-update-0.1.41.md#已完成的-actions-验证2026-11-15)。
 

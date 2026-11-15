@@ -31,4 +31,4 @@ kotlinx.serialization 的 `JsonNull` 也是 `JsonPrimitive`。旧实现只检查
 - HTTP SSE 客户端端到端拼接；
 - 非流式 `message.content:null` 被安全拒绝。
 
-按项目约束，JVM 测试、APK 编译、签名和 Release 发布均由 GitHub Actions 执行，本地未运行 Gradle。
+按项目约束，JVM 测试、APK 编译与签名均由 GitHub Actions 执行，本地未运行 Gradle。本版本确认可用后才手动发布 Release；普通提交只保留 Actions 签名产物。
