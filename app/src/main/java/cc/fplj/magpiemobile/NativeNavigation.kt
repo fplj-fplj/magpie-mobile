@@ -20,6 +20,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.createSavedStateHandle
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.launch
 import cc.fplj.magpiemobile.core.EnginePaths
 import cc.fplj.magpiemobile.core.GatewayEngineController
@@ -52,25 +55,23 @@ fun Dashboard(
     val routingState by routingViewModel.state.collectAsStateWithLifecycle()
     val keyPoolViewModel: KeyPoolViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val keyPoolState by keyPoolViewModel.state.collectAsStateWithLifecycle()
-    val pluginViewModel: SubscriptionPluginViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
-    val pluginState by pluginViewModel.state.collectAsStateWithLifecycle()
     val profileViewModel: ChatProfileViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val profileState by profileViewModel.state.collectAsStateWithLifecycle()
-    val mcpViewModel: McpViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
-    val mcpState by mcpViewModel.state.collectAsStateWithLifecycle()
-    val marketViewModel: PluginMarketViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
-    val marketState by marketViewModel.state.collectAsStateWithLifecycle()
+    val officialPlugins: PluginManagementViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = viewModelFactory {
+        initializer { PluginManagementViewModel(savedState = createSavedStateHandle()) }
+    })
+    val pluginsState by officialPlugins.state.collectAsStateWithLifecycle()
     val stabilityViewModel: StabilityViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val stabilityState by stabilityViewModel.state.collectAsStateWithLifecycle()
     val externalEditor: ExternalEditorViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val externalState by externalEditor.state.collectAsStateWithLifecycle()
     val providerCache: ProviderListCacheViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, externalEditor, providerCache, appShell) {
+    DisposableEffect(lifecycleOwner, externalEditor, providerCache, appShell, officialPlugins) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME && externalEditor.awaitingReturn) scope.launch {
                 providerCache.invalidate()
-                if (externalEditor.returned()) appShell.refreshModels()
+                if (externalEditor.returned()) { officialPlugins.refresh(); appShell.refreshModels() }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -80,9 +81,10 @@ fun Dashboard(
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
     }
 
-    LaunchedEffect(layout) {
-        pluginViewModel.initialize(layout)
-        marketViewModel.initialize(layout)
+    SideEffect {
+        officialPlugins.onChanged = {
+            scope.launch { providerCache.invalidate(); appShell.refreshModels() }
+        }
     }
     var providerBusy by remember { mutableStateOf(false) }
     var gatewaySectionName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -100,6 +102,7 @@ fun Dashboard(
         GatewayEngineController.Phase.RUNNING, GatewayEngineController.Phase.BACKOFF)
     val clientReady = running && !stopping && connection.ready
     val owner = if (clientReady) NativeCoreSession.providerSessionId() else null
+    LaunchedEffect(owner) { officialPlugins.attach(owner) }
 
     fun openSection(destination: GatewaySection) {
         if (shell.page == AppPage.MORE) moreSectionName = destination.name
@@ -204,7 +207,7 @@ fun Dashboard(
                 ) {
                     if (section != null) {
                         PageHeading(section.title, section.detail)
-                        if (section == GatewaySection.PLUGINS || section == GatewaySection.ROUTING || section == GatewaySection.SYSTEM) {
+                        if (section == GatewaySection.ROUTING || section == GatewaySection.SYSTEM) {
                             EditorChoiceCard(clientReady && connection.webEditor && !providerBusy, externalState,
                                 { appShell.selectPage(AppPage.PROVIDERS) }, ::openBrowserEditor, nativeSelected = false)
                         }
@@ -233,9 +236,8 @@ fun Dashboard(
                                 CatalogCard(usageState)
                             }
                             GatewaySection.PLUGINS -> {
-                                SubscriptionPluginCard(pluginViewModel, pluginState)
-                                PluginMarketCard(marketViewModel, marketState)
-                                McpServerCard(mcpViewModel, mcpState)
+                                PluginManagementPanel(officialPlugins, pluginsState, clientReady,
+                                    ::openBrowserEditor)
                             }
                             GatewaySection.SYSTEM -> {
                                 SystemStabilityCard(stabilityViewModel, stabilityState)

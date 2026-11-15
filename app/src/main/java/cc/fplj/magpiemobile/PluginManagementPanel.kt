@@ -1,0 +1,385 @@
+package cc.fplj.magpiemobile
+
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import cc.fplj.magpiemobile.core.*
+import cc.fplj.magpiemobile.theme.UiSpacing
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun PluginManagementPanel(
+    viewModel: PluginManagementViewModel,
+    state: OfficialPluginsState,
+    enabled: Boolean,
+    onBrowserEditor: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val importer = remember(context) { PluginImporter(context) }
+    var tab by rememberSaveable { mutableStateOf(0) }
+    var filter by rememberSaveable { mutableStateOf("") }
+    var marketQuery by rememberSaveable { mutableStateOf("") }
+    var installOpen by remember { mutableStateOf(false) }
+    var installSpec by remember { mutableStateOf("") }
+    var selectedSpec by remember { mutableStateOf<String?>(null) }
+    var removingSpec by remember { mutableStateOf<String?>(null) }
+    var importing by remember { mutableStateOf(false) }
+    val canWrite = enabled && !state.loading && !state.busy && !state.pending && !state.authBusy && !importing
+    fun importSelection(uri: Uri?, tree: Boolean) {
+        if (uri == null || !canWrite) return
+        importing = true
+        scope.launch {
+            var staged: String? = null
+            var submitted = false
+            try {
+                val spec = withContext(Dispatchers.IO) { importer.importPlugin(uri, tree).also { staged = it } }
+                installOpen = false
+                submitted = viewModel.edit(PluginEdit.Add(spec))
+                if (!submitted) {
+                    viewModel.notice("核心连接已变化，请重新连接后导入")
+                }
+            } catch (_: Exception) { viewModel.importError() }
+            finally {
+                if (!submitted) staged?.let { spec -> withContext(NonCancellable + Dispatchers.IO) { importer.removeImported(spec) } }
+                importing = false
+            }
+        }
+    }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { importSelection(it, false) }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { importSelection(it, true) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
+        ContentCard {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                AppIcon(AppSymbol.PLUGIN)
+                Spacer(Modifier.width(UiSpacing.medium))
+                Column(Modifier.weight(1f)) {
+                    Text("官方外部插件", style = MaterialTheme.typography.titleLarge)
+                    Text("提供商与工具 · 同步中间件 · 异步 Hooks", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
+                PluginTag(if (state.snapshot.bun) "Bun ${state.snapshot.bunVersion.ifBlank { "已安装" }}" else "Bun 状态待确认")
+                PluginTag("${state.snapshot.entries.size} 个已安装")
+            }
+            Text("安装、配置和加载状态与官方网页同步。", style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(enabled = enabled, onClick = onBrowserEditor) { Text("浏览器编辑") }
+            if (!enabled) Text("连接网关后可管理插件。", style = MaterialTheme.typography.bodySmall)
+        }
+        if (state.loading || state.busy || importing) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (state.busy) Text("核心正在处理插件操作，离开页面后任务仍会继续。", style = MaterialTheme.typography.bodySmall)
+        if (state.pending) ContentCard {
+            Text("等待核对操作结果", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+            Text("连接已中断，核心任务可能仍在执行。重新读取可核对结果；不会重复提交安装。", style = MaterialTheme.typography.bodySmall)
+            TextButton(enabled = enabled && !state.busy, onClick = viewModel::refresh) { Text("核对结果") }
+        }
+        if (state.error.isNotBlank()) Text(state.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        if (state.notice.isNotBlank()) Text(state.notice, style = MaterialTheme.typography.bodySmall)
+        TabRow(selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.background) {
+            listOf("已安装", "发现插件").forEachIndexed { index, title ->
+                Tab(selected = tab == index, onClick = { tab = index; if (index == 1) viewModel.market(marketQuery) }, text = { Text(title) })
+            }
+        }
+        if (tab == 0) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                TextButton(enabled = enabled && !state.busy && !state.loading, onClick = viewModel::refresh) { Text("重新读取") }
+                Button(enabled = canWrite, onClick = { installSpec = ""; installOpen = true }) { AppIcon(AppSymbol.ADD); Spacer(Modifier.width(UiSpacing.small)); Text("安装插件") }
+            }
+            OutlinedTextField(filter, { filter = it }, label = { Text("搜索已安装插件") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            val entries = state.snapshot.entries.filter { it.name.contains(filter, true) || it.spec.contains(filter, true) }
+            if (state.snapshot.entries.isEmpty() && !state.loading) EmptyState("连接你的工具与服务", "从官方目录安装插件，或导入已有的 JS / TS 插件。")
+            else if (entries.isEmpty()) Text("没有匹配的插件", style = MaterialTheme.typography.bodySmall)
+            entries.forEach { plugin ->
+                Surface(onClick = { selectedSpec = plugin.spec }, enabled = enabled, shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surfaceContainerLow, border = BorderStroke(UiSpacing.tiny / 4, MaterialTheme.colorScheme.outlineVariant)) {
+                    Column(Modifier.fillMaxWidth().padding(UiSpacing.medium), verticalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AppIcon(AppSymbol.PLUGIN); Spacer(Modifier.width(UiSpacing.medium))
+                            Column(Modifier.weight(1f)) {
+                                Text(plugin.name.ifBlank { plugin.spec }, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(SecretRedactor.redact(plugin.spec), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                            AppIcon(AppSymbol.NEXT)
+                        }
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(UiSpacing.small), verticalArrangement = Arrangement.spacedBy(UiSpacing.tiny)) {
+                            PluginTag(if (plugin.off) "已停用" else if (plugin.error.isNotBlank() || plugin.middleware?.error?.isNotBlank() == true) "加载失败" else "已启用")
+                            if (plugin.providerNames.isNotEmpty()) PluginTag("提供商")
+                            if (plugin.toolNames.isNotEmpty()) PluginTag("工具 ${plugin.toolNames.size}")
+                            if (plugin.isMiddleware) PluginTag("同步中间件")
+                            if (plugin.isGateway) PluginTag("异步 Hooks")
+                        }
+                        if (plugin.providerNames.isNotEmpty()) Text(plugin.providerNames.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            if (state.snapshot.entries.isNotEmpty()) TextButton(enabled = canWrite, onClick = { viewModel.edit(PluginEdit.UpdateAll) }) { Text("更新全部插件") }
+        } else {
+            OutlinedTextField(marketQuery, { marketQuery = it }, label = { Text("搜索官方目录与 npm") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
+                Button(enabled = enabled && !state.loading && !state.busy, onClick = { viewModel.market(marketQuery) }) { Text("搜索") }
+                TextButton(enabled = enabled && !state.loading, onClick = { marketQuery = ""; viewModel.market("") }) { Text("官方目录") }
+                TextButton(enabled = enabled, onClick = onBrowserEditor) { Text("完整市场") }
+            }
+            state.market.listings.forEach { listing ->
+                ContentCard {
+                    Text(listing.name.ifBlank { listing.packageId }, style = MaterialTheme.typography.titleMedium)
+                    Text(listing.packageId, style = MaterialTheme.typography.bodySmall)
+                    val description = listing.description.ifBlank { listing.summary }
+                    if (description.isNotBlank()) Text(description, style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                    if (listing.providers.isNotEmpty()) Text(listing.providers.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                    val installed = state.market.isInstalled(listing)
+                    Button(enabled = canWrite && !installed && listing.packageId.isNotBlank(), onClick = {
+                        installSpec = listing.packageId; installOpen = true
+                    }) { Text(if (installed) "已安装" else "安装") }
+                }
+            }
+            if (state.market.listings.isEmpty() && !state.loading) EmptyState("查找需要的插件", "输入名称搜索，或打开官方网页查看完整目录。")
+        }
+    }
+
+    if (installOpen) AlertDialog(onDismissRequest = { if (!importing) installOpen = false },
+        title = { Text("安装官方外部插件") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
+                Text("输入 npm 包名、固定版本或 GitHub 仓库地址。")
+                OutlinedTextField(installSpec, { installSpec = it }, label = { Text("插件地址 / spec") },
+                    placeholder = { Text("package@version 或 github:owner/repo") }, modifier = Modifier.fillMaxWidth())
+                Text("也可以导入 JS / TS 文件，或包含 package.json 的插件目录。", style = MaterialTheme.typography.bodySmall)
+                TextButton(enabled = canWrite, onClick = { filePicker.launch(arrayOf("*/*")) }) { Text("选择插件文件") }
+                TextButton(enabled = canWrite, onClick = { folderPicker.launch(null) }) { Text("选择插件目录") }
+            }
+        },
+        confirmButton = { Button(enabled = canWrite && installSpec.isNotBlank(), onClick = {
+            viewModel.edit(PluginEdit.Add(installSpec.trim())); installSpec = ""; installOpen = false
+        }) { Text("安装") } },
+        dismissButton = { TextButton(enabled = !importing, onClick = { installOpen = false }) { Text("取消") } })
+
+    val selected = state.snapshot.entries.firstOrNull { it.spec == selectedSpec }
+    if (selected != null) PluginDetailDialog(selected, state, canWrite, { selectedSpec = null },
+        { viewModel.edit(PluginEdit.Off(selected.spec, !selected.off)) },
+        { viewModel.edit(PluginEdit.Upgrade(selected.spec)) },
+        { removingSpec = selected.spec },
+        { value -> viewModel.saveOptions(selected.spec, value) },
+        { provider, method -> selectedSpec = null; viewModel.selectLogin(provider, method) },
+        { provider -> viewModel.edit(PluginEdit.Prefer(selected.spec, provider)) }, onBrowserEditor)
+
+    removingSpec?.let { spec -> AlertDialog(onDismissRequest = { removingSpec = null }, title = { Text("移除此插件？") },
+        text = { Text("它提供的模型、工具和网关 hooks 将停止使用。") },
+        confirmButton = { TextButton(enabled = canWrite, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error), onClick = {
+            viewModel.edit(PluginEdit.Remove(spec)) { scope.launch(Dispatchers.IO) { importer.removeImported(spec) } }
+            removingSpec = null; selectedSpec = null
+        }) { Text("移除插件") } }, dismissButton = { TextButton(onClick = { removingSpec = null }) { Text("保留") } }) }
+
+    if (state.authProvider != null) PluginLoginDialog(viewModel, state) { url -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+}
+
+@Composable
+private fun PluginTag(label: String) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.small) {
+        Text(label, Modifier.padding(horizontal = UiSpacing.small, vertical = UiSpacing.tiny), style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PluginDetailDialog(
+    plugin: ManagedPlugin, state: OfficialPluginsState, canWrite: Boolean,
+    close: () -> Unit, toggle: () -> Unit, upgrade: () -> Unit, remove: () -> Unit,
+    saveOptions: (String) -> Unit, login: (PluginProvider, Int) -> Unit, prefer: (String) -> Unit, browser: () -> Unit,
+) {
+    var tab by remember(plugin.spec) { mutableStateOf(0) }
+    val baseOptions = remember(plugin.spec) { plugin.options }
+    var options by remember(plugin.spec) { mutableStateOf(Json { prettyPrint = true }.encodeToString(kotlinx.serialization.json.JsonObject.serializer(),
+        plugin.options.takeIf { it.isNotEmpty() } ?: plugin.optionsExample)) }
+    var optionsError by remember(plugin.spec) { mutableStateOf("") }
+    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = UiSpacing.medium)) {
+                Row(Modifier.fillMaxWidth().padding(vertical = UiSpacing.small), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = close) { AppIcon(AppSymbol.BACK, description = "返回插件列表") }
+                    Column(Modifier.weight(1f)) {
+                        Text(plugin.name.ifBlank { plugin.spec }, style = MaterialTheme.typography.titleLarge, maxLines = 2)
+                        Text(plugin.version.ifBlank { "本地或未标注版本" }, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                TabRow(selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.background) {
+                    listOf("连接与工具", "参数", "诊断").forEachIndexed { index, title -> Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title) }) }
+                }
+                if (state.busy) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Text("正在保存，核心完成后会刷新此页。", style = MaterialTheme.typography.bodySmall)
+                }
+                if (state.pending) Text("操作结果待核对，请返回列表重新读取。", color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall)
+                if (state.error.isNotBlank()) Text(state.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                if (state.notice.isNotBlank()) Text(state.notice, style = MaterialTheme.typography.bodySmall)
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = UiSpacing.medium), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
+                    when (tab) {
+                        0 -> {
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
+                                FilterChip(selected = !plugin.off, enabled = canWrite, onClick = toggle, label = { Text(if (plugin.off) "启用插件" else "已启用 · 点击停用") })
+                                OutlinedButton(enabled = canWrite, onClick = upgrade) { Text("更新插件") }
+                            }
+                            state.providers.filter { it.spec == plugin.spec }.forEach { provider ->
+                                ContentCard {
+                                    Text(provider.name, style = MaterialTheme.typography.titleMedium)
+                                    Text(if (provider.signedIn) "已连接 · ${provider.models} 个模型" else "尚未登录", style = MaterialTheme.typography.bodySmall)
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
+                                        provider.methods.forEachIndexed { index, method -> OutlinedButton(enabled = canWrite && !plugin.off, onClick = { login(provider, index) }) {
+                                            Text(method.labels["zh"] ?: method.labels["zh-CN"] ?: method.label.ifBlank { "登录方式 ${index + 1}" })
+                                        } }
+                                    }
+                                    TextButton(enabled = canWrite, onClick = { prefer(provider.pid) }) { Text("使用此插件提供 ${provider.name}") }
+                                }
+                            }
+                            if (plugin.tools.isNotEmpty()) ContentCard {
+                                Text("可用工具", style = MaterialTheme.typography.titleMedium)
+                                plugin.tools.forEach { tool ->
+                                    Text(tool.name, style = MaterialTheme.typography.bodyMedium)
+                                    if (tool.description.isNotBlank()) Text(tool.description, style = MaterialTheme.typography.bodySmall)
+                                }
+                                Text("MCP 地址", style = MaterialTheme.typography.labelLarge)
+                                SelectionContainer { Text("http://127.0.0.1:3425/mcp/magpie/tools",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)) }
+                                Text("在客户端添加此地址，并填写网关客户端密钥。", style = MaterialTheme.typography.bodySmall)
+                            }
+                            if (plugin.isMiddleware) Text("同步中间件在网关请求中执行。", style = MaterialTheme.typography.bodySmall)
+                            if (plugin.isGateway) Text("异步 Hooks 在插件宿主中执行。", style = MaterialTheme.typography.bodySmall)
+                            OutlinedButton(onClick = browser) { Text("在官方网页查看完整配置") }
+                        }
+                        1 -> {
+                            Text("插件参数", style = MaterialTheme.typography.titleMedium)
+                            Text("使用插件声明的 options。修改后由官方核心保存。", style = MaterialTheme.typography.bodySmall)
+                            OutlinedTextField(options, { options = it; optionsError = "" }, label = { Text("JSON 参数") }, minLines = 8,
+                                enabled = canWrite, textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), modifier = Modifier.fillMaxWidth())
+                            if (optionsError.isNotBlank()) Text(optionsError, color = MaterialTheme.colorScheme.error)
+                            Button(enabled = canWrite, onClick = {
+                                if (plugin.options != baseOptions) optionsError = "参数已被其他入口修改，请关闭详情后重新打开"
+                                else saveOptions(options)
+                            }) { Text("保存参数") }
+                        }
+                        2 -> {
+                            ContentCard {
+                                Text("加载状态", style = MaterialTheme.typography.titleMedium)
+                                Text(if (plugin.off) "已停用" else if (plugin.error.isEmpty()) "核心已接入" else "插件加载失败")
+                                if (plugin.error.isNotBlank()) Text(SecretRedactor.redact(plugin.error).take(1000), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                Text(SecretRedactor.redact(plugin.spec), style = MaterialTheme.typography.bodySmall)
+                                Text("Bun ${state.snapshot.bunVersion.ifBlank { "版本待确认" }}", style = MaterialTheme.typography.bodySmall)
+                            }
+                            plugin.middleware?.let { diagnostic -> ContentCard {
+                                Text("同步中间件", style = MaterialTheme.typography.titleMedium)
+                                Text("${diagnostic.calls} 次调用 · ${diagnostic.failures} 次失败")
+                                Text("平均 ${diagnostic.avgMicros} μs", style = MaterialTheme.typography.bodySmall)
+                                if (diagnostic.hooks.isNotEmpty()) Text(diagnostic.hooks.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                                if (diagnostic.error.isNotBlank()) Text(SecretRedactor.redact(diagnostic.error).take(1000), color = MaterialTheme.colorScheme.error)
+                            } }
+                            plugin.gateway?.let { diagnostic -> ContentCard {
+                                Text("异步 Hooks", style = MaterialTheme.typography.titleMedium)
+                                Text("${diagnostic.calls} 次调用 · ${diagnostic.failures} 次失败")
+                                Text("平均 ${diagnostic.avgMillis} ms · ${diagnostic.lastOutcome}", style = MaterialTheme.typography.bodySmall)
+                            } }
+                            OutlinedButton(enabled = canWrite, onClick = { viewModel.edit(PluginEdit.RestoreGatewayAccess) }) {
+                                Text("恢复插件网关连接")
+                            }
+                            Text("重新创建插件宿主的网关调用密钥，适用于该密钥被删除或停用之后。", style = MaterialTheme.typography.bodySmall)
+                            TextButton(enabled = canWrite, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error), onClick = remove) { Text("移除插件") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PluginLoginDialog(viewModel: PluginManagementViewModel, state: OfficialPluginsState, browser: (String) -> Unit) {
+    val provider = state.authProvider ?: return
+    val method = provider.methods.getOrNull(state.authMethod) ?: return
+    var answer by remember(provider.pid, state.authMethod, state.prompt?.key) { mutableStateOf("") }
+    var apiKey by remember(provider.pid, state.authMethod) { mutableStateOf("") }
+    var callback by remember(state.signIn?.id) { mutableStateOf("") }
+    Dialog(onDismissRequest = viewModel::cancelLogin, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(UiSpacing.card), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
+                Text("连接 ${provider.name}", style = MaterialTheme.typography.headlineSmall)
+                Text(method.labels["zh"] ?: method.labels["zh-CN"] ?: method.label, style = MaterialTheme.typography.bodySmall)
+                if (state.authBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
+                    if (state.error.isNotBlank()) Text(state.error, color = MaterialTheme.colorScheme.error)
+                    val prompt = state.prompt
+                    val signIn = state.signIn
+                    if (prompt != null) {
+                        Text(prompt.messages["zh"] ?: prompt.messages["zh-CN"] ?: prompt.message)
+                        if (prompt.type == "select") prompt.options.forEach { option ->
+                            OutlinedButton(enabled = !state.authBusy, onClick = { viewModel.prompt(option.value) }, modifier = Modifier.fillMaxWidth()) {
+                                Text(option.labels["zh"] ?: option.labels["zh-CN"] ?: option.label.ifBlank { option.value })
+                            }
+                        } else {
+                            val sensitive = Regex("(?i)key|token|password|secret|credential").containsMatchIn(prompt.key)
+                            OutlinedTextField(answer, { answer = it }, label = { Text(prompt.placeholder.ifBlank { "填写此项" }) }, enabled = !state.authBusy,
+                                visualTransformation = if (sensitive) PasswordVisualTransformation() else VisualTransformation.None,
+                                modifier = Modifier.fillMaxWidth())
+                            Button(enabled = !state.authBusy, onClick = { viewModel.prompt(answer); answer = "" }) { Text("下一步") }
+                        }
+                    } else if (signIn == null) {
+                        if (method.type == "api" && !method.keyless) OutlinedTextField(apiKey, { apiKey = it }, label = { Text(method.placeholder.ifBlank { "API 密钥" }) },
+                            singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            enabled = !state.authBusy, modifier = Modifier.fillMaxWidth())
+                        Button(enabled = !state.authBusy && (method.type != "api" || method.keyless || apiKey.isNotBlank()), onClick = { viewModel.startLogin(apiKey); apiKey = "" }) {
+                            Text(if (method.type == "api") "保存并连接" else "开始登录")
+                        }
+                    } else {
+                        val finished = signIn.state in setOf("done", "failed", "canceled", "cancelled")
+                        Text(when (signIn.state) {
+                            "done" -> "连接成功"
+                            "failed" -> "登录未完成，请重新发起"
+                            "canceled", "cancelled" -> "登录已取消"
+                            "installing" -> "正在准备登录"
+                            else -> "等待完成登录"
+                        }, style = MaterialTheme.typography.titleMedium)
+                        if (signIn.instructions.isNotBlank()) Text(SecretRedactor.redact(signIn.instructions), style = MaterialTheme.typography.bodyMedium)
+                        if (signIn.code.isNotBlank()) Text(signIn.code, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Monospace)
+                        if (!finished) {
+                            Button(enabled = !state.authBusy, onClick = { viewModel.openLoginBrowser(browser) }) { Text("打开登录浏览器") }
+                            if (signIn.pasteCallback || signIn.pasteCode || signIn.pasteKey) {
+                                OutlinedTextField(callback, { callback = it }, label = { Text(if (signIn.pasteCode) "授权码" else "完整回调地址 / 回执") },
+                                    visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                                Button(enabled = !state.authBusy && callback.isNotBlank(), onClick = { viewModel.submitCallback(callback); callback = "" }) { Text("提交回执") }
+                            }
+                            TextButton(enabled = !state.authBusy, onClick = viewModel::refreshLogin) { Text("重新读取登录状态") }
+                        }
+                    }
+                }
+                OutlinedButton(modifier = Modifier.fillMaxWidth(), enabled = !state.authBusy || state.signIn == null,
+                    onClick = viewModel::cancelLogin) { Text(if (state.signIn?.state in setOf("done", "failed", "canceled", "cancelled")) "返回插件" else "取消登录") }
+            }
+        }
+    }
+}

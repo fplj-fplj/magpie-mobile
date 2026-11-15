@@ -260,7 +260,12 @@ class ApplyMobileCoreTests(unittest.TestCase):
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["sourceRevision"], patcher.SOURCE_REVISION)
         self.assertEqual(manifest["goVersion"], "1.26.8")
-        self.assertEqual(len(manifest["patches"]), 9)
+        self.assertEqual({p["path"] for p in manifest["patches"]}, {
+            "internal/gateway/gateway.go", "internal/gateway/goroutines.go", "internal/gateway/lan.go",
+            "internal/gui/web.go", "internal/gui/api.go", "internal/gui/update.go",
+            "internal/cli/web_cli.go", "internal/provider/provider.go", "internal/gui/gatewaymode.go",
+            "internal/plugin/host.go", "internal/plugin/store.go",
+        })
         for overlay in manifest["overlays"]:
             data = (root / "overlay" / overlay["path"]).read_bytes()
             patcher.require_hash(data, overlay["sha256"], overlay["path"])
@@ -273,7 +278,7 @@ class ApplyMobileCoreTests(unittest.TestCase):
         for exception in ("ownCallback", "corsPreflight", "keyPageOpen", "imageTokenAsked", "oidcExchange", "proveAsked"):
             self.assertRegex(inserts, "!mobilepolicy.Enabled.*" + exception)
         tests = [(root / "overlay" / o["path"]).read_text() for o in manifest["overlays"] if o["path"].endswith("_test.go")]
-        self.assertEqual(len(tests), 10)
+        self.assertEqual(len(tests), 12)
         constraints = {"//go:build mobile", "//go:build mobile || androidhost", "//go:build androidhost"}
         self.assertTrue(all(t.splitlines()[0] in constraints for t in tests))
         self.assertGreaterEqual(sum(t.count("func TestMobile") for t in tests), 10)

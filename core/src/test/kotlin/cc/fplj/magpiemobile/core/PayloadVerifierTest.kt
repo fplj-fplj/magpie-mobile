@@ -51,6 +51,30 @@ class PayloadVerifierTest {
     }
 
     @Test
+    fun x86_64PassesWhenExpected() {
+        val v = PayloadVerifier.verify(writeElf(validElf(eMachine = 62)), PayloadVerifier.Architecture.X86_64)
+        assertTrue(v == PayloadVerifier.Verdict.Pass)
+    }
+
+    @Test
+    fun arm64FailsWhenX86_64Expected() {
+        val v = PayloadVerifier.verify(writeElf(validElf()), PayloadVerifier.Architecture.X86_64)
+        assertTrue(v is PayloadVerifier.Verdict.Fail && v.reason.contains("x86_64"))
+    }
+
+    @Test
+    fun fromSupportedAbiResolvesDeviceFirstAbi() {
+        assertEquals(PayloadVerifier.Architecture.X86_64, PayloadVerifier.Architecture.fromSupportedAbi(arrayOf("x86_64")))
+        assertEquals(
+            PayloadVerifier.Architecture.X86_64,
+            PayloadVerifier.Architecture.fromSupportedAbi(arrayOf("arm64-v8a", "x86_64", "armeabi-v7a")),
+        )
+        assertEquals(PayloadVerifier.Architecture.ARM64, PayloadVerifier.Architecture.fromSupportedAbi(arrayOf("arm64-v8a")))
+        assertEquals(PayloadVerifier.Architecture.ARM64, PayloadVerifier.Architecture.fromSupportedAbi(arrayOf("mips")))
+        assertEquals(PayloadVerifier.Architecture.ARM64, PayloadVerifier.Architecture.fromSupportedAbi(null))
+    }
+
+    @Test
     fun nonPieFails() {
         val v = PayloadVerifier.verify(writeElf(validElf(eType = 2)))
         assertTrue(v is PayloadVerifier.Verdict.Fail && v.reason.contains("PIE"))

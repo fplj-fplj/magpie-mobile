@@ -17,7 +17,7 @@ python3 scripts/apply-mobile-core.py --source-root /path/to/pinned-magpie
 - --source-root 必填：固定 Magpie Git checkout 或源码归档根目录。
 - --patch-root 可选：受信任补丁包根目录，默认本仓库 patches/mobile；不是不受信任外部补丁入口。
 - --check：只核对，不写入，不下载依赖，不执行 Go 或构建工具。
-- Git checkout 核对 HEAD；归档不能证明整个 commit，只通过 go.mod、八个目标文件的 SHA256 固定相关源码。
+- Git checkout 核对 HEAD；归档不能证明整个 commit，只通过 go.mod 和 manifest 中各目标文件的 SHA256 固定相关源码。
 - 原文件 hash、每条 old 文字唯一匹配、结果 hash、overlay 完整清单/hash 全部先通过才写入。拒绝偏移、模糊匹配、重复应用和混合状态。
 - 每个文件原子替换；I/O 失败回滚已完成的文件。源码目录必须为独占工作树，不支持并发写入或文件系统突然换挂载；失败后重新检查，不自动套另一通道。
 

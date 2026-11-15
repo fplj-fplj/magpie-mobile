@@ -28,7 +28,10 @@ class SubscriptionPluginViewModel : ViewModel() {
     private var pluginManager: SubscriptionPluginManager? = null
 
     fun initialize(layout: EnginePaths.Layout) {
-        val bunStatus = BunRuntimeInspector.inspect(layout)
+        val bunStatus = BunRuntimeInspector.inspect(
+            layout,
+            cc.fplj.magpiemobile.core.PayloadVerifier.Architecture.fromSupportedAbi(android.os.Build.SUPPORTED_ABIS),
+        )
         val manager = SubscriptionPluginManager(File(layout.homeDir, "plugins"))
         pluginManager = manager
         mutable.update {

@@ -18,7 +18,7 @@ internal enum class GatewaySection(val title: String, val detail: String, val sy
     USAGE("用量与速度", "近期请求、额度与模型速度", AppSymbol.USAGE),
     ROUTING("路由与号池", "模型别名、降级与密钥轮询", AppSymbol.ROUTE),
     MODELS("模型目录", "当前可用模型与完整目录", AppSymbol.MODELS),
-    PLUGINS("插件与工具", "订阅插件、市场与 MCP 服务", AppSymbol.PLUGIN),
+    PLUGINS("插件与工具", "官方插件、工具、中间件与 Hooks", AppSymbol.PLUGIN),
     SYSTEM("系统与诊断", "网络、电池、运行输出与版本", AppSymbol.DEVICE),
 }
 

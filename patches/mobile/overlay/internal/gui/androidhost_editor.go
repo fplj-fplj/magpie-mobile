@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/mobilepolicy"
+	"github.com/yetone/magpie/internal/plugin"
 )
 
 const androidEditorMintPath = "/api/androidhost/browser-session"
 const androidEditorEntryPath = "/androidhost/browser-entry"
+const androidPluginGatewayRestorePath = "/api/androidhost/plugin-gateway-access/restore"
 
 // Each web server owns its tickets. No long-lived management key is placed in
 // an Android Intent, page URL, response body or log. Tickets are single-use.
@@ -26,6 +28,19 @@ func androidHostEditorWithClock(port, key string, keep time.Duration, box boxSig
 	var mu sync.Mutex
 	tickets := make(map[string]time.Time)
 	guarded := webGuard("magpie_web_"+port, key, keep, box, webOwnPage(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == androidPluginGatewayRestorePath {
+			if r.Method != http.MethodPost || r.URL.RawPath != "" || r.URL.RawQuery != "" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			if err := plugin.RestoreAndroidHostBridge(); err != nil {
+				http.Error(w, "plugin gateway access could not be restored", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]bool{"ok": true})
+			return
+		}
 		if r.URL.Path != androidEditorMintPath {
 			page.ServeHTTP(w, r)
 			return

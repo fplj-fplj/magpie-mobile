@@ -1,0 +1,317 @@
+package cc.fplj.magpiemobile
+
+import android.content.Intent
+import android.os.SystemClock
+import androidx.test.core.app.ActivityScenario
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
+import cc.fplj.magpiemobile.core.*
+import java.io.BufferedInputStream
+import java.io.Closeable
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.InetAddress
+import java.net.Proxy
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.URL
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/** Runs the APK's own Go and Bun payloads; no fake management client is used. */
+@RunWith(AndroidJUnit4::class)
+class OfficialPluginsInstrumentedTest {
+    private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    private val context = instrumentation.targetContext
+    private val device = UiDevice.getInstance(instrumentation)
+
+    @Test fun officialPluginsExecuteInInstalledAndroidApk() {
+        val artifacts = File(context.getExternalFilesDir(null), "plugin-runtime").apply { mkdirs() }
+        val fixtures = File(context.filesDir, "runtime-fixtures").apply { mkdirs() }
+        val responseMarker = File(context.filesDir, "runtime-hook-response.jsonl")
+        val toolMarker = File(context.filesDir, "runtime-tool.txt")
+        responseMarker.delete()
+        toolMarker.delete()
+        ActivityScenario.launch(MainActivity::class.java).use {
+            LocalUpstream().use { upstream ->
+                val installed = mutableListOf<String>()
+                context.startForegroundService(Intent(context, GatewayService::class.java).setAction(GatewayService.ACTION_START))
+                try {
+                    await("authenticated Android core startup", 120_000) { NativeCoreSession.status.value.ready }
+                    val client = NativeCoreSession.pluginClient()
+                    assertEquals("0.1.3781-androidhost.2", NativeCoreSession.managementClient().capabilities().coreVersion)
+                    val provider = fixture(fixtures, "provider", PROVIDER, "\"main\":\"index.mjs\"")
+                    val middleware = fixture(fixtures, "middleware", MIDDLEWARE, "\"magpie\":{\"middleware\":\"runtime.middleware.mjs\"}", "runtime.middleware.mjs")
+                    val hooks = fixture(fixtures, "hooks", HOOKS, "\"magpie\":{\"hooks\":\"runtime.hooks.mjs\"}", "runtime.hooks.mjs")
+                    for (entry in listOf(provider, middleware, hooks)) {
+                        client.add(entry.absolutePath)
+                        installed.add(entry.absolutePath)
+                    }
+                    client.saveOptions(provider.absolutePath, kotlinx.serialization.json.Json.parseToJsonElement("{\"base\":\"${upstream.base}\"}") as kotlinx.serialization.json.JsonObject)
+                    client.saveOptions(hooks.absolutePath, kotlinx.serialization.json.Json.parseToJsonElement("{\"base\":\"${upstream.base}\"}") as kotlinx.serialization.json.JsonObject)
+                    await("Bun provider and three official plugin kinds") {
+                        val snapshot = client.plugins()
+                        snapshot.bun && snapshot.entries.any { it.spec == middleware.absolutePath && it.isMiddleware } &&
+                            snapshot.entries.any { it.spec == hooks.absolutePath && it.isGateway } &&
+                            client.providers().any { it.pid == "androidfixture" }
+                    }
+                    val pid = client.providers().single { it.pid == "androidfixture" }.pid
+                    val login = client.signIn(pid, 0, emptyMap(), "android-synthetic-key")
+                    await("real plugin API sign-in") { client.signInState(login.id).state == "done" }
+                    val oauth = client.signIn(pid, 1, emptyMap())
+                    assertEquals("waiting", oauth.state)
+                    client.submitCallback(oauth.id, "good")
+                    await("real plugin OAuth callback") { client.signInState(oauth.id).state == "done" }
+                    val cancel = client.signIn(pid, 1, emptyMap())
+                    client.cancelSignIn(cancel.id)
+                    await("plugin login cancellation") { client.signInState(cancel.id).state == "canceled" }
+                    NativeCoreSession.providerClient().create(ProviderCreateDraft("android-runtime", "Android runtime",
+                        upstream.base + "/v1", "synthetic-upstream-key", listOf("fake-echo"), allowLoopbackHttp = true))
+                    val auth = requireNotNull(NativeCoreSession.currentGatewayKey())
+                    val models = JSONObject(http("http://127.0.0.1:3425/v1/models", auth).second).getJSONArray("data")
+                    val nativeModel = (0 until models.length()).map { models.getJSONObject(it).getString("id") }
+                        .first { it.contains("android-runtime") && it.endsWith("fake-echo") }
+                    val pluginModel = (0 until models.length()).map { models.getJSONObject(it).getString("id") }
+                        .first { it.contains("androidfixture") && it.endsWith("fake-echo") }
+                    val body = JSONObject().put("model", nativeModel).put("stream", false)
+                        .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", "android-probe")))
+                    val reply = http("http://127.0.0.1:3425/v1/chat/completions", auth, body.toString())
+                    assertEquals(200, reply.first)
+                    assertTrue(reply.second.contains("hook-rewritten") && reply.second.contains("middleware-rewritten"))
+                    assertTrue(upstream.requests.any { it.contains("hook-rewritten") && it.contains("middleware-rewritten") })
+                    val pluginReply = http("http://127.0.0.1:3425/v1/chat/completions", auth,
+                        JSONObject(body.toString()).put("model", pluginModel).toString())
+                    assertEquals("Bun provider request did not reach the local upstream", 200, pluginReply.first)
+                    assertTrue(pluginReply.second.contains("hook-rewritten"))
+                    await("async onResponse completion and request-owned state") {
+                        responseMarker.isFile && responseMarker.readLines().any { line ->
+                            val value = JSONObject(line)
+                            value.optBoolean("success") && value.optString("state") == "linked"
+                        }
+                    }
+                    var firstDeltaBeforeUpstreamDone = false
+                    val streamed = StreamingChatClient(NativeCoreSession.gatewayConfig()).stream(nativeModel,
+                        listOf(ChatClient.Message("user", "android-stream"))) {
+                        if (!upstream.streamFinished) firstDeltaBeforeUpstreamDone = true
+                    }
+                    assertTrue(streamed.contains("hook-rewritten"))
+                    assertTrue("SSE was buffered until completion", firstDeltaBeforeUpstreamDone)
+                    val rejectedBody = JSONObject(body.toString()).put("messages",
+                        JSONArray().put(JSONObject().put("role", "user").put("content", "forbidden-word")))
+                    assertEquals(400, http("http://127.0.0.1:3425/v1/chat/completions", auth, rejectedBody.toString()).first)
+                    val mcp = "http://127.0.0.1:3425/mcp/magpie/tools"
+                    val tools = JSONObject(http(mcp, auth, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}").second)
+                        .getJSONObject("result").getJSONArray("tools")
+                    val toolName = (0 until tools.length()).map { tools.getJSONObject(it).getString("name") }.first { it.endsWith("_echo") }
+                    val call = JSONObject().put("jsonrpc", "2.0").put("id", 2).put("method", "tools/call")
+                        .put("params", JSONObject().put("name", toolName).put("arguments", JSONObject().put("text", "tool-executed")))
+                    val toolReply = http(mcp, auth, call.toString())
+                    assertEquals(200, toolReply.first)
+                    assertTrue(toolReply.second.contains("tool-executed"))
+                    assertEquals("tool-executed", toolMarker.readText())
+                    val snapshot = client.plugins()
+                    assertTrue(snapshot.entries.single { it.spec == middleware.absolutePath }.middleware!!.calls > 0)
+                    assertTrue(snapshot.entries.single { it.spec == hooks.absolutePath }.gateway!!.calls > 0)
+                    client.setOff(middleware.absolutePath, true)
+                    assertEquals(200, http("http://127.0.0.1:3425/v1/chat/completions", auth, rejectedBody.toString()).first)
+                    client.setOff(middleware.absolutePath, false)
+                    client.upgrade(provider.absolutePath)
+                    assertTrue(client.plugins().entries.any { it.spec == provider.absolutePath })
+                    for (remote in listOf("@magpie-community/tools-calc@0.1.0",
+                        "github:guotree/magpie-websearch#3ff2a8deec6742d1f74e3a65c3b006405ac27615")) {
+                        val added = client.add(remote)
+                        val entry = added.entries.first { it.spec == remote ||
+                            (remote.startsWith("@magpie-community/tools-calc") && it.packageId == "@magpie-community/tools-calc") ||
+                            (remote.startsWith("github:") && it.packageId == "@guotree/magpie-websearch") }
+                        installed.add(entry.spec)
+                        assertTrue("remote plugin did not load", entry.error.isBlank())
+                    }
+                    device.findObject(By.text("更多"))?.click()
+                    assertTrue(device.wait(Until.hasObject(By.text("插件与工具")), 10_000))
+                    device.findObject(By.text("插件与工具")).click()
+                    assertTrue(device.wait(Until.hasObject(By.text("官方外部插件")), 15_000))
+                    assertTrue(device.takeScreenshot(File(artifacts, "native-plugins.png")))
+                    File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
+                    File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
+                    File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
+                } finally {
+                    runCatching { installed.reversed().forEach { NativeCoreSession.pluginClient().remove(it) } }
+                    context.startService(Intent(context, GatewayService::class.java).setAction(GatewayService.ACTION_STOP))
+                    await("Android core and Bun shutdown", 30_000) {
+                        !GatewayRuntime.stopping.value && NativeCoreSession.status.value.phase == NativeCoreSession.Phase.DISCONNECTED &&
+                            device.executeShellCommand("ps -A -o ARGS").lineSequence().none { line ->
+                                line.contains("libmagpie_exec.so") || line.contains("libbun_exec.so")
+                            }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun fixture(root: File, name: String, code: String, manifest: String, entry: String = "index.mjs"): File = File(root, name).apply {
+        mkdirs()
+        File(this, "package.json").writeText("{\"name\":\"android-test-$name\",\"version\":\"1.0.0\",\"type\":\"module\",$manifest}")
+        File(this, entry).writeText(code)
+    }
+
+    private fun await(description: String, timeout: Long = 30_000, condition: () -> Boolean) {
+        val deadline = SystemClock.elapsedRealtime() + timeout
+        var failure: Exception? = null
+        while (SystemClock.elapsedRealtime() < deadline) {
+            try { if (condition()) return } catch (e: Exception) { failure = e }
+            SystemClock.sleep(200)
+        }
+        throw AssertionError("Timed out: $description (${failure?.javaClass?.simpleName ?: "no exception"})")
+    }
+
+    private fun http(url: String, key: String, body: String? = null): Pair<Int, String> {
+        val connection = URL(url).openConnection(Proxy.NO_PROXY) as HttpURLConnection
+        try {
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 30_000
+            connection.instanceFollowRedirects = false
+            connection.setRequestProperty("Authorization", "Bearer $key")
+            connection.setRequestProperty("Accept", "application/json, text/event-stream")
+            if (body != null) {
+                connection.requestMethod = "POST"
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                val bytes = body.toByteArray()
+                connection.setFixedLengthStreamingMode(bytes.size)
+                connection.outputStream.use { it.write(bytes) }
+            }
+            val code = connection.responseCode
+            return code to (if (code >= 400) connection.errorStream else connection.inputStream).use { it?.bufferedReader()?.readText().orEmpty() }
+        } finally { connection.disconnect() }
+    }
+
+    private class LocalUpstream : Closeable {
+        private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
+        private val executor = Executors.newCachedThreadPool()
+        private val sockets = CopyOnWriteArrayList<Socket>()
+        val requests = CopyOnWriteArrayList<String>()
+        val base = "http://127.0.0.1:${server.localPort}"
+        @Volatile var streamFinished = false
+        init {
+            executor.execute {
+                while (!server.isClosed) {
+                    try {
+                        val socket = server.accept()
+                        sockets.add(socket)
+                        executor.execute { runCatching { serve(socket) }; sockets.remove(socket); socket.close() }
+                    } catch (_: Exception) { if (!server.isClosed) throw AssertionError("fake upstream accept failed") }
+                }
+            }
+        }
+        private fun serve(socket: Socket) {
+            socket.soTimeout = 30_000
+            val input = BufferedInputStream(socket.getInputStream())
+            fun line(): String {
+                val bytes = ArrayList<Byte>()
+                while (bytes.size < 16_384) {
+                    val b = input.read()
+                    if (b < 0 || b == 10) return bytes.toByteArray().toString(Charsets.UTF_8).trimEnd('\r')
+                    bytes.add(b.toByte())
+                }
+                throw IllegalStateException("fake upstream header exceeded limit")
+            }
+            val first = line()
+            var length = 0
+            while (true) {
+                val header = line()
+                if (header.isEmpty()) break
+                if (header.startsWith("Content-Length:", true)) length = header.substringAfter(':').trim().toInt()
+            }
+            require(length in 0..1_048_576)
+            val bytes = ByteArray(length)
+            var offset = 0
+            while (offset < length) { val n = input.read(bytes, offset, length - offset); require(n > 0); offset += n }
+            val raw = bytes.toString(Charsets.UTF_8)
+            if (raw.isNotBlank()) requests.add(raw)
+            val output = socket.getOutputStream()
+            fun json(value: String) {
+                val body = value.toByteArray()
+                output.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                output.write(body)
+                output.flush()
+            }
+            if (first.contains("/recall")) { json("{\"context\":\"hook-rewritten\"}"); return }
+            if (first.startsWith("GET")) { json("{\"data\":[{\"id\":\"fake-echo\"}]}"); return }
+            val body = JSONObject(raw)
+            val messages = body.getJSONArray("messages")
+            val text = messages.getJSONObject(messages.length() - 1).getString("content")
+            if (body.optBoolean("stream")) {
+                streamFinished = false
+                output.write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".toByteArray())
+                for (part in listOf(text.take(text.length / 2), text.drop(text.length / 2))) {
+                    val event = JSONObject().put("id", "android-stream").put("object", "chat.completion.chunk")
+                        .put("model", "fake-echo").put("choices", JSONArray().put(JSONObject().put("index", 0)
+                            .put("delta", JSONObject().put("content", part)).put("finish_reason", JSONObject.NULL)))
+                    output.write("data: $event\n\n".toByteArray())
+                    output.flush()
+                    Thread.sleep(500)
+                }
+                output.write("data: [DONE]\n\n".toByteArray())
+                output.flush()
+                streamFinished = true
+            } else {
+                json(JSONObject().put("id", "android-echo").put("object", "chat.completion").put("model", "fake-echo")
+                    .put("choices", JSONArray().put(JSONObject().put("index", 0).put("message", JSONObject().put("role", "assistant").put("content", text))
+                        .put("finish_reason", "stop"))).toString())
+            }
+        }
+        override fun close() {
+            server.close()
+            sockets.forEach { runCatching { it.close() } }
+            executor.shutdownNow()
+            check(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+    }
+
+    companion object {
+        private val PROVIDER = """
+            import { writeFileSync } from "node:fs"
+            export const AndroidFixture = async (_, options = {}) => ({
+              config: async (cfg) => {
+                cfg.provider ??= {}
+                cfg.provider.androidfixture = {name:"Android fixture",npm:"@ai-sdk/openai-compatible",api:options.base || "http://127.0.0.1:9/v1",models:{"fake-echo":{name:"Fake Echo",limit:{context:4096,output:512}}}}
+              },
+              auth: { provider:"androidfixture",methods:[{type:"api",label:"Test API key"},
+                {type:"oauth",label:"Test OAuth",authorize:async()=>({url:"https://example.invalid/authorize",method:"code",instructions:"Paste good",
+                  callback:async(code)=>code==="good"?({type:"success",refresh:"synthetic-refresh",access:"synthetic-access",expires:Date.now()+3600000}):({type:"failed"})})}],
+                loader: async () => ({apiKey:"synthetic",baseURL:options.base + "/v1"}) },
+              tool: {echo:{description:"Android runtime echo",args:{type:"object",properties:{text:{type:"string"}},required:["text"]},
+                execute: async (args) => {writeFileSync(process.env.HOME + "/runtime-tool.txt",args.text);return args.text}}}
+            })
+        """.trimIndent()
+        private val MIDDLEWARE = """
+            export function onRequest(body, ctx) {
+              const message = body.messages[body.messages.length - 1]
+              if (String(message.content).includes("forbidden-word")) return ctx.reject(400,"fixture-reject")
+              message.content += "|middleware-rewritten"
+              return body
+            }
+        """.trimIndent()
+        private val HOOKS = """
+            import { appendFileSync } from "node:fs"
+            export async function onRequest(body, ctx) {
+              const recalled = await fetch(ctx.options.base + "/recall").then(r => r.json())
+              ctx.state.link = "linked"
+              body.messages[body.messages.length - 1].content += "|" + recalled.context
+              return body
+            }
+            export async function onResponse(reply, ctx) {
+              appendFileSync(process.env.HOME + "/runtime-hook-response.jsonl",JSON.stringify({success:ctx.success,state:ctx.state.link}) + "\n")
+            }
+        """.trimIndent()
+    }
+}

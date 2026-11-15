@@ -21,6 +21,7 @@ object NativeCoreSession {
         var connecting = false
         var config: GatewayConfig? = null
         var providers: cc.fplj.magpiemobile.core.ProviderManagementClient? = null
+        var plugins: cc.fplj.magpiemobile.core.PluginManagementClient? = null
         var webEditor: Boolean = false
     }
     private val lock = Any()
@@ -136,6 +137,12 @@ object NativeCoreSession {
             check(binding === current && isRunningOwner(current) && current.config != null) { "核心已断开，请重新打开编辑器" }
         }
         return link
+    }
+
+    fun pluginClient(): cc.fplj.magpiemobile.core.PluginManagementClient = synchronized(lock) {
+        val current = binding ?: error("请先启动网关")
+        check(isRunningOwner(current) && current.config != null) { "核心连接尚未完成" }
+        current.plugins ?: cc.fplj.magpiemobile.core.PluginManagementClient(current.credential).also { current.plugins = it }
     }
 
     fun retry(filesDir: File) {

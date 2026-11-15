@@ -1,3 +1,13 @@
+## Magpie-Mobile 0.1.40-official-plugins（官方插件接入候选）
+
+- 原生「插件与工具」改用官方核心管理接口，支持目录发现、npm／GitHub／文件／目录安装、启停、更新、删除、JSON 参数与登录。原生和浏览器共用核心配置，返回应用刷新提供商与模型。
+- 保留官方提供商／认证／工具 Bun 宿主、Go/moejs 同步中间件和 Bun 异步 Hooks。目录导入先完整复制，依赖安装关闭脚本；列表区分配置启用与加载错误。
+- 插件详情使用全屏页签与暖纸色主题，显示工具及 MCP 地址、中间件和 Hooks 诊断；动态登录适应键盘与长内容，明确显示失败和取消终态。
+- 核心升为 `0.1.3781-androidhost.2`，适配插件对本机网关的调用凭据；专用普通 Key 不与管理或聊天 Key 串用。插件同 UID 运行，专用凭据不代表沙箱隔离。
+- Actions 增加插件包回归、真实 Go+Bun 宿主测试、Android 测试 APK 运行及截图；签名候选发布等待构建与运行 job 通过。
+
+版本：versionCode 41；备份文档 appVersion `0.1.40`。候选发布标记为 prerelease；生产 ARM64 真机运行、具体插件的原生依赖及个人账号服务端验证仍按报告逐项验收。
+
 ## Magpie-Mobile 0.1.39-full-core-editors（完整核心与双编辑）
 
 - 核心改用官方完整 CLI 源码的 Android 宿主构建，标签 `nogui,androidhost`，版本 `0.1.3781-androidhost.1`；不再以 `mobile` 功能白名单运行。

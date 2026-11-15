@@ -223,6 +223,32 @@
         }
       ],
       "resultSha256": "d81a5f032694af69b85c356c17e246a0145191126cb8929074bd703c824375c6"
+    },
+    {
+      "path": "internal/plugin/host.go",
+      "sha256": "bc207cab1fba62a4ef8ba0250e5dd662e106ef491195571fa2155315a755c008",
+      "replacements": [
+        {
+          "old": "func hostFile() (string, error) { return hostScript(\"host\", hostJS) }",
+          "new": "func hostFile() (string, error) { return hostScript(\"host\", mobileHostJS()) }"
+        },
+        {
+          "old": "func getLocked(ctx context.Context) (*host, error) {\n",
+          "new": "func getLocked(ctx context.Context) (*host, error) {\n\tif androidHostBridgeNeedsRefresh() {\n\t\thostStale.Store(true)\n\t}\n"
+        }
+      ],
+      "resultSha256": "ead0834fe583ee52b10d19268b7f71732adc86de0853a8f1d77a59e9cb7cf423"
+    },
+    {
+      "path": "internal/plugin/store.go",
+      "sha256": "f7864f87817b6ed633de77037d74d48f467e5f6c84def0b0e4e2d2a0571efb70",
+      "replacements": [
+        {
+          "old": "\tif IsPath(spec) {\n\t\tt := Target(spec)\n\t\tif _, err := os.Stat(t); err != nil {\n\t\t\treturn Entry{}, err\n\t\t}\n\t\tspec = t\n",
+          "new": "\tif IsPath(spec) {\n\t\tt := Target(spec)\n\t\tif _, err := os.Stat(t); err != nil {\n\t\t\treturn Entry{}, err\n\t\t}\n\t\tif err := prepareAndroidImport(ctx, t); err != nil {\n\t\t\treturn Entry{}, err\n\t\t}\n\t\tspec = t\n"
+        }
+      ],
+      "resultSha256": "b343d6f243d1be7eb8a369dcaec62acbc61c9fb6c118b6d1391347486fe6948b"
     }
   ],
   "overlays": [
@@ -240,11 +266,11 @@
     },
     {
       "path": "internal/gui/androidhost_editor.go",
-      "sha256": "67aa50342f2fa615607c16ef950f8ef61795a493c6ee596c1a6fe573c2fd2e9c"
+      "sha256": "d2cef093f3040548d6426696c36f343781c27b84b031cd91676f2ba4cc37c185"
     },
     {
       "path": "internal/gui/androidhost_editor_test.go",
-      "sha256": "cfc37fbf9050c5b0e251880407de682d4e72e4944d471b7ac58689510de16e62"
+      "sha256": "64948df9f1deadd796e16df4509aa2141569b67a3fb31d05be976d8e9427aa66"
     },
     {
       "path": "internal/gui/mobile_discovery_test.go",
@@ -277,6 +303,22 @@
     {
       "path": "internal/mobilepolicy/enabled_mobile.go",
       "sha256": "e956b1932067feda1c7201cb1de4cb9431808171510b47803739609623130447"
+    },
+    {
+      "path": "internal/plugin/androidhost_bridge.go",
+      "sha256": "39605329fa4d4d13b0a83f80986df76810a95be3ff2628634679c895c88d2604"
+    },
+    {
+      "path": "internal/plugin/androidhost_bridge_test.go",
+      "sha256": "3d4de61ff0aa1ce6fac9003783c464906fe385f2af6155ed7c7a37b0114d33cf"
+    },
+    {
+      "path": "internal/plugin/androidhost_import.go",
+      "sha256": "eef1b3b845b40853512f11c836abd121d1cd0c367048157766040dda5ad14be5"
+    },
+    {
+      "path": "internal/plugin/androidhost_import_test.go",
+      "sha256": "3f719d38310b367f395730d1cf1988725f98ef13b3abd6a7a56abc70d87dcff5"
     },
     {
       "path": "internal/provider/androidhost_store_test.go",

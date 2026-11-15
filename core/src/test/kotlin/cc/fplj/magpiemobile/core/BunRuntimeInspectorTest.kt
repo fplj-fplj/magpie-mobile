@@ -55,6 +55,57 @@ class BunRuntimeInspectorTest {
     }
 
     @Test
+    fun detectArchitectureRejectsX86_64WhenArm64Expected() {
+        val mockBun = File(tempDir, EnginePaths.BUN_LIB)
+        val elfHeader = ByteArray(20)
+        elfHeader[0] = 0x7F.toByte()
+        elfHeader[1] = 'E'.code.toByte()
+        elfHeader[2] = 'L'.code.toByte()
+        elfHeader[3] = 'F'.code.toByte()
+        elfHeader[4] = 2
+        elfHeader[5] = 1
+        elfHeader[18] = 62.toByte() // EM_X86_64
+        mockBun.writeBytes(elfHeader)
+        mockBun.setExecutable(true)
+        val layout = EnginePaths.Layout(
+            nativeLibraryDir = tempDir,
+            homeDir = File(tempDir, "home"),
+            cacheDir = File(tempDir, "cache"),
+            configDir = File(tempDir, "config"),
+        )
+        val status = BunRuntimeInspector.inspect(layout)
+        assertTrue(status.installed)
+        assertEquals("x86_64", status.architecture)
+        assertFalse(status.executable)
+        assertEquals("载荷非 AArch64 架构: x86_64", status.errorMessage)
+    }
+
+    @Test
+    fun detectArchitectureAcceptsX86_64WhenExpected() {
+        val mockBun = File(tempDir, EnginePaths.BUN_LIB)
+        val elfHeader = ByteArray(20)
+        elfHeader[0] = 0x7F.toByte()
+        elfHeader[1] = 'E'.code.toByte()
+        elfHeader[2] = 'L'.code.toByte()
+        elfHeader[3] = 'F'.code.toByte()
+        elfHeader[4] = 2
+        elfHeader[5] = 1
+        elfHeader[18] = 62.toByte() // EM_X86_64
+        mockBun.writeBytes(elfHeader)
+        mockBun.setExecutable(true)
+        val layout = EnginePaths.Layout(
+            nativeLibraryDir = tempDir,
+            homeDir = File(tempDir, "home"),
+            cacheDir = File(tempDir, "cache"),
+            configDir = File(tempDir, "config"),
+        )
+        val status = BunRuntimeInspector.inspect(layout, PayloadVerifier.Architecture.X86_64)
+        assertTrue(status.installed)
+        assertEquals("x86_64", status.architecture)
+        assertTrue(status.executable)
+    }
+
+    @Test
     fun detectArchitectureRejectsNonElfOrCorruptedHeader() {
         val mockBun = File(tempDir, "non_elf.bin")
         mockBun.writeText("NOT AN ELF BINARY AT ALL! 1234567890")

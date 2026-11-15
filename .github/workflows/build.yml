@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -85,7 +85,7 @@ jobs:
           set -euo pipefail
           go test -tags nogui ./internal/access -count=1 -timeout=3m
           go test -json -tags nogui,mobile ./internal/gateway ./internal/gui ./internal/cli ./internal/provider -run '^TestMobile' -count=1 -timeout=3m | tee ../mobile-go-tests.jsonl
-          go test -json -tags nogui,androidhost ./internal/gateway ./internal/gui ./internal/cli ./internal/provider -run '^Test(AndroidHost|Mobile)' -count=1 -timeout=3m | tee ../androidhost-go-tests.jsonl
+          go test -json -tags nogui,androidhost ./internal/gateway ./internal/gui ./internal/cli ./internal/provider ./internal/plugin -run '^Test(AndroidHost|Mobile)' -count=1 -timeout=3m | tee ../androidhost-go-tests.jsonl
 
       - name: Host integration smoke with a synthetic upstream
         working-directory: build-tmp/upstream
@@ -95,8 +95,24 @@ jobs:
           set -euo pipefail
           go build -trimpath -tags nogui,mobile -ldflags '-s -w -X main.version=0.1.3781-mobile.1' -o ../magpie-mobile-host .
           python3 ../../scripts/smoke-mobile-core.py --exe ../magpie-mobile-host
-          go build -trimpath -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.1' -o ../magpie-full-host .
+          go build -trimpath -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.2' -o ../magpie-full-host .
           python3 ../../scripts/smoke-mobile-core.py --exe ../magpie-full-host --full-admin
+
+      - name: Fetch hash-pinned Linux Bun for plugin integration
+        run: bash scripts/fetch-host-bun.sh
+
+      - name: Run real official plugin host integration
+        run: |
+          set -euo pipefail
+          python3 scripts/smoke-official-plugins.py --exe build-tmp/magpie-full-host --bun build-tmp/bun-linux-host | tee build-tmp/official-plugin-smoke.txt
+
+      - name: Run plugin host race regression
+        working-directory: build-tmp/upstream
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          set -euo pipefail
+          go test -race -tags nogui,androidhost ./internal/plugin -run '^TestAndroidHost' -count=1 -timeout=3m | tee ../plugin-host-race.txt
 
       - name: Build the Android ARM64 full CLI core
         working-directory: build-tmp/upstream
@@ -111,7 +127,7 @@ jobs:
           test -n "$ndk"
           export CC="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
           test -x "$CC"
-          go build -trimpath -buildmode=pie -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.1 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' -o ../magpie-mobile-android-arm64 .
+          go build -trimpath -buildmode=pie -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.2 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' -o ../magpie-mobile-android-arm64 .
           cp ../magpie-mobile-android-arm64 ../../app/src/main/jniLibs/arm64-v8a/libmagpie_exec.so
           sha256sum ../magpie-mobile-android-arm64 > ../mobile-core.sha256
           go version -m ../magpie-mobile-android-arm64 > ../mobile-core-build-info.txt
@@ -128,6 +144,8 @@ jobs:
             build-tmp/androidhost-go-tests.jsonl
             build-tmp/mobile-core.sha256
             build-tmp/mobile-core-build-info.txt
+            build-tmp/official-plugin-smoke.txt
+            build-tmp/plugin-host-race.txt
           if-no-files-found: warn
 
       - name: Restore fixed release signing key
@@ -165,6 +183,9 @@ jobs:
           print('PASS: packaged mobile core matches exact CI build', hashlib.sha256(native).hexdigest())
           PY
 
+      - name: Probe production APK runtime payloads
+        run: python3 scripts/runtimeprobe.py --apk app/build/outputs/apk/release/app-release.apk --abi arm64-v8a
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -172,7 +193,102 @@ jobs:
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
-      - name: Publish APK to public release
+      - name: Upload signed release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-release-${{ github.sha }}
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            build-tmp/mobile-core.sha256
+            build-tmp/mobile-core-build-info.txt
+            build-tmp/apk-signature.txt
+            build-tmp/official-plugin-smoke.txt
+            build-tmp/plugin-host-race.txt
+          if-no-files-found: error
+
+  runtime-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: yetone/magpie
+          ref: b52c711142a662fe18fedf5a80cb1e4aa94bce62
+          path: build-tmp/upstream
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: build-tmp/upstream/go.mod
+          cache-dependency-path: build-tmp/upstream/go.sum
+      - name: Build actual Android test payloads from fixed source
+        run: |
+          set -euo pipefail
+          python3 scripts/apply-mobile-core.py --source-root build-tmp/upstream
+          bash scripts/build-android-test-runtime.sh build-tmp/upstream
+          gradle :app:assembleDebug :app:assembleDebugAndroidTest -PmagpieTestAbi=x86_64 --no-daemon --stacktrace
+          python3 scripts/runtimeprobe.py --apk app/build/outputs/apk/debug/app-debug.apk --abi x86_64 | tee build-tmp/android-runtime-probe.txt
+      - name: Enable KVM for Android emulator
+        run: |
+          sudo chmod 666 /dev/kvm
+      - name: Run real Android Go and Bun plugin tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+            trap 'mkdir -p build-tmp/android-plugin-runtime; adb pull /sdcard/Android/data/cc.fplj.magpiemobile/files/plugin-runtime build-tmp/android-plugin-runtime || true; adb logcat -d -s AndroidRuntime:E > build-tmp/android-plugin-runtime/android-errors.txt || true' EXIT
+            adb shell settings put global hidden_api_policy 1
+            gradle :app:connectedDebugAndroidTest -PmagpieTestAbi=x86_64 --no-daemon --stacktrace
+      - name: Collect Android runtime screenshots and evidence
+        if: always()
+        run: |
+          mkdir -p build-tmp/android-plugin-runtime
+          adb pull /sdcard/Android/data/cc.fplj.magpiemobile/files/plugin-runtime build-tmp/android-plugin-runtime || true
+          adb logcat -d -s AndroidRuntime:E > build-tmp/android-plugin-runtime/android-errors.txt || true
+      - name: Upload actual Android runtime reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-plugin-runtime-${{ github.sha }}
+          path: |
+            app/build/outputs/androidTest-results/
+            app/build/reports/androidTests/
+            build-tmp/android-plugin-runtime/
+            build-tmp/android-runtime-probe.txt
+            build-tmp/test-core-x86_64.sha256
+            build-tmp/test-core-x86_64-build-info.txt
+          if-no-files-found: warn
+
+  publish:
+    needs: [build, runtime-emulator]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the verified signed APK and evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: signed-release-${{ github.sha }}
+          path: release-artifacts
+
+      - name: Publish tested candidate APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -180,19 +296,20 @@ jobs:
           version_name=$(grep -E 'versionName\s*=\s*' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
           tag="v${version_name}-${GITHUB_SHA:0:8}"
           apk_name="magpie-mobile-${version_name}.apk"
-          cp app/build/outputs/apk/release/app-release.apk "$apk_name"
+          cp release-artifacts/app/build/outputs/apk/release/app-release.apk "$apk_name"
           sha256sum "$apk_name" | tee "${apk_name}.sha256"
-          printf 'Commit: %s\nSource: b52c711142a662fe18fedf5a80cb1e4aa94bce62\nCore: 0.1.3781-androidhost.1 (nogui,androidhost; full official API)\nActions run: %s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
-          cat build-tmp/mobile-core.sha256 build-tmp/apk-signature.txt >> build-info.txt
-          notes_file="build-tmp/release-notes.md"
+          printf 'Commit: %s\nSource: b52c711142a662fe18fedf5a80cb1e4aa94bce62\nCore: 0.1.3781-androidhost.2 (nogui,androidhost; official plugins)\nActions run: %s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
+          cat release-artifacts/build-tmp/mobile-core.sha256 release-artifacts/build-tmp/apk-signature.txt >> build-info.txt
+          printf 'Android runtime: x86_64 instrumentation; production ARM64 hardware verification pending.\n' >> build-info.txt
+          notes_file="release-artifacts/release-notes.md"
           if [ -f "RELEASE_NOTES.md" ]; then
             cp "RELEASE_NOTES.md" "$notes_file"
           else
             printf 'Magpie-Mobile 自动化发布 %s\n提交：%s\n' "$version_name" "$GITHUB_SHA" > "$notes_file"
           fi
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "Magpie-Mobile ${version_name} (${GITHUB_SHA:0:8})" --notes-file "$notes_file" --target "$GITHUB_SHA"
+            gh release create "$tag" --title "Magpie-Mobile ${version_name} (${GITHUB_SHA:0:8})" --notes-file "$notes_file" --target "$GITHUB_SHA" --prerelease
           else
-            gh release edit "$tag" --title "Magpie-Mobile ${version_name} (${GITHUB_SHA:0:8})" --notes-file "$notes_file"
+            gh release edit "$tag" --title "Magpie-Mobile ${version_name} (${GITHUB_SHA:0:8})" --notes-file "$notes_file" --prerelease
           fi
-          gh release upload "$tag" "$apk_name" "${apk_name}.sha256" build-info.txt build-tmp/mobile-core-build-info.txt --clobber
+          gh release upload "$tag" "$apk_name" "${apk_name}.sha256" build-info.txt release-artifacts/build-tmp/mobile-core-build-info.txt release-artifacts/build-tmp/official-plugin-smoke.txt --clobber

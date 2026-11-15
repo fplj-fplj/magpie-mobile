@@ -12,8 +12,9 @@ data class BunRuntimeStatus(
 )
 
 /**
- * Validates and inspects the embedded ARM64 Bun execution payload (libbun_exec.so)
- * in accordance with P2-4 requirements.
+ * Validates and inspects the embedded Bun execution payload (libbun_exec.so)
+ * in accordance with P2-4 requirements. Production builds ship ARM64; the
+ * emulator test build ships x86_64 and inspects it explicitly.
  */
 object BunRuntimeInspector {
 
@@ -21,8 +22,9 @@ object BunRuntimeInspector {
     private const val ELF_CLASS_64 = 2
     private const val ELF_DATA_2LSB = 1 // Little endian
     private const val EM_AARCH64 = 183 // ARM 64-bit architecture
+    private const val EM_X86_64 = 62 // x86-64 architecture
 
-    fun inspect(layout: EnginePaths.Layout): BunRuntimeStatus {
+    fun inspect(layout: EnginePaths.Layout, expectedArch: PayloadVerifier.Architecture = PayloadVerifier.Architecture.ARM64): BunRuntimeStatus {
         val bunFile = EnginePaths.bunExecutable(layout)
         val pathStr = bunFile.absolutePath
 
@@ -46,16 +48,17 @@ object BunRuntimeInspector {
             )
         }
 
-        val arch = detectElfArchitecture(bunFile)
-        val isAarch64 = arch == "aarch64"
+        val fileArch = detectElfArchitecture(bunFile)
+        val expected = if (expectedArch == PayloadVerifier.Architecture.ARM64) "aarch64" else "x86_64"
+        val isExpected = fileArch == expected
         val isExec = bunFile.canExecute()
 
         return BunRuntimeStatus(
             installed = true,
-            executable = isExec && isAarch64,
-            architecture = arch,
+            executable = isExec && isExpected,
+            architecture = fileArch,
             path = pathStr,
-            errorMessage = if (!isAarch64) "载荷非 ARM64 (AArch64) 架构: $arch" else null
+            errorMessage = if (!isExpected) "载荷非 ${expectedArch.label} 架构: $fileArch" else null
         )
     }
 
@@ -81,7 +84,11 @@ object BunRuntimeInspector {
 
             // e_machine at offset 18, 2 bytes, little endian
             val machine = (header[18].toInt() and 0xFF) or ((header[19].toInt() and 0xFF) shl 8)
-            if (machine == EM_AARCH64) "aarch64" else "machine-$machine"
+            when (machine) {
+                EM_AARCH64 -> "aarch64"
+                EM_X86_64 -> "x86_64"
+                else -> "machine-$machine"
+            }
         }
     } catch (_: Exception) {
         "unreadable"

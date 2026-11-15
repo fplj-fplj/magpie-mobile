@@ -5,6 +5,9 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+// 仅测试构建可用 -PmagpieTestAbi=x86_64 限定 ABI；生产 APK 不设置该属性，保持默认打包。
+val magpieTestAbi = providers.gradleProperty("magpieTestAbi").orNull
+
 android {
     namespace = "cc.fplj.magpiemobile"
     compileSdk = 35
@@ -13,10 +16,14 @@ android {
         applicationId = "cc.fplj.magpiemobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 40
-        versionName = "0.1.39-full-core-editors"
-        buildConfigField("String", "CORE_VERSION", "\"0.1.3781-androidhost.1\"")
+        versionCode = 41
+        versionName = "0.1.40-official-plugins"
+        buildConfigField("String", "CORE_VERSION", "\"0.1.3781-androidhost.2\"")
         buildConfigField("String", "GIT_SHA", "\"" + (System.getenv("GITHUB_SHA")?.take(8) ?: "local") + "\"")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        if (magpieTestAbi != null) {
+            ndk { abiFilters.add(magpieTestAbi!!) }
+        }
     }
 
     // P0-2 关键：ELF PIE 可执行载荷以“提取式”native 库打包，
@@ -63,6 +70,10 @@ ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 
 dependencies {
     implementation(project(":core"))
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.test:core:1.6.1")

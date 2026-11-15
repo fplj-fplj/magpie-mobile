@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -82,4 +83,34 @@ func TestAndroidHostCapabilitiesAdvertiseFullCore(t *testing.T) {
 	var got map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil { t.Fatal(err) }
 	if got["mobile"] != false || got["fullAdmin"] != true || got["webEditor"] != true || got["androidHost"] != true { t.Fatal("full core not advertised") }
+}
+
+func TestAndroidHostPluginGatewayRecoveryNeedsManagerAndOrigin(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	const key = "android-editor-test-key-0123456789"
+	h := androidHostEditor("3430", key, 0, nil, http.NotFoundHandler())
+	for _, cookie := range []string{"", "wrong"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, androidEditorRequest("POST", androidPluginGatewayRestorePath, cookie))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatal("anonymous recovery was accepted")
+		}
+	}
+	r := androidEditorRequest("POST", androidPluginGatewayRestorePath, key)
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatal("cross-site recovery was accepted")
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, androidEditorRequest("GET", androidPluginGatewayRestorePath, key))
+	if w.Code != http.StatusNotFound {
+		t.Fatal("read request rotated a key")
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, androidEditorRequest("POST", androidPluginGatewayRestorePath, key))
+	if w.Code != http.StatusOK || w.Body.String() != "{\"ok\":true}\n" {
+		t.Fatal("explicit recovery failed or returned credentials")
+	}
 }

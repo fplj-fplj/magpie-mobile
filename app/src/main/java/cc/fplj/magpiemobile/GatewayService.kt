@@ -98,14 +98,16 @@ class GatewayService : Service() {
         controller = GatewayEngineController(
             launch = {
                 val layout = EnginePaths.buildLayout(applicationInfo.nativeLibraryDir, filesDir, cacheDir)
+                val expectedArch = PayloadVerifier.Architecture.fromSupportedAbi(Build.SUPPORTED_ABIS)
                 val engineEnvironment = EngineEnvironment.prepare(layout) + mapOf(
                     "MAGPIE_WEB_KEY" to adminKey,
                     // Android 14+ system roots live in Conscrypt APEX. No TLS verification bypass.
                     "SSL_CERT_DIR" to "/apex/com.android.conscrypt/cacerts:/system/etc/security/cacerts",
                     "MAGPIE_ADDR" to "127.0.0.1:3425",
+                    "MAGPIE_PLUGIN_IMPORTS_DIR" to java.io.File(filesDir, "plugin-imports").absolutePath,
                 )
                 for (exe in listOf(EnginePaths.magpieExecutable(layout), EnginePaths.bunExecutable(layout))) {
-                    val verdict = PayloadVerifier.verify(exe)
+                    val verdict = PayloadVerifier.verify(exe, expectedArch)
                     check(verdict !is PayloadVerifier.Verdict.Fail) {
                         "载荷自检失败：" + (verdict as PayloadVerifier.Verdict.Fail).reason
                     }
