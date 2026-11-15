@@ -15,6 +15,7 @@ import java.io.Closeable
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ServerSocket
 import java.net.Socket
@@ -115,7 +116,7 @@ class OfficialPluginsInstrumentedTest {
                     await("async onResponse completion and request-owned state") {
                         responseMarker.isFile && responseMarker.readLines().any { line ->
                             val value = JSONObject(line)
-                            value.optBoolean("success") && value.optString("state") == "linked"
+                            value.optBoolean("success") && value.optString("state") == "linked" && value.optInt("bridgeStatus") == 200
                         }
                     }
                     var firstDeltaBeforeUpstreamDone = false
@@ -262,12 +263,26 @@ class OfficialPluginsInstrumentedTest {
                                     line.contains("libmagpie_exec.so") || line.contains("libbun_exec.so")
                                 }
                         }
+                        val stoppedProcesses = device.executeShellCommand("ps -A -o ARGS")
+                        assertFalse("Android process inspection failed", stoppedProcesses.contains("ps:"))
+                        File(artifacts, "shutdown-processes.txt").writeText(stoppedProcesses)
+                        for (port in listOf(3425, 3430)) {
+                            assertFalse("core port $port still accepts connections", runCatching {
+                                Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 500) }
+                                true
+                            }.getOrDefault(false))
+                        }
                         File(artifacts, "shutdown.txt").writeText("PASS: core and Bun processes stopped\n")
                     } finally {
                         // AGP removes app storage when it uninstalls the test APK. Keep the
                         // evidence under the test shell's directory before returning to AGP.
                         device.executeShellCommand("mkdir -p /data/local/tmp/magpie-plugin-runtime")
-                        device.executeShellCommand("cp -R '${artifacts.absolutePath}/.' /data/local/tmp/magpie-plugin-runtime/")
+                        // UiAutomation splits arguments directly; this app-owned path has
+                        // no spaces, and shell quoting would become literal filename text.
+                        device.executeShellCommand("cp -R ${artifacts.absolutePath}/. /data/local/tmp/magpie-plugin-runtime/")
+                        assertEquals("runtime evidence was not copied before uninstall",
+                            "/data/local/tmp/magpie-plugin-runtime/core-status.txt",
+                            device.executeShellCommand("ls /data/local/tmp/magpie-plugin-runtime/core-status.txt").trim())
                     }
                 }
             }
@@ -429,12 +444,13 @@ class OfficialPluginsInstrumentedTest {
                 ctx.signal.addEventListener("abort", () => {clearTimeout(timer);reject(new DOMException("fixture aborted","AbortError"))}, {once:true})
               })
               const recalled = await fetch(ctx.options.base + "/recall").then(r => r.json())
+              ctx.state.bridgeStatus = (await fetch("http://127.0.0.1:3425/v1/models")).status
               ctx.state.link = "linked"
               body.messages[body.messages.length - 1].content += "|" + recalled.context
               return body
             }
             export async function onResponse(reply, ctx) {
-              appendFileSync(process.env.HOME + "/runtime-hook-response.jsonl",JSON.stringify({success:ctx.success,state:ctx.state.link}) + "\n")
+              appendFileSync(process.env.HOME + "/runtime-hook-response.jsonl",JSON.stringify({success:ctx.success,state:ctx.state.link,bridgeStatus:ctx.state.bridgeStatus}) + "\n")
             }
         """.trimIndent()
     }

@@ -152,8 +152,11 @@ class ProviderManagementClient(
         val body = request("GET", "/api/mobile/capabilities")
         val row = readSafe { Json.parseToJsonElement(body).objectValue() }
         val version = row["coreVersion"] as? JsonPrimitive
+        val supportedHost = row.strictBoolOrNull("mobile") == true ||
+            (row.strictBoolOrNull("mobile") == false && row.strictBoolOrNull("androidHost") == true &&
+                row.strictBoolOrNull("fullAdmin") == true)
         if (row["schemaVersion"] != JsonPrimitive(1) || version == null || !version.isString || version.content.isBlank() ||
-            row.strictBoolOrNull("mobile") != true || row.strictBoolOrNull("loopbackKeys") != true ||
+            !supportedHost || row.strictBoolOrNull("loopbackKeys") != true ||
             row.strictBoolOrNull("adminLoopbackOnly") != true || row.strictBoolOrNull("debugEndpoints") != false ||
             row.strictBoolOrNull("nativeAutoUpdate") != false || row["providerSchemaVersion"] != JsonPrimitive(1) ||
             row.strictBoolOrNull("providerManagement") != true) throw ManagementCapabilitiesMismatch()

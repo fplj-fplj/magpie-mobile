@@ -118,6 +118,10 @@ class ProviderManagementClientTest {
             JsonObject(original + ("loopbackKeys" to JsonPrimitive(false))),
             JsonObject(original + ("debugEndpoints" to JsonPrimitive(true))),
             JsonObject(original + ("schemaVersion" to JsonPrimitive("1"))),
+            JsonObject(original + ("mobile" to JsonPrimitive(false))),
+            JsonObject(original + mapOf("mobile" to JsonPrimitive(false), "androidHost" to JsonPrimitive(true))),
+            JsonObject(original + mapOf("mobile" to JsonPrimitive(false), "androidHost" to JsonPrimitive(false), "fullAdmin" to JsonPrimitive(true))),
+            JsonObject(original + mapOf("mobile" to JsonPrimitive(false), "androidHost" to JsonPrimitive(true), "fullAdmin" to JsonPrimitive("true"))),
         )
         for (variant in variants) {
             api.capabilitiesBody = variant.toString()
@@ -140,6 +144,21 @@ class ProviderManagementClientTest {
         assertEquals(1, api.requests.count { it.path == "/api/mobile/capabilities" })
         assertEquals(1, api.createRequests.get())
         assertEquals(1, api.editRequests.get())
+    }
+
+    @Test fun officialAndroidHostNegotiatesProviderCreationAndEditing() {
+        val original = Json.parseToJsonElement(ProviderApiFixture.CAPABILITIES).jsonObject
+        api.capabilitiesBody = JsonObject(original + mapOf(
+            "coreVersion" to JsonPrimitive("0.1.3781-androidhost.2"),
+            "mobile" to JsonPrimitive(false), "androidHost" to JsonPrimitive(true), "fullAdmin" to JsonPrimitive(true),
+        )).toString()
+        val client = api.client()
+        client.create(draft())
+        val snapshot = client.editable("new-provider")
+        client.edit(ProviderEditDraft(snapshot, name = "Official host provider"))
+        assertEquals(1, api.createRequests.get())
+        assertEquals(1, api.editRequests.get())
+        assertEquals(1, api.requests.count { it.path == "/api/mobile/capabilities" })
     }
 
     @Test fun observedFileErrorOrMalformedRefreshPreventsWriteUntilExplicitHealthyReload() {
