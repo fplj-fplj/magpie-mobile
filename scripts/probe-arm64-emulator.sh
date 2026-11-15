@@ -31,9 +31,9 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 settings = dict(line.split('=', 1) for line in path.read_text().splitlines() if '=' in line)
-# Host metadata only: avoid QEMU's unconditional API>=26 HDA device on a PCI-less ARM machine.
-# The installed boot/system/vendor images remain Android API 30; verify the guest's actual API.
-settings['target'] = 'android-25'
+# Keep the real image API; override QEMU's host-selected ranchu machine with ARM virt below.
+# Android's virt machine provides the PCI bus needed by modern guest devices.
+settings['target'] = 'android-30'
 path.write_text(''.join(key.strip() + '=' + value.strip() + '\n' for key, value in settings.items()))
 Path(sys.argv[2], 'avd-host-target-override.ini').write_text(path.read_text())
 PY
@@ -53,7 +53,7 @@ LD_LIBRARY_PATH="$emulator_library_path" ANDROID_EMULATOR_LAUNCHER_DIR="$sdk_roo
   "$backend_bin" -avd magpie-arm64-probe -port 5580 \
   -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -show-kernel -verbose \
   -feature -VirtioInput,-VirtioWifi,-VirtioVsockPipe,-VirtioSndCard \
-  -accel off -memory 2048 -cores 2 > "$report/emulator.log" 2>&1 &
+  -accel off -memory 2048 -cores 2 -qemu -machine type=virt > "$report/emulator.log" 2>&1 &
 emulator_pid=$!
 booted=false
 for ((attempt=0; attempt<80; attempt++)); do
@@ -75,7 +75,7 @@ booted = sys.argv[2] == 'true'
 abi = (root / 'guest-abi.txt').read_text().strip() if booted else ''
 result = {'hostMachine': platform.machine(), 'bootCompleted': booted,
           'launchMethod': 'official-qemu2-aarch64-backend',
-          'hostTargetOverride': 25, 'installedSystemImageAPI': 30,
+          'hostTargetOverride': 30, 'qemuMachineOverride': 'virt', 'installedSystemImageAPI': 30,
           'guestAPI': (root / 'guest-api.txt').read_text().strip() if booted else '',
           'guestABI': abi, 'elapsedSeconds': int(time.time()) - int(sys.argv[3]),
           'androidPluginRuntimeVerified': False}
