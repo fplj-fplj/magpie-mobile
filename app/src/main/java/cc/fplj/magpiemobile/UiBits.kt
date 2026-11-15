@@ -1,5 +1,6 @@
 package cc.fplj.magpiemobile
 
+import android.view.ViewGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -87,6 +88,7 @@ internal fun FullScreenDialogSystemBars() {
     val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
     SideEffect {
         val window = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
+        window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         WindowCompat.getInsetsController(window, view).apply {
             isAppearanceLightStatusBars = light
             isAppearanceLightNavigationBars = light
