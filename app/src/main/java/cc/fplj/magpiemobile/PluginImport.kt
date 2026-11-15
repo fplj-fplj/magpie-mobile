@@ -146,12 +146,13 @@ internal class PluginImporter(
 
     private fun references(snapshot: PluginSnapshot): Set<String>? {
         val references = snapshot.entries.map { it.spec }.toMutableList()
-        if (coreList != null) {
+        val listFile = coreList
+        if (listFile != null) {
             // Official Load can project an unreadable file as an empty list. An empty API
             // response alone must not authorize deleting the user's imported source files.
             val diskSpecs = runCatching {
-                require(coreList.isFile && coreList.length() in 1..8L * 1024 * 1024)
-                val json = Json.parseToJsonElement(coreList.readText()) as JsonObject
+                require(listFile.isFile && listFile.length() in 1..8L * 1024 * 1024)
+                val json = Json.parseToJsonElement(listFile.readText()) as JsonObject
                 val rows = when (val value = json["plugins"]) {
                     JsonNull -> emptyList()
                     is JsonArray -> value.toList()
