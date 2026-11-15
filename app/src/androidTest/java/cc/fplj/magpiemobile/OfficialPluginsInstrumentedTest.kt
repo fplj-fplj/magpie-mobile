@@ -190,7 +190,12 @@ class OfficialPluginsInstrumentedTest {
                         FixturePluginDocumentsProvider.AUTHORITY, FixturePluginDocumentsProvider.DOC_SINGLE), false)
                     val safTree = importer.importPlugin(DocumentsContract.buildTreeDocumentUri(
                         FixturePluginDocumentsProvider.AUTHORITY, FixturePluginDocumentsProvider.DOC_TREE), true)
-                    for (spec in listOf(safFile, safTree)) { client.add(spec); installed.add(spec) }
+                    for (spec in listOf(safFile, safTree)) {
+                        importer.markSubmitted(spec)
+                        client.add(spec)
+                        installed.add(spec)
+                    }
+                    importer.reconcile(client.plugins())
                     assertTrue(File(safTree, "node_modules/is-number/index.js").isFile)
                     val safReply = http("http://127.0.0.1:3425/v1/chat/completions", auth, body.toString())
                     assertEquals(200, safReply.first)
@@ -206,9 +211,10 @@ class OfficialPluginsInstrumentedTest {
                         .getJSONObject("result").getJSONArray("tools")
                     assertFalse((0 until offTools.length()).any { offTools.getJSONObject(it).getString("name") == safName })
                     client.setOff(safTree, false)
-                    client.remove(safTree)
+                    assertEquals(200, http("http://127.0.0.1:3430/api/plugins/remove", "",
+                        JSONObject().put("spec", safTree).toString(), browserCookie).first)
                     assertTrue(client.plugins().entries.none { it.spec == safTree })
-                    importer.removeImported(safTree)
+                    importer.reconcile(client.plugins())
                     assertFalse(File(safTree).exists())
                     installed.remove(safTree)
                     device.findObject(By.text("更多"))?.click()

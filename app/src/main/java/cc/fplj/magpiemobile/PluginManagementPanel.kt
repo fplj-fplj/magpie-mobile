@@ -33,6 +33,7 @@ import androidx.core.view.WindowCompat
 import cc.fplj.magpiemobile.core.*
 import cc.fplj.magpiemobile.theme.UiSpacing
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -68,12 +69,14 @@ internal fun PluginManagementPanel(
             var submitted = false
             try {
                 val spec = withContext(Dispatchers.IO) { importer.importPlugin(uri, tree).also { staged = it } }
+                withContext(Dispatchers.IO) { importer.markSubmitted(spec) }
                 installOpen = false
                 submitted = viewModel.edit(PluginEdit.Add(spec))
                 if (!submitted) {
                     viewModel.notice("核心连接已变化，请重新连接后导入")
                 }
-            } catch (_: Exception) { viewModel.importError() }
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (_: Exception) { viewModel.importError() }
             finally {
                 if (!submitted) staged?.let { spec -> withContext(NonCancellable + Dispatchers.IO) { importer.removeImported(spec) } }
                 importing = false
@@ -205,7 +208,7 @@ internal fun PluginManagementPanel(
     removingSpec?.let { spec -> AlertDialog(onDismissRequest = { removingSpec = null }, title = { Text("移除此插件？") },
         text = { Text("它提供的模型、工具和网关 hooks 将停止使用。") },
         confirmButton = { TextButton(enabled = canWrite, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error), onClick = {
-            viewModel.edit(PluginEdit.Remove(spec)) { scope.launch(NonCancellable + Dispatchers.IO) { importer.removeImported(spec) } }
+            viewModel.edit(PluginEdit.Remove(spec))
             removingSpec = null; selectedSpec = null
         }) { Text("移除插件") } }, dismissButton = { TextButton(onClick = { removingSpec = null }) { Text("保留") } }) }
 

@@ -92,6 +92,9 @@ internal class PluginManagementViewModel(
     private val performEdit: suspend (PluginEdit) -> PluginSnapshot = ::liveEdit,
     private val performAuth: suspend (PluginAuthStep) -> PluginAuthReply = ::liveAuth,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val reconcileImports: suspend (PluginSnapshot) -> Unit = {},
+    private val removeImport: suspend (String) -> Unit = {},
+    private val rejectImport: suspend (String) -> Unit = {},
 ) : ViewModel() {
     private val mutable = MutableStateFlow(OfficialPluginsState(
         pending = savedState["plugin.pending"] ?: false,
@@ -102,7 +105,11 @@ internal class PluginManagementViewModel(
     private var generation = 0L
     private var marketGeneration = 0L
     private var refreshQueued = false
-    private var pendingEdit: PluginEdit? = null
+    private var pendingEdit: PluginEdit? = when (savedState.get<String>("plugin.operation")) {
+        "add" -> PluginEdit.Add(savedState["plugin.spec"] ?: "")
+        "remove" -> PluginEdit.Remove(savedState["plugin.spec"] ?: "")
+        else -> null
+    }
     private var prior: PluginSnapshot? = null
     private var authGeneration = 0L
     private var authRequest = 0L
@@ -138,7 +145,10 @@ internal class PluginManagementViewModel(
                 val pending = mutable.value.pending
                 val proved = pending && confirmed(pendingEdit, plugins, providers)
                 val elapsed = pending && clock() - (savedState.get<Long>("plugin.started") ?: clock()) >= UNKNOWN_WAIT
+                if (proved && pendingEdit is PluginEdit.Remove) removeImport(pendingEdit!!.spec)
                 if (proved || elapsed) clearPending()
+                if (!mutable.value.pending) reconcileImports(plugins)
+                if (owner != session || revision != generation) return@launch
                 mutable.update { it.copy(snapshot = plugins, providers = providers,
                     notice = if (proved) "操作结果已核对" else if (elapsed) "安装任务时限已结束，已重新读取核心配置" else it.notice) }
                 if (pending && (proved || elapsed)) onChanged()
@@ -163,7 +173,7 @@ internal class PluginManagementViewModel(
         }
     }
 
-    fun edit(edit: PluginEdit, onConfirmed: () -> Unit = {}): Boolean {
+    fun edit(edit: PluginEdit): Boolean {
         val session = owner ?: return false
         if (mutable.value.busy || mutable.value.pending || mutable.value.authBusy) return false
         val revision = ++generation
@@ -172,6 +182,11 @@ internal class PluginManagementViewModel(
         savedState["plugin.pending"] = true
         savedState["plugin.spec"] = edit.spec
         savedState["plugin.started"] = clock()
+        when (edit) {
+            is PluginEdit.Add -> savedState["plugin.operation"] = "add"
+            is PluginEdit.Remove -> savedState["plugin.operation"] = "remove"
+            else -> savedState.remove<String>("plugin.operation")
+        }
         mutable.update { it.copy(busy = true, pendingSpec = edit.spec, error = "", notice = "") }
         viewModelScope.launch {
             var known = false
@@ -179,9 +194,11 @@ internal class PluginManagementViewModel(
                 val result = performEdit(edit)
                 known = true
                 if (owner != session || revision != generation) return@launch
+                if (edit is PluginEdit.Remove && result.entries.none { sameSpec(it.spec, edit.spec) }) removeImport(edit.spec)
+                reconcileImports(result)
+                if (owner != session || revision != generation) return@launch
                 clearPending()
                 mutable.update { it.copy(snapshot = result, notice = "核心配置已更新") }
-                onConfirmed()
                 onChanged()
                 val providers = readProviders()
                 if (revision == generation) mutable.update { it.copy(providers = providers) }
@@ -189,6 +206,15 @@ internal class PluginManagementViewModel(
             catch (e: Exception) {
                 if (revision == generation) {
                     val unknown = !known && (e is ManagementExecutionUnknown || e is PluginWriteUnknownException)
+                    if (!known && !unknown && edit is PluginEdit.Add) {
+                        rejectImport(edit.spec)
+                        // A definite HTTP rejection still needs a successful read before deleting files.
+                        val actual = try { readPlugins() } catch (cancel: CancellationException) { throw cancel }
+                            catch (_: Exception) { null }
+                        if (owner == session && revision == generation && actual != null &&
+                            actual.entries.none { sameSpec(it.spec, edit.spec) }) removeImport(edit.spec)
+                    }
+                    if (owner != session || revision != generation) return@launch
                     if (!unknown) clearPending()
                     mutable.update { it.copy(pending = unknown, error = if (known) "配置已保存，刷新失败；请重新读取" else safeError(e)) }
                 }
@@ -227,6 +253,7 @@ internal class PluginManagementViewModel(
         savedState["plugin.pending"] = false
         savedState["plugin.spec"] = ""
         savedState.remove<Long>("plugin.started")
+        savedState.remove<String>("plugin.operation")
         pendingEdit = null
         prior = null
         mutable.update { it.copy(pending = false, pendingSpec = "") }

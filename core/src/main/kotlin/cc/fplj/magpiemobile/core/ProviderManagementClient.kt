@@ -18,9 +18,11 @@ class ProviderManagementClient(
     credential: ManagerCredential,
     baseUrl: String = "http://127.0.0.1:3430",
     timeout: Duration = Duration.ofSeconds(5),
+    writeTimeout: Duration = Duration.ofSeconds(30),
 ) {
     private val endpoint = LoopbackEndpoint(baseUrl)
     private val transport: BoundedCoreHttp
+    private val writeTransport: BoundedCoreHttp
     @Volatile private var providerCapabilitiesVerified = false
     @Volatile private var modelDiscoverySupported = false
     @Volatile private var observedFileError = false
@@ -28,6 +30,7 @@ class ProviderManagementClient(
         require(endpoint.port != 3425) { "管理 cookie 不得发送到网关" }
         require(endpoint.port == credential.port) { "管理 cookie 端口不匹配" }
         transport = BoundedCoreHttp(endpoint, timeout, credential.cookieHeader())
+        writeTransport = BoundedCoreHttp(endpoint, writeTimeout, credential.cookieHeader())
     }
 
     fun list(): ProviderListSnapshot = getProviders()
@@ -165,7 +168,7 @@ class ProviderManagementClient(
     }
 
     private fun request(method: String, path: String, body: ByteArray? = null): String = try {
-        transport.request(method, path, body)
+        (if (method == "POST") writeTransport else transport).request(method, path, body)
     } catch (error: ManagementHttpException) {
         // A server-side write failure may be after commit (including core write_unknown503).
         // Do not read free error bodies to distinguish it; conservatively require readonly review.

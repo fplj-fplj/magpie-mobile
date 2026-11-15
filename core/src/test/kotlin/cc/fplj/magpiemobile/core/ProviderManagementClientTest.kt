@@ -374,6 +374,19 @@ class ProviderManagementClientTest {
         assertEquals(1, api.editRequests.get())
     }
 
+    @Test fun canonicalWriteHasItsOwnBudgetAndDoesNotReuseTheShortReadTimeout() {
+        val client = api.client(Duration.ofMillis(200), Duration.ofSeconds(2))
+        val snapshot = client.editable("custom-api")
+        api.editHook = { exchange, request ->
+            api.commitEdit(request)
+            Thread.sleep(400)
+            api.respond(exchange, 200, api.safeSnapshot().toString())
+        }
+        val result = client.edit(ProviderEditDraft(snapshot, name = "Slow disk commit"))
+        assertEquals("Slow disk commit", result.name)
+        assertEquals(1, api.editRequests.get())
+    }
+
     @Test fun non2xxAndMalformedResponseNeverExposeErrorBodyOrSerializationCause() {
         api.createHook = { exchange, _ -> api.respond(exchange, 401, "error " + ProviderApiFixture.API_KEY) }
         val http = assertFailsWith<ManagementHttpException> { api.client().create(draft()) }
@@ -499,7 +512,8 @@ internal class ProviderApiFixture : AutoCloseable {
         }
         server.start()
     }
-    fun client(timeout: Duration = Duration.ofSeconds(2)) = ProviderManagementClient(credential, baseUrl, timeout)
+    fun client(timeout: Duration = Duration.ofSeconds(2), writeTimeout: Duration = timeout) =
+        ProviderManagementClient(credential, baseUrl, timeout, writeTimeout)
     fun safeSnapshot(): JsonObject = buildJsonObject {
         put("id", canonical["id"]!!); put("revision", revision); put("name", canonical["name"]!!)
         put("chat", canonical["chat"]!!); put("models", canonical["models"]!!); put("noModels", canonical["noModels"]!!)

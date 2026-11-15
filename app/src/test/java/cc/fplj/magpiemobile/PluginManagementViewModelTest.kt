@@ -69,7 +69,67 @@ class PluginManagementViewModelTest {
         assertTrue(restored.state.value.pending)
         restored.edit(PluginEdit.Add("fixture"))
         assertEquals(0, writes)
-        assertEquals(setOf("plugin.pending", "plugin.spec", "plugin.started"), saved.keys())
+        assertEquals(setOf("plugin.pending", "plugin.spec", "plugin.started", "plugin.operation"), saved.keys())
+    }
+
+    @Test fun rejectedImportIsDeletedOnlyAfterAReadProvesItUnreferenced() = runTest(dispatcher) {
+        val cleaned = mutableListOf<String>()
+        var readable = true
+        var snapshot = PluginSnapshot()
+        val vm = PluginManagementViewModel(readPlugins = {
+            if (!readable) throw PluginReadException()
+            snapshot
+        }, readProviders = { emptyList() }, performEdit = { throw IllegalArgumentException() }, removeImport = { cleaned.add(it) })
+        vm.attach(1)
+        vm.edit(PluginEdit.Add("/private/import-a/plugin.ts"))
+        assertEquals(listOf("/private/import-a/plugin.ts"), cleaned)
+        readable = false
+        vm.edit(PluginEdit.Add("/private/import-b/plugin.ts"))
+        assertEquals(1, cleaned.size)
+        readable = true
+        snapshot = PluginSnapshot(entries = listOf(ManagedPlugin("/private/import-c/plugin.ts")))
+        vm.edit(PluginEdit.Add("/private/import-c/plugin.ts"))
+        assertEquals(1, cleaned.size)
+    }
+
+    @Test fun unknownRemoveSurvivesRecreationAndCleansOnlyOnConfirmedAbsence() = runTest(dispatcher) {
+        val spec = "/private/import/plugin.ts"
+        val saved = SavedStateHandle()
+        var snapshot = PluginSnapshot(entries = listOf(ManagedPlugin(spec)))
+        val cleaned = mutableListOf<String>()
+        val first = PluginManagementViewModel(savedState = saved, readPlugins = { snapshot }, readProviders = { emptyList() },
+            performEdit = { throw PluginWriteUnknownException() }, removeImport = { cleaned.add(it) }, clock = { 1000 })
+        first.attach(1)
+        first.edit(PluginEdit.Remove(spec))
+        first.refresh()
+        assertTrue(cleaned.isEmpty())
+        val restored = PluginManagementViewModel(savedState = saved, readPlugins = { snapshot }, readProviders = { emptyList() },
+            removeImport = { cleaned.add(it) }, clock = { 2000 })
+        restored.attach(2)
+        assertTrue(restored.state.value.pending)
+        snapshot = PluginSnapshot()
+        restored.refresh()
+        restored.refresh()
+        assertEquals(listOf(spec), cleaned)
+        assertFalse(restored.state.value.pending)
+    }
+
+    @Test fun unknownAddAndFailedRefreshNeverTriggerSnapshotReconciliation() = runTest(dispatcher) {
+        var readable = true
+        var reconciliations = 0
+        val vm = PluginManagementViewModel(readPlugins = {
+            if (!readable) throw PluginReadException()
+            PluginSnapshot()
+        }, readProviders = { emptyList() }, performEdit = { throw PluginWriteUnknownException() },
+            reconcileImports = { reconciliations++ }, clock = { 1000 })
+        vm.attach(1)
+        assertEquals(1, reconciliations)
+        vm.edit(PluginEdit.Add("/private/import/plugin.ts"))
+        vm.refresh()
+        assertEquals(1, reconciliations)
+        readable = false
+        vm.refresh()
+        assertEquals(1, reconciliations)
     }
 
     @Test fun previousCoreReadCannotReplaceCurrentCoreState() = runTest(dispatcher) {
