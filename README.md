@@ -53,6 +53,8 @@
 
 当前屏幕阅读版：[`0.1.41-reader-switch` 签名候选](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.41-reader-switch-84554557)。[构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43687912271)、[缓存命中构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43688502899)和[独立验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43687912256)全部通过；566 项 JVM、Go、官方插件及 Android 启停运行结果与下载核对记录见[本轮验收](docs/ui-update-0.1.41.md#已完成的-actions-验证2026-11-15)。
 
+当前全屏编辑修复版：[`0.1.42-provider-insets` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.42-provider-insets-1f998255)。[构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43693920521)和[完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43693920526)均通过，高级页保存按钮已由 Android 设备断言和截图验证。
+
 官方插件完整通过基线：[`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460) 与[对应签名候选](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-05072a47)。候选 APK 与构建／运行证据对应同一提交；运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 
 本地大版本升级基线：v0.1.3622 起步（旧基线 v0.1.3188 的 24 个补丁目标文件零变更，升级流程见技能库与 gap-analysis §5）。
