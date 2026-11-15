@@ -20,7 +20,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -298,7 +297,7 @@ private fun PluginDetailDialog(
                                 }
                                 Text("MCP 地址", style = MaterialTheme.typography.labelLarge)
                                 SelectionContainer { Text("http://127.0.0.1:3425/mcp/magpie/tools",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)) }
+                                    style = MaterialTheme.typography.bodySmall) }
                                 Text("在客户端添加此地址，并填写网关客户端密钥。", style = MaterialTheme.typography.bodySmall)
                             }
                             if (plugin.isMiddleware) Text("同步中间件在网关请求中执行。", style = MaterialTheme.typography.bodySmall)
@@ -309,7 +308,7 @@ private fun PluginDetailDialog(
                             Text("插件参数", style = MaterialTheme.typography.titleMedium)
                             Text("使用插件声明的 options。修改后由官方核心保存。", style = MaterialTheme.typography.bodySmall)
                             OutlinedTextField(options, { options = it; optionsError = "" }, label = { Text("JSON 参数") }, minLines = 8,
-                                enabled = canWrite, textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                enabled = canWrite, textStyle = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.fillMaxWidth().testTag("plugin-options-json").semantics { testTagsAsResourceId = true })
                             if (optionsError.isNotBlank()) Text(optionsError, color = MaterialTheme.colorScheme.error)
                             Button(enabled = canWrite, onClick = {
@@ -404,7 +403,7 @@ private fun PluginLoginDialog(viewModel: PluginManagementViewModel, state: Offic
                             else -> "等待完成登录"
                         }, style = MaterialTheme.typography.titleMedium)
                         if (signIn.instructions.isNotBlank()) Text(SecretRedactor.redact(signIn.instructions), style = MaterialTheme.typography.bodyMedium)
-                        if (signIn.code.isNotBlank()) Text(signIn.code, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Monospace)
+                        if (signIn.code.isNotBlank()) Text(signIn.code, style = MaterialTheme.typography.headlineMedium)
                         if (!finished) {
                             Button(enabled = !state.authBusy, onClick = { viewModel.openLoginBrowser(browser) }) { Text("打开登录浏览器") }
                             if (signIn.pasteCallback || signIn.pasteCode || signIn.pasteKey) {

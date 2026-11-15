@@ -155,7 +155,10 @@ fun Dashboard(
                         Column(Modifier.weight(1f)) {
                             Text(
                                 section?.title ?: "Magpie Mobile",
-                                style = MaterialTheme.typography.titleMedium,
+                                style = if (section == null) MaterialTheme.typography.titleMedium.copy(
+                                    fontFamily = cc.fplj.magpiemobile.theme.BrandFont,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                                ) else MaterialTheme.typography.titleMedium,
                                 modifier = Modifier.semantics { heading() },
                             )
                             if (section != null) Text(pageTitle(shell.page), style = MaterialTheme.typography.labelSmall)

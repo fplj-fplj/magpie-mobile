@@ -6,7 +6,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import cc.fplj.magpiemobile.core.GatewayEngineController
 import cc.fplj.magpiemobile.theme.UiSpacing
@@ -53,6 +57,7 @@ internal fun DestinationRow(
     }
 }
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun GatewayOverview(
     gateway: GatewayEngineController.Status,
@@ -77,11 +82,33 @@ internal fun GatewayOverview(
         shape = MaterialTheme.shapes.large,
     ) {
         Column(Modifier.padding(UiSpacing.card), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("GATEWAY / 01", style = MaterialTheme.typography.labelSmall)
-                AppIcon(AppSymbol.GATEWAY)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(UiSpacing.medium), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
+                    Text("本机网关", style = MaterialTheme.typography.labelLarge)
+                    Text(if (stopping) "正在停止…" else gatewayLabel(gateway.phase), style = MaterialTheme.typography.headlineMedium)
+                }
+                Switch(
+                    checked = active,
+                    onCheckedChange = { checked -> if (checked) onStart() else onStop() },
+                    enabled = !stopping,
+                    modifier = Modifier.testTag("gateway-power-switch").semantics {
+                        testTagsAsResourceId = true
+                        contentDescription = "网关开关"
+                        stateDescription = if (stopping) "正在停止" else gatewayLabel(gateway.phase)
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = colors.onPrimary,
+                        checkedTrackColor = colors.primary,
+                        checkedBorderColor = colors.primary,
+                        uncheckedThumbColor = colors.inverseOnSurface,
+                        uncheckedTrackColor = colors.inverseSurface,
+                        uncheckedBorderColor = colors.inverseOnSurface.copy(alpha = 0.65f),
+                        disabledCheckedThumbColor = colors.inverseOnSurface.copy(alpha = 0.7f),
+                        disabledCheckedTrackColor = colors.inverseOnSurface.copy(alpha = 0.2f),
+                        disabledCheckedBorderColor = colors.inverseOnSurface.copy(alpha = 0.4f),
+                    ),
+                )
             }
-            Text(if (stopping) "正在停止…" else gatewayLabel(gateway.phase), style = MaterialTheme.typography.headlineMedium)
             Text(
                 when {
                     stopping -> "正在回收进程，请稍候。"
@@ -92,18 +119,11 @@ internal fun GatewayOverview(
                 },
                 style = MaterialTheme.typography.bodyMedium,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
-                Button(enabled = !active, onClick = onStart) { Text("启动网关") }
-                OutlinedButton(
-                    enabled = active && !stopping, onClick = onStop,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.inverseOnSurface),
-                ) { Text("停止") }
-            }
             HorizontalDivider(color = colors.inverseOnSurface.copy(alpha = 0.2f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
                 Column(Modifier.weight(1f)) {
                     Text("本机端点", style = MaterialTheme.typography.labelSmall)
-                    Text("127.0.0.1:3425", style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace))
+                    Text("127.0.0.1:3425", style = MaterialTheme.typography.bodyMedium)
                 }
                 Column {
                     Text("可用模型", style = MaterialTheme.typography.labelSmall)

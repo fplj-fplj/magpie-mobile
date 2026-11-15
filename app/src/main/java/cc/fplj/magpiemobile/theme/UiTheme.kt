@@ -1,10 +1,5 @@
 package cc.fplj.magpiemobile.theme
 
-import android.content.res.Resources
-import android.graphics.Typeface
-import android.graphics.fonts.Font as AndroidFont
-import android.graphics.fonts.FontFamily as AndroidFontFamily
-import android.graphics.fonts.FontStyle
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
@@ -14,11 +9,11 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontSynthesis
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cc.fplj.magpiemobile.R
@@ -28,28 +23,14 @@ import cc.fplj.magpiemobile.R
  *
  * 设计语言：技术性 × 人文温度 —— 暖米色大地调基底、衬线/无衬线混排、
  * 唯一强调色陶土橙。首页采用编辑叙事排版，二级管理界面保留功能密度。
- * 字体：Lora + 霞鹜文楷（标题与正文，SIL OFL）、Poppins（UI/按钮/标签，SIL OFL），
+ * 字体：霞鹜文楷屏幕阅读版（全界面，SIL OFL），顶部品牌文字保留 Poppins。
  * 许可文本随包分发在 assets/licenses/。全应用零硬编码颜色，统一经 MaterialTheme 取用。
  */
 
 // —— 字体族 ——
-/**
- * Compose 的 Font 列表是字重匹配表，不能当 CSS 那样按缺字回退。
- * API 29 的原生 CustomFallbackBuilder 确保拉丁字用 Lora，汉字用文楷，
- * 文楷缺少的生僻字继续交由系统字体显示。应用最低 API 已是 29。
- */
-private fun readerFont(resources: Resources): FontFamily {
-    val latin = AndroidFontFamily.Builder(AndroidFont.Builder(resources, R.font.lora).setWeight(400).build())
-        .addFont(AndroidFont.Builder(resources, R.font.lora_italic).setWeight(400).setSlant(FontStyle.FONT_SLANT_ITALIC).build())
-        .build()
-    val chinese = AndroidFontFamily.Builder(AndroidFont.Builder(resources, R.font.lxgw_wenkai).setWeight(400).build()).build()
-    return FontFamily(Typeface.CustomFallbackBuilder(latin)
-        .addCustomFallback(chinese)
-        .setSystemFallback("serif")
-        .setStyle(FontStyle(400, FontStyle.FONT_SLANT_UPRIGHT))
-        .build())
-}
-internal val Sans = FontFamily(
+/** Screen already uses heavier WenKai outlines. Bold emphasis is synthesized from that face. */
+internal val Reader = FontFamily(Font(R.font.lxgw_wenkai_screen, FontWeight.Normal))
+internal val BrandFont = FontFamily(
     Font(R.font.poppins, FontWeight.Normal),
     Font(R.font.poppins_medium, FontWeight.Medium),
     Font(R.font.poppins_semibold, FontWeight.SemiBold),
@@ -126,23 +107,28 @@ private val DarkColors = darkColorScheme(
     scrim = Color(0xFF0A0A09),
 )
 
-// —— 排版：标题/正文衬线（Lora），UI/按钮/标签无衬线（Poppins）——
-private fun anthropicTypography(Serif: FontFamily) = Typography(
-    displayLarge = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 46.sp, lineHeight = 52.sp),
-    displayMedium = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 38.sp, lineHeight = 44.sp),
-    displaySmall = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 32.sp, lineHeight = 38.sp),
-    headlineLarge = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 30.sp, lineHeight = 36.sp),
-    headlineMedium = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 26.sp, lineHeight = 32.sp),
-    headlineSmall = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 22.sp, lineHeight = 28.sp),
-    titleLarge = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 26.sp),
-    titleMedium = TextStyle(fontFamily = Sans, fontWeight = FontWeight.Medium, fontSize = 16.sp, lineHeight = 22.sp),
-    titleSmall = TextStyle(fontFamily = Sans, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp),
-    bodyLarge = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 28.sp),
-    bodyMedium = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 15.sp, lineHeight = 26.25.sp),
-    bodySmall = TextStyle(fontFamily = Serif, fontWeight = FontWeight.Normal, fontSize = 13.sp, lineHeight = 22.75.sp),
-    labelLarge = TextStyle(fontFamily = Sans, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp),
-    labelMedium = TextStyle(fontFamily = Sans, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp),
-    labelSmall = TextStyle(fontFamily = Sans, fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 16.sp),
+// —— 排版：所有 Material 文本角色统一使用屏幕阅读版，标题与操作文字加强字重 ——
+internal fun readerTypography() = Typography(
+    displayLarge = readerStyle(46, 56, FontWeight.Bold),
+    displayMedium = readerStyle(38, 48, FontWeight.Bold),
+    displaySmall = readerStyle(32, 42, FontWeight.Bold),
+    headlineLarge = readerStyle(30, 40, FontWeight.Bold),
+    headlineMedium = readerStyle(26, 36, FontWeight.Bold),
+    headlineSmall = readerStyle(22, 32, FontWeight.Bold),
+    titleLarge = readerStyle(20, 30, FontWeight.Bold),
+    titleMedium = readerStyle(17, 26, FontWeight.Bold),
+    titleSmall = readerStyle(15, 24, FontWeight.Bold),
+    bodyLarge = readerStyle(17, 30),
+    bodyMedium = readerStyle(16, 28),
+    bodySmall = readerStyle(14, 24),
+    labelLarge = readerStyle(15, 24, FontWeight.Bold),
+    labelMedium = readerStyle(13, 20, FontWeight.Bold),
+    labelSmall = readerStyle(12, 18),
+)
+
+private fun readerStyle(size: Int, height: Int, weight: FontWeight = FontWeight.Normal) = TextStyle(
+    fontFamily = Reader, fontWeight = weight, fontSynthesis = FontSynthesis.Weight,
+    fontSize = size.sp, lineHeight = height.sp,
 )
 
 // —— 圆角：克制的中等圆角，管理界面保持信息密度 ——
@@ -160,9 +146,7 @@ fun MagpieTheme(
     darkTheme: Boolean,
     content: @Composable () -> Unit,
 ) {
-    val resources = LocalContext.current.resources
-    val reader = remember(resources) { readerFont(resources) }
-    val typography = remember(reader) { anthropicTypography(reader) }
+    val typography = remember { readerTypography() }
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
         typography = typography,

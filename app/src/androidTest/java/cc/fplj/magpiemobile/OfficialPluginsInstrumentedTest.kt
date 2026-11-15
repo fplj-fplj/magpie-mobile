@@ -46,9 +46,23 @@ class OfficialPluginsInstrumentedTest {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             LocalUpstream().use { upstream ->
                 val installed = mutableListOf<String>()
-                context.startForegroundService(Intent(context, GatewayService::class.java).setAction(GatewayService.ACTION_START))
                 try {
+                    val power = By.res("gateway-power-switch")
+                    await("gateway switch visible") { dismissEmulatorLauncherAnr(); device.hasObject(power) }
+                    assertFalse(device.findObject(power).isChecked)
+                    assertTrue(device.takeScreenshot(File(artifacts, "gateway-off-portrait.png")))
+                    device.setOrientationLeft()
+                    await("landscape gateway switch") { device.hasObject(power) && context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE }
+                    device.waitForIdle()
+                    assertTrue(device.takeScreenshot(File(artifacts, "gateway-off-landscape.png")))
+                    device.findObject(power).click()
                     await("authenticated Android core startup", 120_000) { NativeCoreSession.status.value.ready }
+                    await("gateway switch checked after startup") { device.findObject(power)?.isChecked == true }
+                    assertTrue(device.takeScreenshot(File(artifacts, "gateway-on-landscape.png")))
+                    device.setOrientationNatural()
+                    await("portrait gateway after startup") { device.hasObject(power) && context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT }
+                    device.waitForIdle()
+                    assertTrue(device.takeScreenshot(File(artifacts, "gateway-on-portrait.png")))
                     val client = NativeCoreSession.pluginClient()
                     assertEquals("0.1.3781-androidhost.2", NativeCoreSession.managementClient().capabilities().coreVersion)
                     val provider = fixture(fixtures, "provider", PROVIDER, "\"main\":\"index.mjs\"")
@@ -293,6 +307,14 @@ class OfficialPluginsInstrumentedTest {
                     } finally { device.executeShellCommand("settings put system font_scale $previousScale") }
                     File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
+                    device.findObject(By.text("网关")).click()
+                    await("gateway switch before shutdown") { device.findObject(power)?.isChecked == true }
+                    device.findObject(power).click()
+                    await("gateway switched off", 30_000) {
+                        !GatewayRuntime.stopping.value && GatewayRuntime.status.value.phase == GatewayEngineController.Phase.STOPPED &&
+                            device.findObject(power)?.isChecked == false
+                    }
+                    assertTrue(device.takeScreenshot(File(artifacts, "gateway-off-after-toggle.png")))
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
                 } finally {
                     try {
@@ -302,7 +324,9 @@ class OfficialPluginsInstrumentedTest {
                             NativeCoreSession.pluginClient().remove(spec)
                             PluginImporter(context).removeImported(spec)
                         } }
-                        context.startService(Intent(context, GatewayService::class.java).setAction(GatewayService.ACTION_STOP))
+                        if (GatewayRuntime.status.value.phase != GatewayEngineController.Phase.STOPPED || GatewayRuntime.stopping.value) {
+                            context.startService(Intent(context, GatewayService::class.java).setAction(GatewayService.ACTION_STOP))
+                        }
                         await("Android core and Bun shutdown", 30_000) {
                             !GatewayRuntime.stopping.value && NativeCoreSession.status.value.phase == NativeCoreSession.Phase.DISCONNECTED &&
                                 device.executeShellCommand("ps -A -o ARGS").lineSequence().none { line ->
@@ -320,6 +344,7 @@ class OfficialPluginsInstrumentedTest {
                         }
                         File(artifacts, "shutdown.txt").writeText("PASS: core and Bun processes stopped\n")
                     } finally {
+                        device.unfreezeRotation()
                         // AGP removes app storage when it uninstalls the test APK. Keep the
                         // evidence under the test shell's directory before returning to AGP.
                         device.executeShellCommand("mkdir -p /data/local/tmp/magpie-plugin-runtime")
