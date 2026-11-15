@@ -217,8 +217,11 @@ class OfficialPluginsInstrumentedTest {
                     importer.reconcile(client.plugins())
                     assertFalse(File(safTree).exists())
                     installed.remove(safTree)
-                    device.findObject(By.text("更多"))?.click()
-                    assertTrue(device.wait(Until.hasObject(By.text("插件与工具")), 10_000))
+                    await("native More navigation") {
+                        dismissEmulatorLauncherAnr()
+                        if (device.hasObject(By.text("插件与工具"))) true
+                        else { device.findObject(By.text("更多"))?.click(); false }
+                    }
                     device.findObject(By.text("插件与工具")).click()
                     assertTrue(device.wait(Until.hasObject(By.text("官方外部插件")), 15_000))
                     val expectedCount = client.plugins().entries.size
@@ -259,6 +262,7 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue(device.wait(Until.hasObject(By.text("连接成功")), 20_000))
                     device.findObject(By.text("返回插件")).click()
                     val connectedOwner = NativeCoreSession.providerSessionId()
+                    dismissEmulatorLauncherAnr()
                     device.pressHome()
                     assertEquals(200, http("http://127.0.0.1:3425/api/hello", auth).first)
                     device.executeShellCommand("am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10200000 -n cc.fplj.magpiemobile/.MainActivity")
@@ -266,6 +270,7 @@ class OfficialPluginsInstrumentedTest {
                     // ActivityScenario's background invoker can leave its EmptyActivity on top.
                     // Restore the launcher task after recreation before checking the real app UI.
                     device.executeShellCommand("am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10200000 -n cc.fplj.magpiemobile/.MainActivity")
+                    dismissEmulatorLauncherAnr()
                     assertTrue(device.wait(Until.hasObject(By.pkg("cc.fplj.magpiemobile").depth(0)), 15_000))
                     if (!device.wait(Until.hasObject(By.text("官方外部插件")), 2000)) {
                         assertTrue(device.wait(Until.hasObject(By.text("插件与工具")), 10_000))
@@ -327,6 +332,14 @@ class OfficialPluginsInstrumentedTest {
                     }
                 }
             }
+        }
+    }
+
+    private fun dismissEmulatorLauncherAnr() {
+        // API35's Pixel Launcher can ANR during first boot; leave any app ANR as a failure.
+        if (device.hasObject(By.text("Pixel Launcher isn't responding"))) {
+            device.findObject(By.text("Close app"))?.click()
+            device.waitForIdle()
         }
     }
 
