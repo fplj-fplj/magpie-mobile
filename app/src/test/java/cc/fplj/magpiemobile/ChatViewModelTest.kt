@@ -231,14 +231,18 @@ class ChatViewModelTest {
                 val accepted = try { socket.accept() } catch (_: java.net.SocketException) { break }
                 requests.incrementAndGet()
                 accepted.use { client ->
-                val input = client.getInputStream().bufferedReader()
-                var length = 0
-                while (true) {
-                    val line = input.readLine() ?: break
-                    if (line.startsWith("Content-Length:", true)) length = line.substringAfter(':').trim().toInt()
-                    if (line.isEmpty()) break
+                val input = client.getInputStream().buffered()
+                val header = StringBuilder()
+                while (!header.endsWith("\r\n\r\n")) {
+                    val value = input.read()
+                    if (value < 0) return@use
+                    header.append(value.toChar())
                 }
-                repeat(length) { input.read() } // ASCII synthetic request only.
+                val length = header.lineSequence()
+                    .firstOrNull { it.startsWith("Content-Length:", true) }
+                    ?.substringAfter(':')?.trim()?.toInt()
+                    ?: 0
+                repeat(length) { input.read() } // Consume exact UTF-8 content-length bytes.
                 started.countDown()
                 check(release.await(10, TimeUnit.SECONDS))
                 val reasoningBody = reasoning?.let {
