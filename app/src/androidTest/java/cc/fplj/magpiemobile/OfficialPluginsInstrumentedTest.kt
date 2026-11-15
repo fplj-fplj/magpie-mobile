@@ -43,7 +43,7 @@ class OfficialPluginsInstrumentedTest {
         val toolMarker = File(context.filesDir, "runtime-tool.txt")
         responseMarker.delete()
         toolMarker.delete()
-        ActivityScenario.launch(MainActivity::class.java).use {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             LocalUpstream().use { upstream ->
                 val installed = mutableListOf<String>()
                 context.startForegroundService(Intent(context, GatewayService::class.java).setAction(GatewayService.ACTION_START))
@@ -251,6 +251,23 @@ class OfficialPluginsInstrumentedTest {
                     device.findObject(By.text("保存并连接")).click()
                     assertTrue(device.wait(Until.hasObject(By.text("连接成功")), 20_000))
                     device.findObject(By.text("返回插件")).click()
+                    val connectedOwner = NativeCoreSession.providerSessionId()
+                    device.pressHome()
+                    assertEquals(200, http("http://127.0.0.1:3425/api/hello", auth).first)
+                    device.executeShellCommand("am start -n cc.fplj.magpiemobile/.MainActivity")
+                    scenario.recreate()
+                    assertTrue(device.wait(Until.hasObject(By.text("官方外部插件")), 15_000))
+                    assertEquals("activity recreation restarted the core session", connectedOwner, NativeCoreSession.providerSessionId())
+                    assertEquals("true", client.plugins().entries.single { it.spec == provider.absolutePath }.options["fromNativeUI"].toString())
+                    device.findObject(By.res("plugin-installed-filter")).text = ""
+                    val previousScale = device.executeShellCommand("settings get system font_scale").trim()
+                        .takeIf { it.matches(Regex("[0-9]+(\\.[0-9]+)?")) } ?: "1.0"
+                    try {
+                        device.executeShellCommand("settings put system font_scale 1.3")
+                        await("Android font scale change") { context.resources.configuration.fontScale > 1.25f }
+                        device.waitForIdle()
+                        assertTrue(device.takeScreenshot(File(artifacts, "native-plugins-large-font.png")))
+                    } finally { device.executeShellCommand("settings put system font_scale $previousScale") }
                     File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")

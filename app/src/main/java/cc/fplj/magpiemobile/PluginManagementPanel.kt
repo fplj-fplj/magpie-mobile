@@ -16,6 +16,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
@@ -26,6 +27,9 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.graphics.luminance
+import androidx.core.view.WindowCompat
 import cc.fplj.magpiemobile.core.*
 import cc.fplj.magpiemobile.theme.UiSpacing
 import kotlinx.coroutines.Dispatchers
@@ -215,6 +219,19 @@ private fun PluginTag(label: String) {
     }
 }
 
+@Composable
+private fun PluginDialogSystemBars() {
+    val view = LocalView.current
+    val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
+    SideEffect {
+        val window = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = light
+            isAppearanceLightNavigationBars = light
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun PluginDetailDialog(
@@ -228,7 +245,8 @@ private fun PluginDetailDialog(
     var options by remember(plugin.spec) { mutableStateOf(Json { prettyPrint = true }.encodeToString(kotlinx.serialization.json.JsonObject.serializer(),
         plugin.options.takeIf { it.isNotEmpty() } ?: plugin.optionsExample)) }
     var optionsError by remember(plugin.spec) { mutableStateOf("") }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        PluginDialogSystemBars()
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = UiSpacing.medium)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = UiSpacing.small), verticalAlignment = Alignment.CenterVertically) {
@@ -337,10 +355,16 @@ private fun PluginLoginDialog(viewModel: PluginManagementViewModel, state: Offic
     var answer by remember(provider.pid, state.authMethod, state.prompt?.key) { mutableStateOf("") }
     var apiKey by remember(provider.pid, state.authMethod) { mutableStateOf("") }
     var callback by remember(state.signIn?.id) { mutableStateOf("") }
-    Dialog(onDismissRequest = viewModel::cancelLogin, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = viewModel::cancelLogin, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        PluginDialogSystemBars()
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(UiSpacing.card), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
-                Text("连接 ${provider.name}", style = MaterialTheme.typography.headlineSmall)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("连接 ${provider.name}", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+                    TextButton(enabled = !state.authBusy || state.signIn == null, onClick = viewModel::cancelLogin) {
+                        Text(if (state.signIn?.state in setOf("done", "failed", "canceled", "cancelled")) "返回插件" else "取消登录")
+                    }
+                }
                 Text(method.labels["zh"] ?: method.labels["zh-CN"] ?: method.label, style = MaterialTheme.typography.bodySmall)
                 if (state.authBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
@@ -389,8 +413,6 @@ private fun PluginLoginDialog(viewModel: PluginManagementViewModel, state: Offic
                         }
                     }
                 }
-                OutlinedButton(modifier = Modifier.fillMaxWidth(), enabled = !state.authBusy || state.signIn == null,
-                    onClick = viewModel::cancelLogin) { Text(if (state.signIn?.state in setOf("done", "failed", "canceled", "cancelled")) "返回插件" else "取消登录") }
             }
         }
     }
