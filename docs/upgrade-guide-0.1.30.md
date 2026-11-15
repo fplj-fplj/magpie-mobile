@@ -12,7 +12,7 @@
 2. 下载完成后，APK 位于 `/sdcard/Download/`；
 3. 在文件管理器中点击 APK 安装，或由自动化工具执行单命令：
    ```
-   pm install -r /sdcard/Download/magpie-mobile-0.1.44-null-delta.apk
+   pm install -r /sdcard/Download/magpie-mobile-0.1.45-reasoning-ui.apk
    ```
 4. 固定签名与 0.1.21+ 一致（SHA-256 `dee1d3f485ee...`），**直接覆盖安装，无需卸载**，本地配置/会话全部保留。
 

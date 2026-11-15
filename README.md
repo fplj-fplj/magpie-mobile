@@ -56,7 +56,7 @@
 
 `Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`，才会把同一轮验证产物发布为 Latest Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
-当前可用版本：[`0.1.44-null-delta` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.44-null-delta-865bca38)。[手动构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43698986663)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43698101420)均通过；JVM 569 项、Go、真实官方插件、race 与 Android API 35 模拟器运行结果均为 0 失败。旧中间 Release 已清理，历史证据保留在 Actions 与 Git 标签中。
+当前可用版本：[`0.1.45-reasoning-ui` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.45-reasoning-ui-bbdcb460)，SHA-256 `6e140f4331f1567f5bc70977f91087b83396780d066a9afcb58a985287dc98a4`。[手动构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43704756174)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43703975532)均通过；JVM 569 项、Go、真实官方插件、race 与 Android API 35 模拟器运行结果均为 0 失败。旧中间 Release 已清理，历史证据保留在 Actions 与 Git 标签中。
 
 官方插件完整通过基线仍可通过 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)追溯；对应历史 Release 条目已按清理策略移除，运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 
