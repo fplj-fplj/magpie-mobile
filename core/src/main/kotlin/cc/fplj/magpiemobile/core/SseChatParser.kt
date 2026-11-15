@@ -13,8 +13,8 @@ import kotlinx.serialization.json.jsonObject
  * 错误事件只上抛固定安全分类，不携带上游自由文本/JSON；失败保留已收增量。
  */
 class SseChatParser(
-    private val onDelta: (String) -> Unit,
     private val onReasoning: (String) -> Unit = {},
+    private val onDelta: (String) -> Unit,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val sb = StringBuilder()

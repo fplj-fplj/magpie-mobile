@@ -63,7 +63,7 @@ class StreamingChatClient(private val config: GatewayConfig) {
             if (temperature != null) put("temperature", temperature)
             if (topP != null) put("top_p", topP)
         }.toString()
-        val parser = SseChatParser(onDelta, onReasoning)
+        val parser = SseChatParser(onReasoning = onReasoning, onDelta = onDelta)
         var conn: HttpURLConnection? = null
         var httpCode: Int? = null
         try {
