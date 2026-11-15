@@ -24,6 +24,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cc.fplj.magpiemobile.core.EnginePaths
 import cc.fplj.magpiemobile.core.GatewayEngineController
@@ -96,6 +98,12 @@ class MainActivity : ComponentActivity() {
                 cc.fplj.magpiemobile.preferences.ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
                 cc.fplj.magpiemobile.preferences.ThemeMode.LIGHT -> false
                 cc.fplj.magpiemobile.preferences.ThemeMode.DARK -> true
+            }
+            SideEffect {
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
             }
             MagpieTheme(darkTheme = dark) {
                 Surface(modifier = Modifier.fillMaxSize()) {

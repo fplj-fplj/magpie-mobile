@@ -54,6 +54,12 @@ data class ManagedPlugin(
     /** Same path forms as upstream plugin.IsPath, including paths restored from another OS. */
     val isLocal: Boolean get() = spec.startsWith("file://") || spec.startsWith(".") ||
         spec.startsWith("/") || spec.startsWith("\\") || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(spec)
+    val displayName: String get() = when {
+        name.isNotBlank() && name != spec && name != packageId -> name
+        providerNames.size == 1 -> providerNames.single()
+        isLocal -> spec.removePrefix("file://").trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\')
+        else -> name.ifBlank { packageId.ifBlank { spec } }
+    }
     override fun toString(): String = "ManagedPlugin(spec=$spec, off=$off, error=<redacted>)"
 }
 

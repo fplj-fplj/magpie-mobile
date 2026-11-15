@@ -218,16 +218,19 @@ class OfficialPluginsInstrumentedTest {
                     val expectedCount = client.plugins().entries.size
                     assertTrue(device.wait(Until.hasObject(By.text("$expectedCount 个已安装")), 20_000))
                     assertTrue(device.takeScreenshot(File(artifacts, "native-plugins.png")))
-                    device.findObject(By.clazz("android.widget.EditText")).text = client.plugins().entries.single { it.spec == provider.absolutePath }.name
-                    assertTrue(device.wait(Until.hasObject(By.text(client.plugins().entries.single { it.spec == provider.absolutePath }.name)), 10_000))
-                    device.findObject(By.text(client.plugins().entries.single { it.spec == provider.absolutePath }.name)).click()
+                    device.findObject(By.res("plugin-installed-filter")).text = provider.absolutePath
+                    val providerRow = By.res(officialPluginRowTag(provider.absolutePath))
+                    assertTrue(device.wait(Until.hasObject(providerRow), 10_000))
+                    device.findObject(providerRow).click()
                     assertTrue(device.wait(Until.hasObject(By.text("参数")), 10_000))
                     assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-detail.png")))
                     device.findObject(By.text("参数")).click()
                     val uiOptions = JSONObject().put("base", upstream.base).put("fromBrowser", true).put("fromNative", true).put("fromNativeUI", true)
-                    device.findObject(By.clazz("android.widget.EditText")).click()
+                    val optionsEditor = By.res("plugin-options-json").enabled(true)
+                    assertTrue(device.wait(Until.hasObject(optionsEditor), 10_000))
+                    device.findObject(optionsEditor).click()
                     device.waitForIdle()
-                    device.findObject(By.clazz("android.widget.EditText")).text = uiOptions.toString()
+                    device.findObject(optionsEditor).text = uiOptions.toString()
                     device.pressBack() // close the input method
                     device.findObject(By.text("保存参数")).click()
                     await("native options editor save") { client.plugins().entries.single { it.spec == provider.absolutePath }.options["fromNativeUI"].toString() == "true" }
@@ -240,8 +243,10 @@ class OfficialPluginsInstrumentedTest {
                     device.findObject(By.text("Test API key")).click()
                     assertTrue(device.wait(Until.hasObject(By.text("API 密钥")), 10_000))
                     assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-login.png")))
-                    device.findObject(By.clazz("android.widget.EditText")).click()
-                    device.findObject(By.clazz("android.widget.EditText")).text = "synthetic-ui-key"
+                    val loginEditor = By.res("plugin-login-key").enabled(true)
+                    assertTrue(device.wait(Until.hasObject(loginEditor), 10_000))
+                    device.findObject(loginEditor).click()
+                    device.findObject(loginEditor).text = "synthetic-ui-key"
                     device.pressBack()
                     device.findObject(By.text("保存并连接")).click()
                     assertTrue(device.wait(Until.hasObject(By.text("连接成功")), 20_000))
@@ -251,6 +256,7 @@ class OfficialPluginsInstrumentedTest {
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
                 } finally {
                     try {
+                        device.takeScreenshot(File(artifacts, "last-screen.png"))
                         File(artifacts, "core-status.txt").writeText(GatewayRuntime.status.value.toString())
                         installed.reversed().forEach { spec -> runCatching {
                             NativeCoreSession.pluginClient().remove(spec)

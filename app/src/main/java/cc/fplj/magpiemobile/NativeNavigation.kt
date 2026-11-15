@@ -211,7 +211,7 @@ fun Dashboard(
                     verticalArrangement = Arrangement.spacedBy(UiSpacing.card),
                 ) {
                     if (section != null) {
-                        PageHeading(section.title, section.detail)
+                        if (section != GatewaySection.PLUGINS) PageHeading(section.title, section.detail)
                         if (section == GatewaySection.ROUTING || section == GatewaySection.SYSTEM) {
                             EditorChoiceCard(clientReady && connection.webEditor && !providerBusy, externalState,
                                 { appShell.selectPage(AppPage.PROVIDERS) }, ::openBrowserEditor, nativeSelected = false)
