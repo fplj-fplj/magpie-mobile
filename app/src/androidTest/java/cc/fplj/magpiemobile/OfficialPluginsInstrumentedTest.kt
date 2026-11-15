@@ -307,6 +307,20 @@ class OfficialPluginsInstrumentedTest {
                     } finally { device.executeShellCommand("settings put system font_scale $previousScale") }
                     File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
+                    await("provider navigation after font scale restore") {
+                        dismissEmulatorLauncherAnr()
+                        device.findObject(By.text("提供商"))?.click() == true
+                    }
+                    await("provider list visible") { device.hasObject(By.text("模型提供商")) }
+                    await("provider add button visible") { device.findObject(By.text("添加"))?.click() == true }
+                    await("provider advanced tab visible") { device.findObject(By.text("高级"))?.click() == true }
+                    await("provider save button fully visible") {
+                        val save = device.findObject(By.text("保存连接")) ?: return@await false
+                        save.visibleBounds.bottom <= device.displayHeight - 24
+                    }
+                    assertTrue(device.takeScreenshot(File(artifacts, "provider-editor-advanced.png")))
+                    device.pressBack()
+                    await("provider editor closed") { !device.hasObject(By.text("保存连接")) }
                     await("gateway navigation after font scale restore") {
                         dismissEmulatorLauncherAnr()
                         if (device.findObject(power)?.isChecked == true) true

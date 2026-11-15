@@ -14,14 +14,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
 import cc.fplj.magpiemobile.theme.UiSpacing
 
 /**
@@ -72,6 +77,20 @@ internal fun EmptyState(title: String, description: String) {
     ) {
         Text(title, style = MaterialTheme.typography.headlineSmall)
         Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** Full-screen dialogs draw edge to edge; keep system bar icons readable in either theme. */
+@Composable
+internal fun FullScreenDialogSystemBars() {
+    val view = LocalView.current
+    val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
+    SideEffect {
+        val window = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = light
+            isAppearanceLightNavigationBars = light
+        }
     }
 }
 

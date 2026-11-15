@@ -2,11 +2,12 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
-## 当前源码版本：0.1.41-reader-switch（CI/真机验收分开）
+## 当前源码版本：0.1.42-provider-insets（CI/真机验收分开）
 
 - **上游核心**：v0.1.3781（commit `b52c7111`）；
 - **新技术路线**：官方完整 CLI 核心 + Android 宿主适配，APK 使用 `nogui,androidhost`，不再使用 `mobile` 构建标签；提供官方浏览器编辑器与原生提供商编辑两种入口。详见 [路线与双编辑说明](docs/full-core-dual-editors.md)；
 - **屏幕阅读与启停**：全原生界面采用较厚笔画的霞鹜文楷屏幕阅读版，顶部品牌文字保留 Poppins；网关状态卡改为固定位置的单一开关。详见 [本轮界面说明](docs/ui-update-0.1.41.md)；
+- **全屏编辑安全区**：提供商编辑与插件编辑统一采用边到边对话框，避开状态栏、手势栏和显示挖孔；高级页固定保存按钮不再被系统手势栏裁切。详见 [0.1.42 修复说明](docs/ui-fix-0.1.42.md)；
 - **既有界面（P9）**：暖纸色与文楷排版、精简网关首页、二级管理导航、聊天消息分层；修复网络状态与电池设置入口。详见 [界面更新与验收说明](docs/ui-update-0.1.38.md)；
 - **官方外部插件**：原生页接入 npm／GitHub／SAF 安装、启停、更新、删除、参数、登录与诊断；提供商／工具、同步中间件和异步 Hooks 保留官方执行机制。详见 [插件接入与运行验收](docs/official-plugin-integration.md)；
 - **真机稳定性（P4/P5）**：网络热切换监听、电池优化白名单引导、低内存告警、冷启动遥测（<800ms 门槛）、崩溃事后脱敏审计；
@@ -21,6 +22,7 @@
 | [docs/official-plugin-integration.md](docs/official-plugin-integration.md) | 官方三类外部插件、原生管理、运行边界与候选发布 |
 | [docs/official-plugin-adaptation-plan.md](docs/official-plugin-adaptation-plan.md) | 实施要求、阶段与完整验收矩阵 |
 | [docs/ui-update-0.1.41.md](docs/ui-update-0.1.41.md) | 单一启停开关、文楷屏幕版、独立发布流程及实际 Actions 结果 |
+| [docs/ui-fix-0.1.42.md](docs/ui-fix-0.1.42.md) | 提供商高级页保存按钮与全屏编辑安全区修复 |
 | [docs/ui-update-0.1.38.md](docs/ui-update-0.1.38.md) | P9 界面更新、字体来源与真机验收步骤 |
 | [docs/upgrade-guide-0.1.30.md](docs/upgrade-guide-0.1.30.md) | **安装与验证指南**（安装步骤/healthz 判定/新功能清单/故障排查） |
 | [docs/p5-gap-analysis.md](docs/p5-gap-analysis.md) | 原版功能对齐缺口分析与终审裁定 |

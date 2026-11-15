@@ -255,7 +255,9 @@ fun ProvidersPanel(
         }
         if (matches.size > 50) Text("显示前 50 个连接，请搜索定位其他提供商。", style = MaterialTheme.typography.bodySmall)
     }
-    if (open) Dialog(onDismissRequest = { if (!busy) close() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    if (open) Dialog(onDismissRequest = { if (!busy) close() },
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        FullScreenDialogSystemBars()
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = UiSpacing.medium)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = UiSpacing.small), verticalAlignment = Alignment.CenterVertically) {

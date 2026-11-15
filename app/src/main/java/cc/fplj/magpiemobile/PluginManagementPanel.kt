@@ -16,7 +16,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
@@ -26,9 +25,6 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.DialogWindowProvider
-import androidx.compose.ui.graphics.luminance
-import androidx.core.view.WindowCompat
 import cc.fplj.magpiemobile.core.*
 import cc.fplj.magpiemobile.theme.UiSpacing
 import kotlinx.coroutines.Dispatchers
@@ -221,19 +217,6 @@ private fun PluginTag(label: String) {
     }
 }
 
-@Composable
-private fun PluginDialogSystemBars() {
-    val view = LocalView.current
-    val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
-    SideEffect {
-        val window = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
-        WindowCompat.getInsetsController(window, view).apply {
-            isAppearanceLightStatusBars = light
-            isAppearanceLightNavigationBars = light
-        }
-    }
-}
-
 @OptIn(ExperimentalLayoutApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun PluginDetailDialog(
@@ -248,7 +231,7 @@ private fun PluginDetailDialog(
         plugin.options.takeIf { it.isNotEmpty() } ?: plugin.optionsExample)) }
     var optionsError by remember(plugin.spec) { mutableStateOf("") }
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        PluginDialogSystemBars()
+        FullScreenDialogSystemBars()
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = UiSpacing.medium)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = UiSpacing.small), verticalAlignment = Alignment.CenterVertically) {
@@ -358,7 +341,7 @@ private fun PluginLoginDialog(viewModel: PluginManagementViewModel, state: Offic
     var apiKey by remember(provider.pid, state.authMethod) { mutableStateOf("") }
     var callback by remember(state.signIn?.id) { mutableStateOf("") }
     Dialog(onDismissRequest = viewModel::cancelLogin, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        PluginDialogSystemBars()
+        FullScreenDialogSystemBars()
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(UiSpacing.card), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
