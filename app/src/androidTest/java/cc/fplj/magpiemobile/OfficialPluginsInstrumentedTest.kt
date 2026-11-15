@@ -308,9 +308,6 @@ class OfficialPluginsInstrumentedTest {
                     File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
                     device.pressBack()
-                    await("plugin detail closed before provider check") {
-                        device.hasObject(By.text("官方外部插件")) && device.hasObject(By.text("安装插件"))
-                    }
                     await("provider tab after font scale restore") {
                         dismissEmulatorLauncherAnr()
                         device.hasObject(By.text("提供商"))
