@@ -17,6 +17,8 @@ cleanup() {
   mkdir -p build-tmp/android-plugin-runtime
   timeout 20s adb -s "$serial" pull /data/local/tmp/magpie-plugin-runtime build-tmp/android-plugin-runtime >/dev/null 2>&1 || true
   timeout 20s adb -s "$serial" logcat -d > "$report/guest-logcat.txt" 2>/dev/null || true
+  timeout 20s adb -s "$serial" shell logcat -b crash -d -v threadtime > "$report/logcat-crash.txt" 2>/dev/null || true
+  timeout 20s adb -s "$serial" pull /data/tombstones "$report/tombstones" >/dev/null 2>&1 || true
   timeout 10s adb -s "$serial" emu kill >/dev/null 2>&1 || true
   if [[ -n "$emulator_pid" ]]; then kill "$emulator_pid" 2>/dev/null || true; fi
 }
@@ -51,7 +53,8 @@ test -x "$backend_bin"
 LD_LIBRARY_PATH="$emulator_library_path" ldd "$backend_bin" > "$report/backend-dependencies.txt"
 LD_LIBRARY_PATH="$emulator_library_path" ANDROID_EMULATOR_LAUNCHER_DIR="$sdk_root/emulator" ANDROID_I_WANT_MY_TCG=yes \
   "$backend_bin" -avd magpie-arm64-probe -port 5580 \
-  -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -show-kernel -verbose \
+  -no-window -noaudio -no-boot-anim -no-snapshot -gpu off -show-kernel -verbose \
+  -logcat-output "$report/guest-logcat-full.txt" \
   -feature -VirtioInput,-VirtioWifi,-VirtioVsockPipe,-VirtioSndCard \
   -accel off -memory 2048 -cores 2 -qemu -machine type=virt > "$report/emulator.log" 2>&1 &
 emulator_pid=$!
