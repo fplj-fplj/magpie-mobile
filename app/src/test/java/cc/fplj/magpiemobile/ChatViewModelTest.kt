@@ -232,13 +232,13 @@ class ChatViewModelTest {
                 requests.incrementAndGet()
                 accepted.use { client ->
                 val input = client.getInputStream().buffered()
-                val header = StringBuilder()
-                while (!header.endsWith("\r\n\r\n")) {
+                val requestHeader = StringBuilder()
+                while (!requestHeader.endsWith("\r\n\r\n")) {
                     val value = input.read()
                     if (value < 0) return@use
-                    header.append(value.toChar())
+                    requestHeader.append(value.toChar())
                 }
-                val length = header.lineSequence()
+                val length = requestHeader.lineSequence()
                     .firstOrNull { it.startsWith("Content-Length:", true) }
                     ?.substringAfter(':')?.trim()?.toInt()
                     ?: 0
