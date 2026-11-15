@@ -309,7 +309,7 @@ class OfficialPluginsInstrumentedTest {
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
                     device.pressBack()
                     await("plugin detail closed before provider check") {
-                        !device.hasObject(By.text("Android fixture")) && device.hasObject(By.text("官方外部插件"))
+                        device.hasObject(By.text("官方外部插件")) && device.hasObject(By.text("安装插件"))
                     }
                     await("provider tab after font scale restore") {
                         dismissEmulatorLauncherAnr()
