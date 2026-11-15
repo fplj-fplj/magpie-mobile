@@ -64,4 +64,6 @@ Android 本机网关需要有效 Key。插件宿主使用独立的普通调用 K
 
 最终验收按 [完整实施计划与矩阵](official-plugin-adaptation-plan.md) 逐项检查，未执行或未通过的项目保留为未完成。
 
-已取得的完整通过基线为 [`3f4f78da` 的 Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43675887215)：JVM、Go、Linux 官方插件 smoke、race、Android instrumentation 与签名发布均通过。Android 报告为 1 个完整测试、0 failure／error／skipped，覆盖原生参数保存与登录、浏览器共享配置、后台返回、Activity 重建、1.3 倍字体和停止后进程清理。对应[签名候选 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-3f4f78da)。此后的导入回收与提供商写入预算补丁须由其自身 Actions 再次验证。
+已取得的完整通过基线为 [`654ce191` 的 Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43677903987)：JVM、Go、Linux 官方插件 smoke、race、Android instrumentation 与签名发布均通过。Android 报告为 1 个完整测试、0 failure／error／skipped，覆盖原生参数保存与登录、浏览器共享配置、后台返回、Activity 重建、1.3 倍字体和停止后进程清理。对应[签名候选 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-654ce191)。该提交还验证了导入副本日志、网页删除后的回收与原生提供商独立写入预算。
+
+APK／载荷／证书哈希、测试结果和 artifact ID 见[该提交的运行报告](official-plugin-runtime-654ce191.md)。

@@ -99,16 +99,16 @@ flowchart TD
 | 阶段 | 工作与主要文件 | 当前情况 | 进入下一阶段的门槛 |
 | --- | --- | --- | --- |
 | P1：客户端契约 | `PluginModels.kt`、`PluginManagementClient.kt`、`NativeCoreSession.kt` | 官方响应、鉴权、登录、未知写及完整宿主提供商协商已通过 JVM 验收 | 后续客户端改动以对应提交的 JVM 结果为准 |
-| P2：宿主与导入 | `patches/mobile`、`PluginImport.kt`、`GatewayService.kt` | 网关桥与 Key 生命周期、目录依赖、SAF 文件／目录在真实 Android 核心通过 | 本轮补充导入日志与删除回收，仍需对应 Actions 通过 |
-| P3：原生管理 | `PluginManagementViewModel.kt`、`PluginManagementPanel.kt`、`NativeNavigation.kt` | 原生参数保存、API Key 登录、返回、后台／Activity 重建、1.3 倍字体均通过 Android instrumentation | 保存 XML 与截图；后续回收补丁再次验证 |
+| P2：宿主与导入 | `patches/mobile`、`PluginImport.kt`、`GatewayService.kt` | 网关桥与 Key 生命周期、目录依赖、SAF 文件／目录在真实 Android 核心通过 | 导入日志、明确拒绝／未知删除对账、网页删除回收均已通过对应 JVM／Android Actions |
+| P3：原生管理 | `PluginManagementViewModel.kt`、`PluginManagementPanel.kt`、`NativeNavigation.kt` | 原生参数保存、API Key 登录、返回、后台／Activity 重建、1.3 倍字体均通过 Android instrumentation | XML 与截图已保存；后台恢复、字体变化与停止后的进程清理已通过 |
 | P4：运行回归 | 官方插件 smoke、Android instrumentation、workflow | Linux 完整 Go+Bun、race、Android x86_64 三类插件实际运行均通过 | ARM64 实际运行须另有设备或兼容模拟器证据 |
-| P5：候选 APK 与发布 | 构建／发布 job、版本、说明和验收报告 | 同一提交的固定签名、载荷哈希、PIE／16 KB 和候选发布通过 | 最新实现仍须在自己的 SHA 上全部通过再发布 |
+| P5：候选 APK 与发布 | 构建／发布 job、版本、说明和验收报告 | 同一提交的固定签名、载荷哈希、PIE／16 KB 和候选发布通过 | 最新实现的构建、运行与发布已在同一 SHA 上通过 |
 
-完整通过基线为 [`3f4f78da` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43675887215)，[候选发布](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-3f4f78da)与该 SHA 对应。Android XML 为 1 test、0 failure／error／skipped，停止结果明确确认 Go 与 Bun 进程全部退出。此基线不替代后续提交的运行验证。
+完整通过基线为 [`654ce191` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43677903987)，[候选发布](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-654ce191)与该 SHA 对应。Android XML 为 1 test、0 failure／error／skipped，停止结果明确确认 Go 与 Bun 进程全部退出。该轮同时验证导入回收补丁；后续提交仍以自身结果为准。
 
 已覆盖的社区包为 `@magpie-community/tools-calc@0.1.0`、`@magpie-community/middleware-word-guard@0.1.1`、`@magpie-community/gateway-powercontext@0.2.1` 和固定提交的 `guotree/magpie-websearch`。验证包含计算工具精确结果、中间件拒绝与响应／SSE 变换、Hooks 异常／超时／取消、PowerContext 真实召回／会话关联／完成后写入、网关桥撤销和显式恢复。PowerContext 允许在插件 options 中提供 `authorization`，环境变量是它的回退路径。
 
-剩余工作是跟进导入生命周期与提供商写入预算补丁的整轮 Actions，以及取得 ARM64 实际运行证据。ARM64 hosted runner 没有 `/dev/kvm`，没有注册的真机 runner；独立 x86 主机 ARM64 软件模拟实验尚未启动成功。个人账号服务端登录仍需对应账号验收，不能由模拟 OAuth 代替。
+剩余工作是取得 ARM64 实际运行证据。ARM64 hosted runner 没有 `/dev/kvm`，没有注册的真机 runner；独立 x86 主机 ARM64 软件模拟实验尚未启动成功。个人账号服务端登录仍需对应账号验收，不能由模拟 OAuth 代替。
 
 ## 7. GitHub Actions 验收矩阵
 
