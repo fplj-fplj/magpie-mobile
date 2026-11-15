@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -75,17 +76,21 @@ internal fun GatewayOverview(
     onChat: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    PageHeading("把模型连在一起。", "一个本机入口，连接你的模型与应用。", "YOUR LOCAL GATEWAY")
+    val compact = LocalConfiguration.current.screenHeightDp < 480
+    if (compact) Text("把模型连在一起。", style = MaterialTheme.typography.titleLarge)
+    else PageHeading("把模型连在一起。", "一个本机入口，连接你的模型与应用。", "YOUR LOCAL GATEWAY")
     Card(
         colors = CardDefaults.cardColors(containerColor = colors.inverseSurface, contentColor = colors.inverseOnSurface),
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
     ) {
-        Column(Modifier.padding(UiSpacing.card), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
+        Column(Modifier.padding(if (compact) UiSpacing.medium else UiSpacing.card),
+            verticalArrangement = Arrangement.spacedBy(if (compact) UiSpacing.small else UiSpacing.medium)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(UiSpacing.medium), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (compact) UiSpacing.tiny else UiSpacing.small)) {
                     Text("本机网关", style = MaterialTheme.typography.labelLarge)
-                    Text(if (stopping) "正在停止…" else gatewayLabel(gateway.phase), style = MaterialTheme.typography.headlineMedium)
+                    Text(if (stopping) "正在停止…" else gatewayLabel(gateway.phase),
+                        style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineMedium)
                 }
                 Switch(
                     checked = active,
@@ -117,7 +122,7 @@ internal fun GatewayOverview(
                     gateway.phase == GatewayEngineController.Phase.STOPPED -> "准备好时，启动你的本机模型网关。"
                     else -> gateway.message
                 },
-                style = MaterialTheme.typography.bodyMedium,
+                style = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
             )
             HorizontalDivider(color = colors.inverseOnSurface.copy(alpha = 0.2f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {

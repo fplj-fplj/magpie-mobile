@@ -13,6 +13,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -42,6 +43,7 @@ fun Dashboard(
     onStopGateway: () -> Unit,
 ) {
     val context = LocalContext.current
+    val compactHeight = LocalConfiguration.current.screenHeightDp < 480
     val scope = rememberCoroutineScope()
     val shell by appShell.state.collectAsStateWithLifecycle()
     val gateway by GatewayRuntime.status.collectAsStateWithLifecycle()
@@ -216,8 +218,8 @@ fun Dashboard(
                 Column(
                     Modifier.widthIn(max = UiSpacing.contentWidth).fillMaxSize()
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = UiSpacing.medium, vertical = UiSpacing.card),
-                    verticalArrangement = Arrangement.spacedBy(UiSpacing.card),
+                        .padding(horizontal = UiSpacing.medium, vertical = if (compactHeight) UiSpacing.small else UiSpacing.card),
+                    verticalArrangement = Arrangement.spacedBy(if (compactHeight) UiSpacing.small else UiSpacing.card),
                 ) {
                     if (section != null) {
                         if (section != GatewaySection.PLUGINS) PageHeading(section.title, section.detail)

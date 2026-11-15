@@ -307,8 +307,11 @@ class OfficialPluginsInstrumentedTest {
                     } finally { device.executeShellCommand("settings put system font_scale $previousScale") }
                     File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
-                    device.findObject(By.text("网关")).click()
-                    await("gateway switch before shutdown") { device.findObject(power)?.isChecked == true }
+                    await("gateway navigation after font scale restore") {
+                        dismissEmulatorLauncherAnr()
+                        if (device.findObject(power)?.isChecked == true) true
+                        else { device.findObject(By.text("网关"))?.click(); false }
+                    }
                     device.findObject(power).click()
                     await("gateway switched off", 30_000) {
                         !GatewayRuntime.stopping.value && GatewayRuntime.status.value.phase == GatewayEngineController.Phase.STOPPED &&
