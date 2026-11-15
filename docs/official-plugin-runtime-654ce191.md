@@ -3,7 +3,7 @@
 已通过提交：`654ce19183447ef232ef28016af273a0413ed53b`。本文记录已取得的证据，不把 ARM64 ELF 检查当作 ARM64 实际运行。
 
 - [完整 GitHub Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43677903987)：build、runtime-emulator、runtime-arm64-capabilities、publish 均成功；capabilities job 只检查宿主条件。
-- [固定签名候选发布](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-654ce191)：`0.1.40-official-plugins`／code 41，prerelease。
+- 固定签名候选当时为 `0.1.40-official-plugins`／code 41；中间 Release 条目已清理，APK 与签名证据从上述 Actions run 追溯。
 - 核心：官方 Magpie `v0.1.3781`、commit `b52c711142a662fe18fedf5a80cb1e4aa94bce62`，`nogui,androidhost`，版本 `0.1.3781-androidhost.2`；Go `1.26.8`，Bun `1.4.2`。
 
 | 产物 | SHA-256 |

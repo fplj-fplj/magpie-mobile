@@ -54,10 +54,8 @@
 
 `Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`，才会把同一轮验证产物发布为 Latest Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
-当前屏幕阅读版：[`0.1.41-reader-switch` 签名候选](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.41-reader-switch-84554557)。[构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43687912271)、[缓存命中构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43688502899)和[独立验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43687912256)全部通过；566 项 JVM、Go、官方插件及 Android 启停运行结果与下载核对记录见[本轮验收](docs/ui-update-0.1.41.md#已完成的-actions-验证2026-11-15)。
+当前可用版本：[`0.1.44-null-delta` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.44-null-delta-865bca38)。[手动构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43698986663)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43698101420)均通过；JVM 569 项、Go、真实官方插件、race 与 Android API 35 模拟器运行结果均为 0 失败。旧中间 Release 已清理，历史证据保留在 Actions 与 Git 标签中。
 
-当前全屏编辑修复版：[`0.1.42-provider-insets` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.42-provider-insets-1f998255)。[构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43693920521)和[完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43693920526)均通过，高级页保存按钮已由 Android 设备断言和截图验证。
-
-官方插件完整通过基线：[`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460) 与[对应签名候选](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-05072a47)。候选 APK 与构建／运行证据对应同一提交；运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
+官方插件完整通过基线仍可通过 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)追溯；对应历史 Release 条目已按清理策略移除，运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 
 本地大版本升级基线：v0.1.3622 起步（旧基线 v0.1.3188 的 24 个补丁目标文件零变更，升级流程见技能库与 gap-analysis §5）。

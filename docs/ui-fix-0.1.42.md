@@ -10,7 +10,7 @@ Android instrumentation 在插件流程后进入提供商页、打开“添加�
 
 最终修复提交：`1f9982550f5042c96d212a8d37da29352a857b76`。
 
-- [Build and release](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43693920521)：APK 构建、固定签名、ARM64 载荷及 16 KB 检查通过，并自动发布。
+- [Build and release](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43693920521)：APK 构建、固定签名、ARM64 载荷及 16 KB 检查通过；当时自动发布的中间 Release 已按新策略清理。
 - [Validation](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43693920526)：JVM regression、Go 安全测试、真实官方插件集成、race 检查及 Android API 35 运行全部通过。
-- 签名 APK：[0.1.42-provider-insets Release](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.42-provider-insets-1f998255)。
+- 签名 APK 证据保存在上述 Build run 的 `signed-release` artifact 中；下载入口统一使用最新 Release。
 - Android 运行截图与报告 artifact：`14153976979`。实际检查 `provider-editor-advanced.png`，保存按钮完整显示；UIAutomator 记录文本边界为 `bottom=1599`、设备高度 `2400`，与底部系统手势栏有明确间距。

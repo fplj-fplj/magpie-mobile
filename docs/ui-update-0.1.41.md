@@ -24,7 +24,7 @@ Android instrumentation 使用唯一开关启动真实 Go/Bun 核心，在横屏
 
 ## 已完成的 Actions 验证（2026-11-15）
 
-代码提交：`84554557a9ac49e57f59bf073dfc88eb0c0a3ec6`。签名候选已自动发布至 [0.1.41-reader-switch Release](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.41-reader-switch-84554557)。
+代码提交：`84554557a9ac49e57f59bf073dfc88eb0c0a3ec6`。该轮签名候选当时已自动发布；对应中间 Release 条目现已按只保留 Latest 的策略清理，历史证据仍由下方 Actions run 追溯。
 
 | 流程／项目 | 实际结果 |
 | --- | --- |

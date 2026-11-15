@@ -1,18 +1,18 @@
 # Magpie-Mobile 0.1.30 真机安装与验证指南
 
-**适用版本**: 0.1.30-upstream-3622（APK 86.3MB，SHA-256 `c49eb9bc335c2635f1c6859a017f7fb6554a8521de3bc1eb2ecbfcfe7dfd3c0b`）  
+**适用版本**: 0.1.30-upstream-3622（APK 86.3MB，SHA-256 `c49eb9bc335c2635f1c6859a017f7fb6554a8521de3bc1eb2ecbfcfe7dfd3c0b`）；本文保留为历史安装流程。
 **适用设备**: 已安装 0.1.21 及以上版本的 Android 10+ / ARM64 设备  
-**下载直链**: https://github.com/fplj-fplj/magpie-mobile/releases/download/v0.1.30-upstream-3622-04b34d55/magpie-mobile-0.1.30-upstream-3622.apk
+**当前下载入口**: https://github.com/fplj-fplj/magpie-mobile/releases/latest
 
 ---
 
 ## 一、安装步骤
 
-1. 在设备浏览器打开上方直链（或从 Releases 页选择 0.1.30 资产），点击"下载"（约 86MB）；
-2. 下载完成后，APK 位于 `/sdcard/Download/magpie-mobile-0.1.30-upstream-3622.apk`；
+1. 在设备浏览器打开上方 Latest Release，下载当前可用 APK；
+2. 下载完成后，APK 位于 `/sdcard/Download/`；
 3. 在文件管理器中点击 APK 安装，或由自动化工具执行单命令：
    ```
-   pm install -r /sdcard/Download/magpie-mobile-0.1.30-upstream-3622.apk
+   pm install -r /sdcard/Download/magpie-mobile-0.1.44-null-delta.apk
    ```
 4. 固定签名与 0.1.21+ 一致（SHA-256 `dee1d3f485ee...`），**直接覆盖安装，无需卸载**，本地配置/会话全部保留。
 
