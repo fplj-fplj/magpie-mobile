@@ -57,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build-tmp/arm64-emulator-probe
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" "system-images;android-30;default;arm64-v8a" 2>&1 | tee build-tmp/arm64-emulator-probe/sdk-install.log
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" "system-images;android-29;default;arm64-v8a" 2>&1 | tee build-tmp/arm64-emulator-probe/sdk-install.log
       - name: Try actual ARM64 boot with software CPU emulation
         env:
           MAGPIE_ARM64_RUN_PLUGINS: ${{ inputs.run_plugins && 'true' || 'false' }}
