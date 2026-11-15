@@ -21,7 +21,10 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Install official ARM64 Android system image
-        run: sdkmanager "platform-tools" "emulator" "system-images;android-30;default;arm64-v8a"
+        run: |
+          set -euo pipefail
+          mkdir -p build-tmp/arm64-emulator-probe
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" "system-images;android-30;default;arm64-v8a" 2>&1 | tee build-tmp/arm64-emulator-probe/sdk-install.log
       - name: Try actual ARM64 boot with software CPU emulation
         run: bash scripts/probe-arm64-emulator.sh
       - uses: actions/upload-artifact@v4

@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 report=build-tmp/arm64-emulator-probe
 mkdir -p "$report"
 sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK missing}}"
+export PATH="$sdk_root/cmdline-tools/latest/bin:$sdk_root/platform-tools:$sdk_root/emulator:$PATH"
 emulator_bin="$sdk_root/emulator/emulator"
 backend_bin="$sdk_root/emulator/qemu/linux-x86_64/qemu-system-aarch64-headless"
 serial=emulator-5580
