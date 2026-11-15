@@ -20,6 +20,7 @@
 | [docs/full-core-dual-editors.md](docs/full-core-dual-editors.md) | 完整 CLI 路线、双编辑入口、RikkaHub 提供商结构参考与验收 |
 | [docs/official-plugin-integration.md](docs/official-plugin-integration.md) | 官方三类外部插件、原生管理、运行边界与候选发布 |
 | [docs/official-plugin-adaptation-plan.md](docs/official-plugin-adaptation-plan.md) | 实施要求、阶段与完整验收矩阵 |
+| [docs/ui-update-0.1.41.md](docs/ui-update-0.1.41.md) | 单一启停开关、文楷屏幕版、独立发布流程及实际 Actions 结果 |
 | [docs/ui-update-0.1.38.md](docs/ui-update-0.1.38.md) | P9 界面更新、字体来源与真机验收步骤 |
 | [docs/upgrade-guide-0.1.30.md](docs/upgrade-guide-0.1.30.md) | **安装与验证指南**（安装步骤/healthz 判定/新功能清单/故障排查） |
 | [docs/p5-gap-analysis.md](docs/p5-gap-analysis.md) | 原版功能对齐缺口分析与终审裁定 |
@@ -47,6 +48,8 @@
 ## 验证与操作
 
 `Build and release` 负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，成功后自动发布对应提交的 Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止成功 APK 发布。文档修改不触发重复编译。本地不运行编译。
+
+当前屏幕阅读版：[`0.1.41-reader-switch` 签名候选](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.41-reader-switch-84554557)。[构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43687912271)、[缓存命中构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43688502899)和[独立验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43687912256)全部通过；566 项 JVM、Go、官方插件及 Android 启停运行结果与下载核对记录见[本轮验收](docs/ui-update-0.1.41.md#已完成的-actions-验证2026-11-15)。
 
 官方插件完整通过基线：[`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460) 与[对应签名候选](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-05072a47)。候选 APK 与构建／运行证据对应同一提交；运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 
