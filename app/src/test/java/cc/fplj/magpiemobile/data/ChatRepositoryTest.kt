@@ -89,6 +89,102 @@ class ChatRepositoryTest {
         assertTrue(tables.containsAll(setOf("conversation", "message", "operation", "metadata")))
     }
 
+    @Test fun migrationFromV1PreservesMessagesAndAddsEmptyReasoning(): Unit {
+        val databaseName = "migration-${UUID.randomUUID()}.db"
+        context.deleteDatabase(databaseName)
+        context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { legacy ->
+            legacy.execSQL("""
+                CREATE TABLE conversation (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    updatedAt INTEGER NOT NULL,
+                    legacy INTEGER NOT NULL
+                )
+            """)
+            legacy.execSQL("""
+                CREATE TABLE operation (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    conversationId TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    startedAt INTEGER NOT NULL,
+                    finishedAt INTEGER,
+                    runningConversationId TEXT,
+                    FOREIGN KEY(conversationId) REFERENCES conversation(id)
+                        ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+            """)
+            legacy.execSQL(
+                "CREATE INDEX index_operation_conversationId ON operation(conversationId)",
+            )
+            legacy.execSQL(
+                "CREATE UNIQUE INDEX index_operation_runningConversationId " +
+                    "ON operation(runningConversationId)",
+            )
+            legacy.execSQL("""
+                CREATE TABLE message (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    conversationId TEXT NOT NULL,
+                    operationId TEXT,
+                    role TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    engine TEXT NOT NULL,
+                    ts INTEGER NOT NULL,
+                    FOREIGN KEY(conversationId) REFERENCES conversation(id)
+                        ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(operationId) REFERENCES operation(id)
+                        ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+            """)
+            legacy.execSQL("CREATE INDEX index_message_conversationId ON message(conversationId)")
+            legacy.execSQL("CREATE INDEX index_message_operationId ON message(operationId)")
+            legacy.execSQL(
+                "CREATE UNIQUE INDEX index_message_operationId_role ON message(operationId, role)",
+            )
+            legacy.execSQL("""
+                CREATE TABLE metadata (
+                    `key` TEXT NOT NULL PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+            legacy.execSQL(
+                "INSERT INTO conversation(id,title,updatedAt,legacy) VALUES('c1','old',1,0)",
+            )
+            legacy.execSQL("""
+                INSERT INTO operation(id,conversationId,state,startedAt,finishedAt,runningConversationId)
+                VALUES('turn-1','c1','SUCCEEDED',1,2,NULL)
+            """)
+            legacy.execSQL("""
+                INSERT INTO message(conversationId,operationId,role,text,engine,ts)
+                VALUES('c1','turn-1','assistant','answer','chat:test',2)
+            """)
+            legacy.version = 1
+        }
+
+        val migrated = Room.databaseBuilder(context, ChatDatabase::class.java, databaseName)
+            .addMigrations(MIGRATION_1_2)
+            .build()
+        try {
+            val message = io { ChatRepository(migrated).messages("c1").single() }
+            assertEquals("answer", message.text)
+            assertEquals("", message.reasoning)
+            val defaultValue = io {
+                migrated.openHelper.readableDatabase.query(
+                    "PRAGMA table_info(message)",
+                ).use { cursor ->
+                    val name = cursor.getColumnIndexOrThrow("name")
+                    val defaultValue = cursor.getColumnIndexOrThrow("dflt_value")
+                    check(cursor.moveToFirst())
+                    while (cursor.getString(name) != "reasoning") check(cursor.moveToNext())
+                    cursor.getString(defaultValue)
+                }
+            }
+            assertEquals("''", defaultValue)
+        } finally {
+            migrated.close()
+            context.deleteDatabase(databaseName)
+        }
+    }
+
     @Test fun beginAndCompletePersistOneAtomicSuccessfulPair(): Unit = io {
         repository.initialize(absent)
         val id = repository.createConversation()
