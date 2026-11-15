@@ -190,6 +190,14 @@ class PluginManagementClient(
         writeRequest("/api/signin/" + encodedPath(id) + "/cancel", JsonObject(emptyMap())) { rootExpectingSuccess(it) }
     }
 
+    private fun rootExpectingSuccess(raw: String) {
+        // Callback and cancel normally return HTTP 204. Some core versions
+        // return an empty JSON object; neither form carries a credential.
+        if (raw.isBlank()) return
+        val response = json.parseToJsonElement(raw).jsonObject
+        check(response.text("error").isBlank())
+    }
+
     private inline fun <T> readRequest(path: String, block: (String) -> T): T = try {
         val body = readTransport.request("GET", path)
         try {

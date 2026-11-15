@@ -266,11 +266,19 @@
     },
     {
       "path": "internal/gui/androidhost_editor.go",
-      "sha256": "d2cef093f3040548d6426696c36f343781c27b84b031cd91676f2ba4cc37c185"
+      "sha256": "a32626a0d44932bae4938813971d55ee3da3c9f2611db31b7ef9a2de48a060ce"
     },
     {
       "path": "internal/gui/androidhost_editor_test.go",
       "sha256": "64948df9f1deadd796e16df4509aa2141569b67a3fb31d05be976d8e9427aa66"
+    },
+    {
+      "path": "internal/gui/androidhost_plugin_key.go",
+      "sha256": "f6452bb591e8ab5dae571a069994eb371edd81a2c2a8a35ea79bfe0904d81c71"
+    },
+    {
+      "path": "internal/gui/androidhost_plugin_key_test.go",
+      "sha256": "f9599f8de902a8f75d2e8e62b50951341eaa2917fb8033b813d4dbe00a75efd9"
     },
     {
       "path": "internal/gui/mobile_discovery_test.go",
@@ -306,11 +314,11 @@
     },
     {
       "path": "internal/plugin/androidhost_bridge.go",
-      "sha256": "39605329fa4d4d13b0a83f80986df76810a95be3ff2628634679c895c88d2604"
+      "sha256": "7ddba441f6882a9184ccebb5bcfc6b50df31633e96c42db3c2577bddefc345c5"
     },
     {
       "path": "internal/plugin/androidhost_bridge_test.go",
-      "sha256": "3d4de61ff0aa1ce6fac9003783c464906fe385f2af6155ed7c7a37b0114d33cf"
+      "sha256": "5b8ffa8910431ca86be90b1d2d7ca3fdf9833facdd1c35051bb87e2e1db57b06"
     },
     {
       "path": "internal/plugin/androidhost_import.go",

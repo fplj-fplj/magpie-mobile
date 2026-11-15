@@ -112,7 +112,7 @@ jobs:
           CGO_ENABLED: '1'
         run: |
           set -euo pipefail
-          go test -race -tags nogui,androidhost ./internal/plugin -run '^TestAndroidHost' -count=1 -timeout=3m | tee ../plugin-host-race.txt
+          go test -race -tags nogui,androidhost ./internal/plugin ./internal/gui -run '^TestAndroidHost(Bridge|HostJS|PluginGateway|Imported|ImportFailure|OtherLocal)' -count=1 -timeout=3m | tee ../plugin-host-race.txt
 
       - name: Build the Android ARM64 full CLI core
         working-directory: build-tmp/upstream
@@ -258,8 +258,10 @@ jobs:
         if: always()
         run: |
           mkdir -p build-tmp/android-plugin-runtime
-          adb pull /sdcard/Android/data/cc.fplj.magpiemobile/files/plugin-runtime build-tmp/android-plugin-runtime || true
-          adb logcat -d -s AndroidRuntime:E > build-tmp/android-plugin-runtime/android-errors.txt || true
+          if command -v adb >/dev/null; then
+            adb pull /sdcard/Android/data/cc.fplj.magpiemobile/files/plugin-runtime build-tmp/android-plugin-runtime || true
+            adb logcat -d -s AndroidRuntime:E > build-tmp/android-plugin-runtime/android-errors.txt || true
+          fi
       - name: Upload actual Android runtime reports
         if: always()
         uses: actions/upload-artifact@v4

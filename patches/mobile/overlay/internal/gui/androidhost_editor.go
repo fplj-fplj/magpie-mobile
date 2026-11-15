@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/mobilepolicy"
-	"github.com/yetone/magpie/internal/plugin"
 )
 
 const androidEditorMintPath = "/api/androidhost/browser-session"
@@ -34,7 +33,7 @@ func androidHostEditorWithClock(port, key string, keep time.Duration, box boxSig
 				return
 			}
 			w.Header().Set("Cache-Control", "no-store")
-			if err := plugin.RestoreAndroidHostBridge(); err != nil {
+			if err := RestoreAndroidHostBridge(); err != nil {
 				http.Error(w, "plugin gateway access could not be restored", http.StatusInternalServerError)
 				return
 			}
