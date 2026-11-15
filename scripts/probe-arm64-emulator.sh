@@ -6,6 +6,8 @@ report=build-tmp/arm64-emulator-probe
 mkdir -p "$report"
 sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK missing}}"
 export PATH="$sdk_root/cmdline-tools/latest/bin:$sdk_root/platform-tools:$sdk_root/emulator:$PATH"
+export ANDROID_AVD_HOME="${ANDROID_USER_HOME:-$HOME/.android}/avd"
+mkdir -p "$ANDROID_AVD_HOME"
 emulator_bin="$sdk_root/emulator/emulator"
 backend_bin="$sdk_root/emulator/qemu/linux-x86_64/qemu-system-aarch64-headless"
 emulator_library_path="$sdk_root/emulator/lib64:$sdk_root/emulator/lib64/gles_swiftshader:$sdk_root/emulator/lib64/vulkan:$sdk_root/emulator/lib64/libstdc++${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -19,6 +21,8 @@ trap cleanup EXIT
 "$emulator_bin" -version > "$report/emulator-version.txt" 2>&1
 printf 'no\n' | avdmanager create avd --force --name magpie-arm64-probe \
   --package 'system-images;android-30;default;arm64-v8a' --device pixel_5
+test -f "$ANDROID_AVD_HOME/magpie-arm64-probe.ini"
+cp "$ANDROID_AVD_HOME/magpie-arm64-probe.ini" "$report/avd-location.ini"
 started=$(date +%s)
 test -x "$backend_bin"
 LD_LIBRARY_PATH="$emulator_library_path" ldd "$backend_bin" > "$report/backend-dependencies.txt"
