@@ -48,8 +48,13 @@ class SseChatParser(
         }
         val choices = root["choices"] as? kotlinx.serialization.json.JsonArray
         val choice0 = choices?.firstOrNull()?.jsonObject
-        // 流式增量在 delta.content；结尾块可能只有 finish_reason 无 delta.content
-        (choice0?.get("delta")?.jsonObject?.get("content") as? kotlinx.serialization.json.JsonPrimitive)?.content
+        // 流式增量在 delta.content；推理模型可能在正文前发送大量
+        // delta.content:null + reasoning_content 事件，JsonNull 也是 JsonPrimitive。
+        // 正文契约只接受 JSON 字符串，避免把 null/数字误拼进用户可见回答。
+        (choice0?.get("delta")?.jsonObject?.get("content")
+            as? kotlinx.serialization.json.JsonPrimitive)
+            ?.takeIf { it.isString }
+            ?.content
     } catch (e: ChatException) {
         throw e
     } catch (e: Exception) {

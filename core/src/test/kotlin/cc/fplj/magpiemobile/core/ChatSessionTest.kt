@@ -107,4 +107,14 @@ class ChatSessionTest {
         val s = ChatSession(chat(), SessionStore(File(tmp, "s.jsonl")), "m")
         assertFailsWith<ChatException> { s.send("x") }
     }
+
+    @Test
+    fun nullNonStreamingContentIsRejectedInsteadOfBecomingLiteralNull() {
+        val e = assertFailsWith<ChatException> {
+            ChatSession.extractReply(
+                """{"choices":[{"message":{"role":"assistant","content":null,"reasoning_content":"thinking"}}]}""",
+            )
+        }
+        assertTrue(e.message.orEmpty().contains("content missing"))
+    }
 }

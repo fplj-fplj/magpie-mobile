@@ -3,7 +3,6 @@ package cc.fplj.magpiemobile.core
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * 应用内聊天会话（plan.md §3「聊天测试（新增）」的行为层）。
@@ -55,7 +54,11 @@ class ChatSession(
             val root = json.parseToJsonElement(raw).jsonObject
             val choice0 = (root["choices"] as? kotlinx.serialization.json.JsonArray)?.firstOrNull()?.jsonObject
                 ?: throw IllegalArgumentException("choices missing")
-            (choice0["message"]?.jsonObject?.get("content") as? kotlinx.serialization.json.JsonPrimitive)?.content
+            // 非流式降级也遵守同一正文契约：JSON null/数字不是可展示文本。
+            (choice0["message"]?.jsonObject?.get("content")
+                as? kotlinx.serialization.json.JsonPrimitive)
+                ?.takeIf { it.isString }
+                ?.content
                 ?: throw IllegalArgumentException("content missing")
         } catch (e: ChatException) {
             throw e

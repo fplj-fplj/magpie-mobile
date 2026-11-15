@@ -1,3 +1,11 @@
+## Magpie-Mobile 0.1.44-null-delta（推理流空正文修复）
+
+- 修复 DeepSeek-V4.1 Flash 等推理模型通过 OpenAI 兼容流返回 `delta.content: null` 时，聊天预览把每个空值拼成字符串 `null` 的问题。
+- 流式正文现在只接受 JSON 字符串；`role`、`reasoning_content`、`finish_reason` 等事件不会进入用户可见回答，非流式降级路径也应用相同契约。
+- 新增真实事件形状的解析器、HTTP SSE 端到端和非流式回复回归测试。
+
+版本：versionCode 45；备份文档 appVersion `0.1.44`；核心保持 `0.1.3781-androidhost.2`。
+
 ## Magpie-Mobile 0.1.43-editor-entry（精简编辑方式入口）
 
 - “选择编辑方式”卡片仅在“模型提供商”和“更多”主页显示。

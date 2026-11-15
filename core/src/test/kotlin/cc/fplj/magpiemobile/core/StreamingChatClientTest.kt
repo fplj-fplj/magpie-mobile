@@ -60,6 +60,29 @@ class StreamingChatClientTest {
     }
 
     @Test
+    fun streamIgnoresReasoningEventsWithNullContent() {
+        server.createContext("/v1/chat/completions") { ex ->
+            respond(
+                ex,
+                "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null,\"reasoning_content\":null}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"content\":null,\"reasoning_content\":\"think 1\"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"content\":null,\"reasoning_content\":\"think 2\"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"哈\"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"哈\"},\"finish_reason\":\"stop\"}]}\n\n" +
+                    "data: [DONE]\n\n",
+            )
+        }
+        val deltas = mutableListOf<String>()
+        val full = StreamingChatClient(config()).stream(
+            "deepseek-v4.1-flash",
+            listOf(ChatClient.Message("user", "哈哈哈")),
+            deltas::add,
+        )
+        assertEquals(listOf("哈", "哈"), deltas)
+        assertEquals("哈哈", full)
+    }
+
+    @Test
     fun streamWithoutDoneFailsAndKeepsPartialText() {
         server.createContext("/v1/chat/completions") { ex ->
             respond(ex, "data: {\"choices\":[{\"delta\":{\"content\":\"part\"}}]}\n\n")
