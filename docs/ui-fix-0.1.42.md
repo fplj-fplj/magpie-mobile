@@ -2,6 +2,6 @@
 
 Android 全面屏设备上，“添加提供商 → 高级”的固定保存按钮曾落在系统手势栏下方，只显示按钮顶部。提供商编辑页没有接管边到边窗口，却直接使用 `safeDrawingPadding`；系统栏契约与插件编辑页不一致。
 
-本轮将全屏对话框的状态栏／导航栏图标处理提取为共享 Compose 组件。提供商编辑页与插件详情、插件登录对话框一样设置 `decorFitsSystemWindows = false`，并把对话框窗口宽高都设为 `MATCH_PARENT`，让有界高度下的 `weight` 与 `safeDrawingPadding` 正确工作，避开系统栏和显示挖孔。暖纸色／深色主题、文楷字体、页签和底部固定保存按钮的现有样式保持不变。
+本轮将全屏对话框的状态栏／导航栏图标处理提取为共享 Compose 组件。提供商编辑页与插件详情、插件登录对话框一样设置 `decorFitsSystemWindows = false`，并把对话框窗口宽高都设为 `MATCH_PARENT`；提供商页内容还显式采用设备屏幕高度，让 `weight` 与 `safeDrawingPadding` 在有界高度内工作，避开系统栏和显示挖孔。暖纸色／深色主题、文楷字体、页签和底部固定保存按钮的现有样式保持不变。
 
 Android instrumentation 在插件流程后进入提供商页、打开“添加提供商”、切换到“高级”，检查“保存连接”按钮完整位于屏幕内，并保存 `provider-editor-advanced.png`。编译、JVM、Go 和模拟器验证全部由 GitHub Actions 执行；本地仅做源码与补丁检查。

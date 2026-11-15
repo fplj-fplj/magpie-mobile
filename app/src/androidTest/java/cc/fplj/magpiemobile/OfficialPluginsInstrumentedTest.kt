@@ -318,11 +318,17 @@ class OfficialPluginsInstrumentedTest {
                     device.findObject(By.text("添加")).click()
                     await("provider advanced tab visible") { device.hasObject(By.text("高级")) }
                     device.findObject(By.text("高级")).click()
-                    await("provider save button fully visible") {
-                        val save = device.findObject(By.text("保存连接")) ?: return@await false
-                        save.visibleBounds.bottom <= device.displayHeight - 24
-                    }
+                    await("provider save button visible") { device.hasObject(By.text("保存连接")) }
+                    device.waitForIdle()
                     assertTrue(device.takeScreenshot(File(artifacts, "provider-editor-advanced.png")))
+                    val save = device.findObject(By.text("保存连接"))
+                    File(artifacts, "provider-save-bounds.txt").writeText(
+                        "displayHeight=${device.displayHeight}\nvisibleBounds=${save.visibleBounds}\n",
+                    )
+                    assertTrue(
+                        "Provider save button is clipped by the system navigation area: ${save.visibleBounds}",
+                        save.visibleBounds.bottom <= device.displayHeight - 24,
+                    )
                     device.pressBack()
                     await("provider editor closed") { !device.hasObject(By.text("保存连接")) }
                     await("gateway navigation after font scale restore") {
