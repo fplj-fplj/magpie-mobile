@@ -114,4 +114,24 @@ class PluginImporterTest {
             assertFalse(File(spec).exists())
         } finally { root.deleteRecursively() }
     }
+
+    @Test fun removalPreservesOtherPluginEntriesInsideTheSameImportedDirectory() {
+        val root = kotlin.io.path.createTempDirectory().toFile()
+        try {
+            val source = Source(mapOf("content://tree/plugin" to ("plugin" to null),
+                "content://tree/plugin/package" to ("package.json" to "{}"),
+                "content://tree/plugin/hooks" to ("child.hooks.mjs" to "export default {}")))
+            val importer = PluginImporter(root, source)
+            val spec = importer.importPlugin(Uri.parse("content://tree/plugin"), true)
+            importer.markSubmitted(spec)
+            importer.reconcile(PluginSnapshot(entries = listOf(ManagedPlugin(spec))))
+            val child = File(spec, "child.hooks.mjs")
+            val remaining = PluginSnapshot(entries = listOf(ManagedPlugin(child.toURI().toString())))
+            importer.removeIfUnreferenced(spec, remaining)
+            importer.reconcile(remaining)
+            assertTrue(child.exists())
+            importer.removeIfUnreferenced(child.absolutePath, PluginSnapshot())
+            assertFalse(File(spec).exists())
+        } finally { root.deleteRecursively() }
+    }
 }

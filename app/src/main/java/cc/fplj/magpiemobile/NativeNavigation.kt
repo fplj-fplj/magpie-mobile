@@ -63,7 +63,7 @@ fun Dashboard(
     val officialPlugins: PluginManagementViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = viewModelFactory {
         initializer { PluginManagementViewModel(savedState = createSavedStateHandle(),
             reconcileImports = { snapshot -> withContext(Dispatchers.IO) { pluginImporter.reconcile(snapshot) } },
-            removeImport = { spec -> withContext(Dispatchers.IO) { pluginImporter.removeImported(spec) } },
+            removeImport = { spec, snapshot -> withContext(Dispatchers.IO) { pluginImporter.removeIfUnreferenced(spec, snapshot) } },
             rejectImport = { spec -> withContext(Dispatchers.IO) { pluginImporter.markRejected(spec) } }) }
     })
     val pluginsState by officialPlugins.state.collectAsStateWithLifecycle()

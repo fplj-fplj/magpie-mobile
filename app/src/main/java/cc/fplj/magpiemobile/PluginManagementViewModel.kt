@@ -93,7 +93,7 @@ internal class PluginManagementViewModel(
     private val performAuth: suspend (PluginAuthStep) -> PluginAuthReply = ::liveAuth,
     private val clock: () -> Long = System::currentTimeMillis,
     private val reconcileImports: suspend (PluginSnapshot) -> Unit = {},
-    private val removeImport: suspend (String) -> Unit = {},
+    private val removeImport: suspend (String, PluginSnapshot) -> Unit = { _, _ -> },
     private val rejectImport: suspend (String) -> Unit = {},
 ) : ViewModel() {
     private val mutable = MutableStateFlow(OfficialPluginsState(
@@ -145,7 +145,7 @@ internal class PluginManagementViewModel(
                 val pending = mutable.value.pending
                 val proved = pending && confirmed(pendingEdit, plugins, providers)
                 val elapsed = pending && clock() - (savedState.get<Long>("plugin.started") ?: clock()) >= UNKNOWN_WAIT
-                if (proved && pendingEdit is PluginEdit.Remove) removeImport(pendingEdit!!.spec)
+                if (proved && pendingEdit is PluginEdit.Remove) removeImport(pendingEdit!!.spec, plugins)
                 if (proved || elapsed) clearPending()
                 if (!mutable.value.pending) reconcileImports(plugins)
                 if (owner != session || revision != generation) return@launch
@@ -194,7 +194,7 @@ internal class PluginManagementViewModel(
                 val result = performEdit(edit)
                 known = true
                 if (owner != session || revision != generation) return@launch
-                if (edit is PluginEdit.Remove && result.entries.none { sameSpec(it.spec, edit.spec) }) removeImport(edit.spec)
+                if (edit is PluginEdit.Remove && result.entries.none { sameSpec(it.spec, edit.spec) }) removeImport(edit.spec, result)
                 reconcileImports(result)
                 if (owner != session || revision != generation) return@launch
                 clearPending()
@@ -214,7 +214,7 @@ internal class PluginManagementViewModel(
                             catch (_: Exception) { null }
                         if (owner == session && revision == generation && actual != null &&
                             actual.entries.none { sameSpec(it.spec, edit.spec) }) {
-                            try { removeImport(edit.spec) } catch (cancel: CancellationException) { throw cancel }
+                            try { removeImport(edit.spec, actual) } catch (cancel: CancellationException) { throw cancel }
                             catch (_: Exception) { /* Retry via a later successful reconciliation. */ }
                         }
                     }

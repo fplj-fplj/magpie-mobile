@@ -79,7 +79,7 @@ class PluginManagementViewModelTest {
         val vm = PluginManagementViewModel(readPlugins = {
             if (!readable) throw PluginReadException()
             snapshot
-        }, readProviders = { emptyList() }, performEdit = { throw IllegalArgumentException() }, removeImport = { cleaned.add(it) })
+        }, readProviders = { emptyList() }, performEdit = { throw IllegalArgumentException() }, removeImport = { spec, _ -> cleaned.add(spec) })
         vm.attach(1)
         vm.edit(PluginEdit.Add("/private/import-a/plugin.ts"))
         assertEquals(listOf("/private/import-a/plugin.ts"), cleaned)
@@ -98,13 +98,13 @@ class PluginManagementViewModelTest {
         var snapshot = PluginSnapshot(entries = listOf(ManagedPlugin(spec)))
         val cleaned = mutableListOf<String>()
         val first = PluginManagementViewModel(savedState = saved, readPlugins = { snapshot }, readProviders = { emptyList() },
-            performEdit = { throw PluginWriteUnknownException() }, removeImport = { cleaned.add(it) }, clock = { 1000 })
+            performEdit = { throw PluginWriteUnknownException() }, removeImport = { value, _ -> cleaned.add(value) }, clock = { 1000 })
         first.attach(1)
         first.edit(PluginEdit.Remove(spec))
         first.refresh()
         assertTrue(cleaned.isEmpty())
         val restored = PluginManagementViewModel(savedState = saved, readPlugins = { snapshot }, readProviders = { emptyList() },
-            removeImport = { cleaned.add(it) }, clock = { 2000 })
+            removeImport = { value, _ -> cleaned.add(value) }, clock = { 2000 })
         restored.attach(2)
         assertTrue(restored.state.value.pending)
         snapshot = PluginSnapshot()

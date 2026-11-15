@@ -105,6 +105,11 @@ internal class PluginImporter(
         synchronized(activeStages) { activeStages.remove(stage.absolutePath) }
     }
 
+    fun removeIfUnreferenced(spec: String, snapshot: PluginSnapshot) {
+        val stage = importedStage(spec) ?: return
+        if (snapshot.entries.none { importedStage(it.spec)?.canonicalFile == stage.canonicalFile }) removeImported(spec)
+    }
+
     /** Run after a successful read or authoritative write result, with no unresolved native write. */
     fun reconcile(snapshot: PluginSnapshot) {
         val referenced = snapshot.entries.mapNotNull { importedStage(it.spec)?.canonicalPath }.toSet()
@@ -133,10 +138,15 @@ internal class PluginImporter(
 
     private fun importedStage(spec: String): File? {
         val path = runCatching { if (spec.startsWith("file:")) File(java.net.URI(spec)) else File(spec) }.getOrNull() ?: return null
-        val stage = path.parentFile ?: return null
-        return stage.takeIf { it.parentFile?.canonicalFile == root.canonicalFile &&
-            it.canonicalFile.parentFile == root.canonicalFile &&
-            runCatching { UUID.fromString(it.name) }.isSuccess }
+        var stage: File? = path
+        while (stage != null) {
+            if (stage.parentFile?.canonicalFile == root.canonicalFile) {
+                return stage.takeIf { it.canonicalFile.parentFile == root.canonicalFile &&
+                    runCatching { UUID.fromString(it.name) }.isSuccess }
+            }
+            stage = stage.parentFile
+        }
+        return null
     }
 
     companion object {
