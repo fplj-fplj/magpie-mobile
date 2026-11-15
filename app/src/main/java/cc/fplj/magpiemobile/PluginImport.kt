@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import cc.fplj.magpiemobile.core.PluginSnapshot
 import java.io.File
 import java.io.InputStream
 import java.util.UUID
@@ -30,7 +31,10 @@ internal class PluginImporter(
         val id = UUID.randomUUID().toString()
         val pending = File(root, "$id.pending")
         val published = File(root, id)
-        check(pending.mkdir()) { "无法创建插件暂存目录" }
+        synchronized(activeStages) {
+            check(pending.mkdir()) { "无法创建插件暂存目录" }
+            activeStages.add(published.absolutePath)
+        }
         var bytes = 0L
         var files = 0
         fun copy(document: PluginDocument, parent: File, depth: Int): File {
@@ -68,21 +72,79 @@ internal class PluginImporter(
                 setOf("js", "mjs", "cjs", "ts", "mts", "tsx")) { "请选择 JS / TS 插件文件，或导入插件目录" }
             val entry = copy(selected, pending, 0)
             if (selected.directory) require(File(entry, "package.json").isFile) { "插件目录需要包含 package.json" }
+            File(pending, PREPARED).writeText(entry.name)
             check(pending.renameTo(published)) { "插件导入未完成" }
             return File(published, entry.name).absolutePath
         } catch (e: Exception) {
             pending.deleteRecursively()
             published.deleteRecursively()
+            synchronized(activeStages) { activeStages.remove(published.absolutePath) }
             throw e
         }
     }
 
-    /** Called only after the core confirmed removal of this exact imported spec. */
+    /** Persist protection before submitting Add; an absent read cannot disprove a running install. */
+    fun markSubmitted(spec: String) {
+        val stage = importedStage(spec) ?: return
+        File(stage, SUBMITTED).writeText("")
+        File(stage, PREPARED).delete()
+        synchronized(activeStages) { activeStages.remove(stage.absolutePath) }
+    }
+
+    /** The core returned a definite rejection. Defer deletion until a successful absent read. */
+    fun markRejected(spec: String) {
+        val stage = importedStage(spec) ?: return
+        File(stage, REJECTED).writeText("")
+        File(stage, SUBMITTED).delete()
+    }
+
+    /** Only a confirmed removal, rejected Add, or an unsubmitted snapshot can reach this method. */
     fun removeImported(spec: String) {
-        val path = runCatching { if (spec.startsWith("file:")) File(java.net.URI(spec)) else File(spec) }.getOrNull() ?: return
-        val stage = path.parentFile ?: return
-        if (stage.parentFile?.canonicalFile == root.canonicalFile &&
-            runCatching { UUID.fromString(stage.name) }.isSuccess) stage.deleteRecursively()
+        val stage = importedStage(spec) ?: return
+        stage.deleteRecursively()
+        synchronized(activeStages) { activeStages.remove(stage.absolutePath) }
+    }
+
+    /** Run after a successful read or authoritative write result, with no unresolved native write. */
+    fun reconcile(snapshot: PluginSnapshot) {
+        val referenced = snapshot.entries.mapNotNull { importedStage(it.spec)?.canonicalPath }.toSet()
+        for (stage in root.listFiles().orEmpty()) {
+            if (!stage.isDirectory || stage.canonicalFile.parentFile != root.canonicalFile) continue
+            val id = stage.name.removeSuffix(".pending")
+            if (runCatching { UUID.fromString(id) }.isFailure) continue
+            val publishedPath = File(root, id).absolutePath
+            if (synchronized(activeStages) { publishedPath in activeStages }) continue
+            when {
+                stage.canonicalPath in referenced -> {
+                    val registered = File(stage, REGISTERED)
+                    if (!registered.exists()) registered.writeText("")
+                    File(stage, PREPARED).delete()
+                    File(stage, SUBMITTED).delete()
+                    File(stage, REJECTED).delete()
+                }
+                stage.name.endsWith(".pending") -> stage.deleteRecursively()
+                // A submitted but never observed Add remains protected across process death.
+                File(stage, SUBMITTED).exists() -> Unit
+                File(stage, REGISTERED).exists() || File(stage, PREPARED).exists() || File(stage, REJECTED).exists() -> stage.deleteRecursively()
+                // Older snapshots have no journal. Preserve until observed in a core read.
+            }
+        }
+    }
+
+    private fun importedStage(spec: String): File? {
+        val path = runCatching { if (spec.startsWith("file:")) File(java.net.URI(spec)) else File(spec) }.getOrNull() ?: return null
+        val stage = path.parentFile ?: return null
+        return stage.takeIf { it.parentFile?.canonicalFile == root.canonicalFile &&
+            it.canonicalFile.parentFile == root.canonicalFile &&
+            runCatching { UUID.fromString(it.name) }.isSuccess }
+    }
+
+    companion object {
+        private const val PREPARED = ".magpie-prepared"
+        private const val SUBMITTED = ".magpie-submitted"
+        private const val REGISTERED = ".magpie-registered"
+        private const val REJECTED = ".magpie-rejected"
+        private val activeStages = mutableSetOf<String>()
     }
 }
 

@@ -21,9 +21,7 @@ android {
         buildConfigField("String", "CORE_VERSION", "\"0.1.3781-androidhost.2\"")
         buildConfigField("String", "GIT_SHA", "\"" + (System.getenv("GITHUB_SHA")?.take(8) ?: "local") + "\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        if (magpieTestAbi != null) {
-            ndk { abiFilters.add(magpieTestAbi!!) }
-        }
+        ndk { abiFilters.add(magpieTestAbi ?: "arm64-v8a") }
     }
 
     // P0-2 关键：ELF PIE 可执行载荷以“提取式”native 库打包，

@@ -20,6 +20,7 @@ App's explicit POST) → answered again.
 import argparse, json, os, secrets, signal, shutil, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from powercontext_fixture import PowerContextFixture
 
 CORE_VERSION = "0.1.3781-androidhost.2"
 VENDOR_KEY = "synthetic-provider-key-never-real"
@@ -530,6 +531,33 @@ def run_suite(core, root, hooks_base):
     await_check(lambda: "aborted" in failure_output.read_text(), "client disconnect did not cancel the Bun hook", timeout=10)
     with Vendor.lock: check(len(Vendor.bodies) == count_before_cancel, "cancelled hook request reached the vendor")
     print("async hook exception, timeout and client cancellation: PASS")
+
+    # Exercise the installed community hooks source separately from the fixture hook.
+    powercontext = next(e for e in json.loads(core.api("/api/plugins"))["plugins"] if
+                        e["spec"] == "@magpie-community/gateway-powercontext" or
+                        e["spec"].startswith("@magpie-community/gateway-powercontext@"))
+    memory = PowerContextFixture().start()
+    try:
+        core.api("/api/plugins/options", "POST", {"Spec": powercontext["spec"], "Options": memory.plugin_options(
+            capture=True, recallRemote=True, captureRemote=True, idleCaptureMs=1000,
+            requestTimeoutMs=3000, gatewayTimeoutMs=5000)})
+        must(core.gateway, "/v1/chat/completions", "POST", {
+            "model": "syncvendor/sync-model", "stream": False,
+            "messages": [{"role": "user", "content": "remember the fixture project"}]},
+            {"Authorization": "Bearer " + user_key, "X-Magpie-Session": "community-memory-session"})
+        memory.assert_recalled()
+        check(any(k.get("kind") == "session" and k.get("external_id") for r in memory.scope_resolves
+                  for k in r["body"]["binding_keys"]), "community hook lost the gateway session binding")
+        with Vendor.lock: recalled = json.dumps(Vendor.bodies[-1].get("messages", []))
+        check("<powercontext-reference>" in recalled and memory.content in recalled, "community hook did not append recalled memory")
+        await_check(lambda: bool(memory.captures), "community hook did not capture the completed conversation", timeout=15)
+        capture = memory.captures[-1]["body"]
+        check(capture.get("scope_id") == memory.scope_id and "OK" in capture.get("content", ""), "community capture lost its scope or assistant reply")
+        check(all("sk-magpie-" not in r["headers"].get("Authorization", "") for r in memory.requests), "gateway key leaked to the memory service")
+        print("community PowerContext real recall, session binding and completed capture: PASS")
+    finally:
+        core.api("/api/plugins/options", "POST", {"Spec": powercontext["spec"], "Options": {}})
+        memory.stop()
 
     # off and on.
     core.api("/api/plugins/off", "POST", {"Spec": specs["hooks"], "Off": True})

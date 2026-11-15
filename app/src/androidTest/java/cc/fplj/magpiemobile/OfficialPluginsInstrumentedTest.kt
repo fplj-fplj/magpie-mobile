@@ -15,6 +15,7 @@ import java.io.Closeable
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ServerSocket
 import java.net.Socket
@@ -42,7 +43,7 @@ class OfficialPluginsInstrumentedTest {
         val toolMarker = File(context.filesDir, "runtime-tool.txt")
         responseMarker.delete()
         toolMarker.delete()
-        ActivityScenario.launch(MainActivity::class.java).use {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             LocalUpstream().use { upstream ->
                 val installed = mutableListOf<String>()
                 context.startForegroundService(Intent(context, GatewayService::class.java).setAction(GatewayService.ACTION_START))
@@ -115,7 +116,7 @@ class OfficialPluginsInstrumentedTest {
                     await("async onResponse completion and request-owned state") {
                         responseMarker.isFile && responseMarker.readLines().any { line ->
                             val value = JSONObject(line)
-                            value.optBoolean("success") && value.optString("state") == "linked"
+                            value.optBoolean("success") && value.optString("state") == "linked" && value.optInt("bridgeStatus") == 200
                         }
                     }
                     var firstDeltaBeforeUpstreamDone = false
@@ -189,7 +190,12 @@ class OfficialPluginsInstrumentedTest {
                         FixturePluginDocumentsProvider.AUTHORITY, FixturePluginDocumentsProvider.DOC_SINGLE), false)
                     val safTree = importer.importPlugin(DocumentsContract.buildTreeDocumentUri(
                         FixturePluginDocumentsProvider.AUTHORITY, FixturePluginDocumentsProvider.DOC_TREE), true)
-                    for (spec in listOf(safFile, safTree)) { client.add(spec); installed.add(spec) }
+                    for (spec in listOf(safFile, safTree)) {
+                        importer.markSubmitted(spec)
+                        client.add(spec)
+                        installed.add(spec)
+                    }
+                    importer.reconcile(client.plugins())
                     assertTrue(File(safTree, "node_modules/is-number/index.js").isFile)
                     val safReply = http("http://127.0.0.1:3425/v1/chat/completions", auth, body.toString())
                     assertEquals(200, safReply.first)
@@ -205,9 +211,10 @@ class OfficialPluginsInstrumentedTest {
                         .getJSONObject("result").getJSONArray("tools")
                     assertFalse((0 until offTools.length()).any { offTools.getJSONObject(it).getString("name") == safName })
                     client.setOff(safTree, false)
-                    client.remove(safTree)
+                    assertEquals(200, http("http://127.0.0.1:3430/api/plugins/remove", "",
+                        JSONObject().put("spec", safTree).toString(), browserCookie).first)
                     assertTrue(client.plugins().entries.none { it.spec == safTree })
-                    importer.removeImported(safTree)
+                    importer.reconcile(client.plugins())
                     assertFalse(File(safTree).exists())
                     installed.remove(safTree)
                     device.findObject(By.text("更多"))?.click()
@@ -217,19 +224,23 @@ class OfficialPluginsInstrumentedTest {
                     val expectedCount = client.plugins().entries.size
                     assertTrue(device.wait(Until.hasObject(By.text("$expectedCount 个已安装")), 20_000))
                     assertTrue(device.takeScreenshot(File(artifacts, "native-plugins.png")))
-                    device.findObject(By.clazz("android.widget.EditText")).text = client.plugins().entries.single { it.spec == provider.absolutePath }.name
-                    assertTrue(device.wait(Until.hasObject(By.text(client.plugins().entries.single { it.spec == provider.absolutePath }.name)), 10_000))
-                    device.findObject(By.text(client.plugins().entries.single { it.spec == provider.absolutePath }.name)).click()
+                    device.findObject(By.res("plugin-installed-filter")).text = provider.absolutePath
+                    val providerRow = By.res(officialPluginRowTag(provider.absolutePath))
+                    assertTrue(device.wait(Until.hasObject(providerRow), 10_000))
+                    device.findObject(providerRow).click()
                     assertTrue(device.wait(Until.hasObject(By.text("参数")), 10_000))
                     assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-detail.png")))
                     device.findObject(By.text("参数")).click()
                     val uiOptions = JSONObject().put("base", upstream.base).put("fromBrowser", true).put("fromNative", true).put("fromNativeUI", true)
-                    device.findObject(By.clazz("android.widget.EditText")).click()
+                    val optionsEditor = By.res("plugin-options-json").enabled(true)
+                    assertTrue(device.wait(Until.hasObject(optionsEditor), 10_000))
+                    device.findObject(optionsEditor).click()
                     device.waitForIdle()
-                    device.findObject(By.clazz("android.widget.EditText")).text = uiOptions.toString()
+                    device.findObject(optionsEditor).text = uiOptions.toString()
                     device.pressBack() // close the input method
                     device.findObject(By.text("保存参数")).click()
                     await("native options editor save") { client.plugins().entries.single { it.spec == provider.absolutePath }.options["fromNativeUI"].toString() == "true" }
+                    assertTrue(device.wait(Until.hasObject(By.text("保存参数").enabled(true)), 15_000))
                     assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-options.png")))
                     val browserUiRead = JSONObject(http("http://127.0.0.1:3430/api/plugins", "", cookie = browserCookie).second).getJSONArray("plugins")
                     assertTrue((0 until browserUiRead.length()).map { browserUiRead.getJSONObject(it) }
@@ -239,17 +250,48 @@ class OfficialPluginsInstrumentedTest {
                     device.findObject(By.text("Test API key")).click()
                     assertTrue(device.wait(Until.hasObject(By.text("API 密钥")), 10_000))
                     assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-login.png")))
-                    device.findObject(By.clazz("android.widget.EditText")).click()
-                    device.findObject(By.clazz("android.widget.EditText")).text = "synthetic-ui-key"
+                    val loginEditor = By.res("plugin-login-key").enabled(true)
+                    assertTrue(device.wait(Until.hasObject(loginEditor), 10_000))
+                    device.findObject(loginEditor).click()
+                    device.findObject(loginEditor).text = "synthetic-ui-key"
                     device.pressBack()
                     device.findObject(By.text("保存并连接")).click()
                     assertTrue(device.wait(Until.hasObject(By.text("连接成功")), 20_000))
                     device.findObject(By.text("返回插件")).click()
+                    val connectedOwner = NativeCoreSession.providerSessionId()
+                    device.pressHome()
+                    assertEquals(200, http("http://127.0.0.1:3425/api/hello", auth).first)
+                    device.executeShellCommand("am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10200000 -n cc.fplj.magpiemobile/.MainActivity")
+                    scenario.recreate()
+                    // ActivityScenario's background invoker can leave its EmptyActivity on top.
+                    // Restore the launcher task after recreation before checking the real app UI.
+                    device.executeShellCommand("am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10200000 -n cc.fplj.magpiemobile/.MainActivity")
+                    assertTrue(device.wait(Until.hasObject(By.pkg("cc.fplj.magpiemobile").depth(0)), 15_000))
+                    if (!device.wait(Until.hasObject(By.text("官方外部插件")), 2000)) {
+                        assertTrue(device.wait(Until.hasObject(By.text("插件与工具")), 10_000))
+                        device.findObject(By.text("插件与工具")).click()
+                    }
+                    assertTrue(device.wait(Until.hasObject(By.text("官方外部插件")), 15_000))
+                    assertEquals("activity recreation restarted the core session", connectedOwner, NativeCoreSession.providerSessionId())
+                    assertEquals("true", client.plugins().entries.single { it.spec == provider.absolutePath }.options["fromNativeUI"].toString())
+                    device.findObject(By.res("plugin-installed-filter")).clear()
+                    await("installed filter cleared in Compose") { device.findObject(By.res("plugin-installed-filter"))?.text.orEmpty().isEmpty() }
+                    val previousScale = device.executeShellCommand("settings get system font_scale").trim()
+                        .takeIf { it.matches(Regex("[0-9]+(\\.[0-9]+)?")) } ?: "1.0"
+                    try {
+                        device.executeShellCommand("settings put system font_scale 1.3")
+                        await("Android font scale change") { context.resources.configuration.fontScale > 1.25f }
+                        device.waitForIdle()
+                        SystemClock.sleep(500) // allow configuration and dialog-window animations to finish
+                        device.waitForIdle()
+                        assertTrue(device.takeScreenshot(File(artifacts, "native-plugins-large-font.png")))
+                    } finally { device.executeShellCommand("settings put system font_scale $previousScale") }
                     File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
                 } finally {
                     try {
+                        device.takeScreenshot(File(artifacts, "last-screen.png"))
                         File(artifacts, "core-status.txt").writeText(GatewayRuntime.status.value.toString())
                         installed.reversed().forEach { spec -> runCatching {
                             NativeCoreSession.pluginClient().remove(spec)
@@ -262,12 +304,26 @@ class OfficialPluginsInstrumentedTest {
                                     line.contains("libmagpie_exec.so") || line.contains("libbun_exec.so")
                                 }
                         }
+                        val stoppedProcesses = device.executeShellCommand("ps -A -o ARGS")
+                        assertFalse("Android process inspection failed", stoppedProcesses.contains("ps:"))
+                        File(artifacts, "shutdown-processes.txt").writeText(stoppedProcesses)
+                        for (port in listOf(3425, 3430)) {
+                            assertFalse("core port $port still accepts connections", runCatching {
+                                Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 500) }
+                                true
+                            }.getOrDefault(false))
+                        }
                         File(artifacts, "shutdown.txt").writeText("PASS: core and Bun processes stopped\n")
                     } finally {
                         // AGP removes app storage when it uninstalls the test APK. Keep the
                         // evidence under the test shell's directory before returning to AGP.
                         device.executeShellCommand("mkdir -p /data/local/tmp/magpie-plugin-runtime")
-                        device.executeShellCommand("cp -R '${artifacts.absolutePath}/.' /data/local/tmp/magpie-plugin-runtime/")
+                        // UiAutomation splits arguments directly; this app-owned path has
+                        // no spaces, and shell quoting would become literal filename text.
+                        device.executeShellCommand("cp -R ${artifacts.absolutePath}/. /data/local/tmp/magpie-plugin-runtime/")
+                        assertEquals("runtime evidence was not copied before uninstall",
+                            "/data/local/tmp/magpie-plugin-runtime/core-status.txt",
+                            device.executeShellCommand("ls /data/local/tmp/magpie-plugin-runtime/core-status.txt").trim())
                     }
                 }
             }
@@ -429,12 +485,13 @@ class OfficialPluginsInstrumentedTest {
                 ctx.signal.addEventListener("abort", () => {clearTimeout(timer);reject(new DOMException("fixture aborted","AbortError"))}, {once:true})
               })
               const recalled = await fetch(ctx.options.base + "/recall").then(r => r.json())
+              ctx.state.bridgeStatus = (await fetch("http://127.0.0.1:3425/v1/models")).status
               ctx.state.link = "linked"
               body.messages[body.messages.length - 1].content += "|" + recalled.context
               return body
             }
             export async function onResponse(reply, ctx) {
-              appendFileSync(process.env.HOME + "/runtime-hook-response.jsonl",JSON.stringify({success:ctx.success,state:ctx.state.link}) + "\n")
+              appendFileSync(process.env.HOME + "/runtime-hook-response.jsonl",JSON.stringify({success:ctx.success,state:ctx.state.link,bridgeStatus:ctx.state.bridgeStatus}) + "\n")
             }
         """.trimIndent()
     }

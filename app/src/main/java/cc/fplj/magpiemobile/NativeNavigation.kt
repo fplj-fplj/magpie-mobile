@@ -24,6 +24,8 @@ import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import cc.fplj.magpiemobile.core.EnginePaths
 import cc.fplj.magpiemobile.core.GatewayEngineController
 import cc.fplj.magpiemobile.preferences.AppPage
@@ -57,8 +59,12 @@ fun Dashboard(
     val keyPoolState by keyPoolViewModel.state.collectAsStateWithLifecycle()
     val profileViewModel: ChatProfileViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val profileState by profileViewModel.state.collectAsStateWithLifecycle()
+    val pluginImporter = remember(context) { PluginImporter(context.applicationContext) }
     val officialPlugins: PluginManagementViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = viewModelFactory {
-        initializer { PluginManagementViewModel(savedState = createSavedStateHandle()) }
+        initializer { PluginManagementViewModel(savedState = createSavedStateHandle(),
+            reconcileImports = { snapshot -> withContext(Dispatchers.IO) { pluginImporter.reconcile(snapshot) } },
+            removeImport = { spec -> withContext(Dispatchers.IO) { pluginImporter.removeImported(spec) } },
+            rejectImport = { spec -> withContext(Dispatchers.IO) { pluginImporter.markRejected(spec) } }) }
     })
     val pluginsState by officialPlugins.state.collectAsStateWithLifecycle()
     val stabilityViewModel: StabilityViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
@@ -211,7 +217,7 @@ fun Dashboard(
                     verticalArrangement = Arrangement.spacedBy(UiSpacing.card),
                 ) {
                     if (section != null) {
-                        PageHeading(section.title, section.detail)
+                        if (section != GatewaySection.PLUGINS) PageHeading(section.title, section.detail)
                         if (section == GatewaySection.ROUTING || section == GatewaySection.SYSTEM) {
                             EditorChoiceCard(clientReady && connection.webEditor && !providerBusy, externalState,
                                 { appShell.selectPage(AppPage.PROVIDERS) }, ::openBrowserEditor, nativeSelected = false)

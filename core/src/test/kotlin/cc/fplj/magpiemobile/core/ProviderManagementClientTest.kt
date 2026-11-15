@@ -118,6 +118,10 @@ class ProviderManagementClientTest {
             JsonObject(original + ("loopbackKeys" to JsonPrimitive(false))),
             JsonObject(original + ("debugEndpoints" to JsonPrimitive(true))),
             JsonObject(original + ("schemaVersion" to JsonPrimitive("1"))),
+            JsonObject(original + ("mobile" to JsonPrimitive(false))),
+            JsonObject(original + mapOf("mobile" to JsonPrimitive(false), "androidHost" to JsonPrimitive(true))),
+            JsonObject(original + mapOf("mobile" to JsonPrimitive(false), "androidHost" to JsonPrimitive(false), "fullAdmin" to JsonPrimitive(true))),
+            JsonObject(original + mapOf("mobile" to JsonPrimitive(false), "androidHost" to JsonPrimitive(true), "fullAdmin" to JsonPrimitive("true"))),
         )
         for (variant in variants) {
             api.capabilitiesBody = variant.toString()
@@ -140,6 +144,21 @@ class ProviderManagementClientTest {
         assertEquals(1, api.requests.count { it.path == "/api/mobile/capabilities" })
         assertEquals(1, api.createRequests.get())
         assertEquals(1, api.editRequests.get())
+    }
+
+    @Test fun officialAndroidHostNegotiatesProviderCreationAndEditing() {
+        val original = Json.parseToJsonElement(ProviderApiFixture.CAPABILITIES).jsonObject
+        api.capabilitiesBody = JsonObject(original + mapOf(
+            "coreVersion" to JsonPrimitive("0.1.3781-androidhost.2"),
+            "mobile" to JsonPrimitive(false), "androidHost" to JsonPrimitive(true), "fullAdmin" to JsonPrimitive(true),
+        )).toString()
+        val client = api.client()
+        client.create(draft())
+        val snapshot = client.editable("new-provider")
+        client.edit(ProviderEditDraft(snapshot, name = "Official host provider"))
+        assertEquals(1, api.createRequests.get())
+        assertEquals(1, api.editRequests.get())
+        assertEquals(1, api.requests.count { it.path == "/api/mobile/capabilities" })
     }
 
     @Test fun observedFileErrorOrMalformedRefreshPreventsWriteUntilExplicitHealthyReload() {
@@ -355,6 +374,19 @@ class ProviderManagementClientTest {
         assertEquals(1, api.editRequests.get())
     }
 
+    @Test fun canonicalWriteHasItsOwnBudgetAndDoesNotReuseTheShortReadTimeout() {
+        val client = api.client(Duration.ofMillis(200), Duration.ofSeconds(2))
+        val snapshot = client.editable("custom-api")
+        api.editHook = { exchange, request ->
+            api.commitEdit(request)
+            Thread.sleep(400)
+            api.respond(exchange, 200, api.safeSnapshot().toString())
+        }
+        val result = client.edit(ProviderEditDraft(snapshot, name = "Slow disk commit"))
+        assertEquals("Slow disk commit", result.name)
+        assertEquals(1, api.editRequests.get())
+    }
+
     @Test fun non2xxAndMalformedResponseNeverExposeErrorBodyOrSerializationCause() {
         api.createHook = { exchange, _ -> api.respond(exchange, 401, "error " + ProviderApiFixture.API_KEY) }
         val http = assertFailsWith<ManagementHttpException> { api.client().create(draft()) }
@@ -480,7 +512,8 @@ internal class ProviderApiFixture : AutoCloseable {
         }
         server.start()
     }
-    fun client(timeout: Duration = Duration.ofSeconds(2)) = ProviderManagementClient(credential, baseUrl, timeout)
+    fun client(timeout: Duration = Duration.ofSeconds(2), writeTimeout: Duration = timeout) =
+        ProviderManagementClient(credential, baseUrl, timeout, writeTimeout)
     fun safeSnapshot(): JsonObject = buildJsonObject {
         put("id", canonical["id"]!!); put("revision", revision); put("name", canonical["name"]!!)
         put("chat", canonical["chat"]!!); put("models", canonical["models"]!!); put("noModels", canonical["noModels"]!!)

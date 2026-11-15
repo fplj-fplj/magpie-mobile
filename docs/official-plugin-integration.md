@@ -24,6 +24,8 @@
 
 本地导入是所选内容的快照，编辑原始文件不会修改已安装的副本。要替换它，可移除后重新导入。npm／GitHub 更新沿官方核心行为处理；请求固定版本并不意味着点击更新后仍锁定该版本。
 
+导入副本用私有标记记录暂存、已提交、已登记和明确拒绝。成功重读后回收网页移除的副本及失败残留；安装结果未知、从未观察到登记的副本继续保留，避免只因超时或一次缺席读取删除正在使用的文件。中途退出页面不会取消已交给核心的操作。
+
 工具通过 `http://127.0.0.1:3425/mcp/magpie/tools` 提供给客户端。添加 MCP 地址时同时配置有效网关客户端密钥。插件工具是否执行由客户端的工具调用流程决定，普通聊天不会因为安装了插件就自动执行所有工具。
 
 ## 状态与双编辑
@@ -61,3 +63,5 @@ Android 本机网关需要有效 Key。插件宿主使用独立的普通调用 K
 发布 job 等待构建与 Android 运行 job 全部通过，上传对应提交的签名候选 APK及构建证据。候选发布标为 prerelease。ARM64 真机运行尚无可用设备证据时明确列为待验收；x86_64 Android 运行和 ARM64 ELF 检查不能代替这项结果。第三方个人账号的实际服务端授权与推理也单独记录，不由模拟 OAuth 代替。
 
 最终验收按 [完整实施计划与矩阵](official-plugin-adaptation-plan.md) 逐项检查，未执行或未通过的项目保留为未完成。
+
+已取得的完整通过基线为 [`3f4f78da` 的 Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43675887215)：JVM、Go、Linux 官方插件 smoke、race、Android instrumentation 与签名发布均通过。Android 报告为 1 个完整测试、0 failure／error／skipped，覆盖原生参数保存与登录、浏览器共享配置、后台返回、Activity 重建、1.3 倍字体和停止后进程清理。对应[签名候选 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.40-official-plugins-3f4f78da)。此后的导入回收与提供商写入预算补丁须由其自身 Actions 再次验证。
