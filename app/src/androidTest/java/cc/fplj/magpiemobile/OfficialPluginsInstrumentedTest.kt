@@ -305,6 +305,7 @@ class OfficialPluginsInstrumentedTest {
                     await("installed filter cleared in Compose") { device.findObject(By.res("plugin-installed-filter"))?.text.orEmpty().isEmpty() }
                     val previousScale = device.executeShellCommand("settings get system font_scale").trim()
                         .takeIf { it.matches(Regex("[0-9]+(\\.[0-9]+)?")) } ?: "1.0"
+                    val previousScaleValue = previousScale.toFloat()
                     try {
                         device.executeShellCommand("settings put system font_scale 1.3")
                         await("Android font scale change") { context.resources.configuration.fontScale > 1.25f }
@@ -312,7 +313,13 @@ class OfficialPluginsInstrumentedTest {
                         SystemClock.sleep(500) // allow configuration and dialog-window animations to finish
                         device.waitForIdle()
                         assertTrue(device.takeScreenshot(File(artifacts, "native-plugins-large-font.png")))
-                    } finally { device.executeShellCommand("settings put system font_scale $previousScale") }
+                    } finally {
+                        device.executeShellCommand("settings put system font_scale $previousScale")
+                        await("Android font scale restore") {
+                            kotlin.math.abs(context.resources.configuration.fontScale - previousScaleValue) < 0.05f
+                        }
+                        device.waitForIdle()
+                    }
                     File(artifacts, "upstream-requests.jsonl").writeText(upstream.requests.joinToString("\n"))
                     File(artifacts, "hook-response.jsonl").writeText(responseMarker.readText())
                     device.pressBack()
