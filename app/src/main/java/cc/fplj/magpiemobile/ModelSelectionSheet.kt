@@ -46,6 +46,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
@@ -145,6 +146,7 @@ internal fun ModelSelectionSheet(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     val normalizedQuery = query.trim()
     val filteredGroups = remember(groups, normalizedQuery) {
@@ -181,8 +183,12 @@ internal fun ModelSelectionSheet(
         }
     }
 
-    LaunchedEffect(visible, normalizedQuery, rows.size) {
-        if (normalizedQuery.isNotBlank() || selectedIds.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(visible, normalizedQuery, rows) {
+        if (normalizedQuery.isNotBlank()) {
+            if (rows.isNotEmpty()) listState.scrollToItem(0)
+            return@LaunchedEffect
+        }
+        if (selectedIds.isEmpty()) return@LaunchedEffect
         val selectedIndex = rows.indexOfFirst { it.entry?.id in selectedIds }
         if (selectedIndex >= 0) listState.scrollToItem(selectedIndex)
     }
@@ -256,7 +262,10 @@ internal fun ModelSelectionSheet(
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("model-search")
+                        .semantics { testTagsAsResourceId = true },
                     placeholder = { Text("搜索模型或提供商") },
                     singleLine = true,
                     shape = CircleShape,
@@ -268,7 +277,12 @@ internal fun ModelSelectionSheet(
                         unfocusedIndicatorColor = Color.Transparent,
                     ),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+                    keyboardActions = KeyboardActions(
+                        onSearch = {
+                            focusManager.clearFocus()
+                            keyboardController?.hide()
+                        },
+                    ),
                 )
             }
 
@@ -345,9 +359,9 @@ internal fun ModelSelectionSheet(
                                     provider = row.group.title,
                                     selected = entry.id in selectedIds,
                                     singleSelect = singleSelect,
-                                modifier = Modifier.testTag("model-option:${entry.id}").semantics {
-                                    testTagsAsResourceId = true
-                                },
+                                    modifier = Modifier
+                                        .testTag("model-option:${entry.id}")
+                                        .semantics { testTagsAsResourceId = true },
                                     onClick = { choose(entry) },
                                 )
                             }
@@ -359,7 +373,10 @@ internal fun ModelSelectionSheet(
             if (!singleSelect) {
                 Button(
                     onClick = onDismissRequest,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("model-selection-confirm")
+                        .semantics { testTagsAsResourceId = true },
                 ) {
                     Text("$confirmLabel · ${selectedIds.size} 个模型")
                 }

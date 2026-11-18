@@ -12,6 +12,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -420,11 +423,12 @@ fun ProvidersPanel(
         Surface(Modifier.fillMaxSize()) {
             Column(
                 Modifier.fillMaxSize()
-                    .safeDrawingPadding()
-                    .imePadding()
-                    .padding(horizontal = UiSpacing.medium)
-                    // Dialog edge-to-edge insets can omit the navigation gesture area on Android 15.
-                    .padding(bottom = UiSpacing.large + UiSpacing.medium),
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+                        ),
+                    )
+                    .padding(horizontal = UiSpacing.medium),
             ) {
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 12.dp),
@@ -590,6 +594,9 @@ fun ProvidersPanel(
                                 onClick = { modelPickerOpen = true },
                                 supportingText = if (discoveryLoading) "正在刷新目录"
                                 else "打开模型目录，搜索并多选",
+                                modifier = Modifier
+                                    .testTag("provider-model-selector")
+                                    .semantics { testTagsAsResourceId = true },
                             )
                             ProviderFormGroup(
                                 title = "已启用模型",
@@ -709,7 +716,13 @@ fun ProvidersPanel(
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Column(
-                    Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(
+                            WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)
+                                .union(WindowInsets.ime.only(WindowInsetsSides.Bottom)),
+                        )
+                        .padding(vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(UiSpacing.small),
                 ) {
                     Text(

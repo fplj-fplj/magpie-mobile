@@ -1,6 +1,7 @@
 package cc.fplj.magpiemobile
 
 import android.content.Intent
+import android.graphics.Rect
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import androidx.test.core.app.ActivityScenario
@@ -8,6 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import cc.fplj.magpiemobile.core.*
 import java.io.BufferedInputStream
@@ -123,6 +125,12 @@ class OfficialPluginsInstrumentedTest {
                     val models = JSONObject(http("http://127.0.0.1:3425/v1/models", auth).second).getJSONArray("data")
                     val nativeModel = (0 until models.length()).map { models.getJSONObject(it).getString("id") }
                         .first { it.contains("android-runtime") && it.endsWith("fake-echo") }
+                    // Provider editors list provider-local IDs; bind that catalog entry to the
+                    // gateway's qualified native model instead of inventing a fallback model.
+                    val upstreamModels = JSONObject(http(upstream.base + "/v1/models", "").second).getJSONArray("data")
+                    val providerCatalogModel = (0 until upstreamModels.length())
+                        .map { upstreamModels.getJSONObject(it).getString("id") }
+                        .single { nativeModel.endsWith("/$it") }
                     val pluginModel = (0 until models.length()).map { models.getJSONObject(it).getString("id") }
                         .first { it.contains("androidfixture") && it.endsWith("fake-echo") }
                     val body = JSONObject().put("model", nativeModel).put("stream", false)
@@ -342,6 +350,55 @@ class OfficialPluginsInstrumentedTest {
                     device.findObject(savedProviderRow).click()
                     val connectivityEntry = By.res("provider-connectivity-entry")
                     await("saved provider connectivity entry") { device.hasObject(connectivityEntry) }
+                    val modelSheet = By.res("model-selection-sheet")
+                    val providerModelSelector = By.res("provider-model-selector")
+                        .enabled(true)
+                        .clickable(true)
+                    await("saved provider model tab") { device.hasObject(By.text("模型")) }
+                    device.findObject(By.text("模型")).click()
+                    await("saved provider real model catalog") {
+                        device.findObject(providerModelSelector)
+                            ?.findObject(By.text(providerCatalogModel)) != null
+                    }
+                    device.findObject(providerModelSelector).click()
+                    await("provider model sheet visible") { device.hasObject(modelSheet) }
+                    var providerModelOption = awaitStableModelOption(
+                        providerCatalogModel,
+                        "saved provider directory model",
+                    )
+                    assertTrue("saved provider model should start selected", providerModelOption.isSelected)
+                    assertTrue(device.takeScreenshot(File(artifacts, "provider-model-picker.png")))
+                    providerModelOption.click()
+                    await("provider model deselected") {
+                        device.findObject(By.res("model-option:$providerCatalogModel"))?.isSelected == false
+                    }
+                    val modelConfirm = By.res("model-selection-confirm")
+                        .enabled(true)
+                        .clickable(true)
+                    await("provider multi-select apply action") { device.hasObject(modelConfirm) }
+                    device.findObject(modelConfirm).click()
+                    await("provider empty selection applied") {
+                        !device.hasObject(modelSheet) &&
+                            device.findObject(providerModelSelector)
+                                ?.findObject(By.text("选择要启用的模型")) != null
+                    }
+                    device.findObject(providerModelSelector).click()
+                    await("provider model sheet reopened") { device.hasObject(modelSheet) }
+                    providerModelOption = awaitStableModelOption(
+                        providerCatalogModel,
+                        "saved provider directory model after apply",
+                    )
+                    assertFalse("provider deselection should survive apply", providerModelOption.isSelected)
+                    providerModelOption.click()
+                    await("provider model reselected") {
+                        device.findObject(By.res("model-option:$providerCatalogModel"))?.isSelected == true
+                    }
+                    device.findObject(modelConfirm).click()
+                    await("provider multi-select selection applied") {
+                        !device.hasObject(modelSheet) &&
+                            device.findObject(providerModelSelector)
+                                ?.findObject(By.text(providerCatalogModel)) != null
+                    }
                     device.findObject(connectivityEntry).click()
                     await("provider test dialog") { device.hasObject(By.text("开始测试")) }
                     device.findObject(By.text("开始测试")).click()
@@ -371,21 +428,6 @@ class OfficialPluginsInstrumentedTest {
                     await("provider connectivity test visible") {
                         device.hasObject(By.text("连通测试"))
                     }
-                    device.findObject(By.text("模型")).click()
-                    await("provider model field visible") {
-                        device.hasObject(By.text("选择要启用的模型"))
-                    }
-                    device.findObject(By.text("选择要启用的模型")).click()
-                    await("provider model picker visible") {
-                        device.hasObject(By.text("选择提供商模型"))
-                    }
-                    assertTrue(
-                        device.takeScreenshot(File(artifacts, "provider-model-picker.png")),
-                    )
-                    device.pressBack()
-                    await("provider detail after model picker") {
-                        device.hasObject(By.text("高级"))
-                    }
                     device.findObject(By.text("连通测试")).click()
                     await("unsaved provider test notice") {
                         device.hasObject(By.text("请先保存提供商，再运行连通测试。"))
@@ -408,44 +450,51 @@ class OfficialPluginsInstrumentedTest {
                     device.findObject(By.text("聊天")).click()
                     await("chat model selector visible") { device.hasObject(By.res("chat-model-selector")) }
                     device.findObject(By.res("chat-model-selector")).click()
-                    await("chat model sheet visible") { device.hasObject(By.text("搜索模型或提供商")) }
+                    await("chat model sheet visible") { device.hasObject(modelSheet) }
                     assertTrue(device.takeScreenshot(File(artifacts, "chat-model-picker.png")))
-                    device.findObject(By.clazz("android.widget.EditText")).text = nativeModel
-                    await("model search applied") { device.hasObject(By.text("找到 1 个匹配模型")) }
-                    val modelOption = By.res("model-option:$nativeModel")
-                    var previousModelBounds: android.graphics.Rect? = null
-                    var stableModelBounds = 0
-                    await("model result layout settled") {
-                        val option = device.findObject(modelOption)
-                        val bounds = option?.visibleBounds
-                        if (bounds != null && !bounds.isEmpty && bounds == previousModelBounds) {
-                            stableModelBounds++
-                        } else {
-                            previousModelBounds = bounds
-                            stableModelBounds = 0
-                        }
-                        stableModelBounds >= 3
+                    val modelSearch = By.res("model-search").enabled(true)
+                    val search = device.wait(Until.findObject(modelSearch), 10_000)
+                        ?: error("model search field missing")
+                    search.text = nativeModel
+                    await("model search committed") {
+                        device.findObject(modelSearch)?.text == nativeModel
                     }
-                    device.findObject(modelOption).click()
-                    await("chat model sheet dismissed") { !device.hasObject(By.res("model-selection-sheet")) }
+                    val chatModelOption = awaitStableModelOption(nativeModel, "filtered chat model")
+                    assertTrue(device.hasObject(modelSheet))
+                    chatModelOption.click()
                     await("chat model applied") {
-                        device.findObject(By.res("chat-model-selector"))?.findObject(By.text("fake-echo")) != null
+                        !device.hasObject(modelSheet) &&
+                            !device.hasObject(By.res("model-option:$nativeModel")) &&
+                            device.findObject(By.res("chat-model-selector"))
+                                ?.findObject(By.text(providerCatalogModel)) != null
                     }
                     device.waitForIdle()
                     assertTrue(device.takeScreenshot(File(artifacts, "chat-composer-portrait.png")))
-                    device.executeShellCommand("settings put secure show_ime_with_hard_keyboard 1")
-                    device.findObject(By.res("chat-draft")).click()
-                    await("chat keyboard visible") {
-                        var visible = false
-                        scenario.onActivity { activity ->
-                            visible = androidx.core.view.ViewCompat.getRootWindowInsets(activity.window.decorView)
-                                ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+                    val previousShowImeWithHardKeyboard = device
+                        .executeShellCommand("settings get secure show_ime_with_hard_keyboard").trim()
+                    try {
+                        device.executeShellCommand("settings put secure show_ime_with_hard_keyboard 1")
+                        device.findObject(By.res("chat-draft")).click()
+                        await("chat keyboard visible") {
+                            var visible = false
+                            scenario.onActivity { activity ->
+                                visible = androidx.core.view.ViewCompat.getRootWindowInsets(activity.window.decorView)
+                                    ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+                            }
+                            visible
                         }
-                        visible
+                        await("send control visible with keyboard") { device.hasObject(By.res("chat-send")) }
+                        assertTrue(device.takeScreenshot(File(artifacts, "chat-composer-keyboard.png")))
+                        device.pressBack()
+                    } finally {
+                        if (previousShowImeWithHardKeyboard == "0" || previousShowImeWithHardKeyboard == "1") {
+                            device.executeShellCommand(
+                                "settings put secure show_ime_with_hard_keyboard $previousShowImeWithHardKeyboard",
+                            )
+                        } else {
+                            device.executeShellCommand("settings delete secure show_ime_with_hard_keyboard")
+                        }
                     }
-                    await("send control visible with keyboard") { device.hasObject(By.res("chat-send")) }
-                    assertTrue(device.takeScreenshot(File(artifacts, "chat-composer-keyboard.png")))
-                    device.pressBack()
                     device.setOrientationLeft()
                     await("landscape chat") { context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE }
                     device.waitForIdle()
@@ -520,6 +569,36 @@ class OfficialPluginsInstrumentedTest {
         mkdirs()
         File(this, "package.json").writeText("{\"name\":\"android-test-$name\",\"version\":\"1.0.0\",\"type\":\"module\",$manifest}")
         File(this, entry).writeText(code)
+    }
+
+    private fun awaitStableModelOption(
+        modelId: String,
+        description: String,
+        timeout: Long = 15_000,
+    ): UiObject2 {
+        val selector = By.res("model-option:$modelId").clickable(true)
+        val deadline = SystemClock.elapsedRealtime() + timeout
+        var previousBounds: Rect? = null
+        var stablePolls = 0
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val option = device.findObject(selector)
+            val bounds = option?.visibleBounds
+            val onScreen = bounds != null && !bounds.isEmpty &&
+                bounds.right > 0 && bounds.left < device.displayWidth &&
+                bounds.bottom > 0 && bounds.top < device.displayHeight
+            if (option != null && onScreen) {
+                if (bounds == previousBounds) stablePolls++ else {
+                    previousBounds = bounds
+                    stablePolls = 0
+                }
+                if (stablePolls >= 3) return option
+            } else {
+                previousBounds = null
+                stablePolls = 0
+            }
+            SystemClock.sleep(200)
+        }
+        throw AssertionError("Timed out: $description (stable clickable model option $modelId)")
     }
 
     private fun await(description: String, timeout: Long = 30_000, condition: () -> Boolean) {
