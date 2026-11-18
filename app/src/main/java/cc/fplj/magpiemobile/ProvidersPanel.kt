@@ -418,7 +418,14 @@ fun ProvidersPanel(
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         FullScreenDialogSystemBars()
         Surface(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = UiSpacing.medium)) {
+            Column(
+                Modifier.fillMaxSize()
+                    .safeDrawingPadding()
+                    .imePadding()
+                    .padding(horizontal = UiSpacing.medium)
+                    // Dialog edge-to-edge insets can omit the navigation gesture area on Android 15.
+                    .padding(bottom = UiSpacing.large + UiSpacing.medium),
+            ) {
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(UiSpacing.small),
