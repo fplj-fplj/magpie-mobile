@@ -413,7 +413,8 @@ class OfficialPluginsInstrumentedTest {
                     device.findObject(By.clazz("android.widget.EditText")).text = nativeModel
                     await("exact chat model visible") { device.hasObject(By.res("model-option:$nativeModel")) }
                     device.findObject(By.res("model-option:$nativeModel")).click()
-                    await("chat model sheet dismissed") { !device.hasObject(By.text("搜索模型或提供商")) }
+                    await("chat model sheet dismissed") { !device.hasObject(By.res("model-selection-sheet")) }
+                    await("chat model applied") { device.hasObject(By.text("fake-echo")) }
                     device.waitForIdle()
                     assertTrue(device.takeScreenshot(File(artifacts, "chat-composer-portrait.png")))
                     device.findObject(By.clazz("android.widget.EditText")).click()
