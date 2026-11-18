@@ -337,7 +337,9 @@ class OfficialPluginsInstrumentedTest {
                             false
                         }
                     }
-                    device.findObject(By.text("Android runtime")).click()
+                    val savedProviderRow = By.res("provider-row:android-runtime")
+                    await("saved provider row actionable") { device.hasObject(savedProviderRow) }
+                    device.findObject(savedProviderRow).click()
                     await("saved provider connectivity entry") { device.hasObject(By.text("连通测试")) }
                     device.findObject(By.text("连通测试")).click()
                     await("provider test dialog") { device.hasObject(By.text("开始测试")) }
