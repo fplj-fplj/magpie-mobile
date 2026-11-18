@@ -5,18 +5,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -28,6 +28,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private fun providerKeyFingerprint(value: String): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray())
+        .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
 
 /** Only nonsecret write-recovery flags are saveable. Password fields/drafts stay ephemeral. */
 @Composable
@@ -48,7 +53,9 @@ fun ProvidersPanel(
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var search by remember { mutableStateOf("") }
+    var addSheet by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf(false) }
+    var modelPickerOpen by remember { mutableStateOf(false) }
     var snapshot by remember { mutableStateOf<ProviderEditSnapshot?>(null) }
     var id by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
@@ -60,7 +67,6 @@ fun ProvidersPanel(
     var localHttp by remember { mutableStateOf(false) }
     var manual by remember { mutableStateOf(false) }
     var manualText by remember { mutableStateOf("") }
-    var modelSearch by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf(emptyList<String>()) }
     var modelOptions by remember { mutableStateOf(emptyList<ProviderModelSummary>()) }
     var policy by remember { mutableStateOf(ProviderEditorPolicy(true)) }
@@ -69,6 +75,7 @@ fun ProvidersPanel(
     var discoveryLoading by remember { mutableStateOf(false) }
     var discoveryDone by remember { mutableStateOf(false) }
     var discoveryError by remember { mutableStateOf("") }
+    var catalogBaseAdopted by remember { mutableStateOf(false) }
     var retryCatalog by remember { mutableStateOf(0) }
     var operationSequence by remember { mutableStateOf(0L) }
     var catalogSequence by remember { mutableStateOf(0L) }
@@ -79,6 +86,7 @@ fun ProvidersPanel(
     var editorTab by rememberSaveable { mutableStateOf(0) }
     val editorScrolls = listOf(rememberScrollState(), rememberScrollState(), rememberScrollState())
     val owner = if (enabled) NativeCoreSession.providerSessionId() else null
+    val canAddProvider = enabled && listHealthy && !busy && !operationBusy && !recoveryRequired
 
     // 导航守卫：busy、open (编辑Dialog打开) 或 recoveryRequired 时均锁住外层 Tab 切换
     val isLocked = busy || open || recoveryRequired
@@ -119,13 +127,22 @@ fun ProvidersPanel(
             finally { if (sequence == operationSequence) setBusy(false) }
         }
     }
-    fun close() { key = ""; showKey = false; open = false; confirmDisable = false }
+    fun close() {
+        key = ""
+        showKey = false
+        modelPickerOpen = false
+        catalogBaseAdopted = false
+        open = false
+        confirmDisable = false
+    }
     fun newProvider(presetId: String = "", presetName: String = "", url: String = "") {
         if (!listHealthy || recoveryRequired || busy || operationBusy) return
         snapshot = null; id = presetId; name = presetName; baseUrl = url; key = ""; serverPin = ""
-        idTouched = false; nameTouched = false; localHttp = false; manual = false; showKey = false; modelSearch = ""
+        idTouched = false; nameTouched = false; localHttp = false; manual = false; showKey = false
         selected = emptyList(); modelOptions = emptyList(); policy = ProviderEditorPolicy(true)
-        discoveryDone = false; discoveryError = ""; message = ""; manualText = ""; editorTab = 0; open = true
+        discoveryDone = false; discoveryError = ""; message = ""; manualText = ""; editorTab = 0
+        modelPickerOpen = false; catalogBaseAdopted = false
+        open = true
     }
     LaunchedEffect(enabled, owner) {
         if (!enabled) { key = ""; discoveryLoading = false; listHealthy = false; setBusy(false); message = "核心已断开，草稿名称、地址与选择已保留；重连后请补充密钥" }
@@ -140,7 +157,30 @@ fun ProvidersPanel(
         fun port(uri: java.net.URI): Int = if (uri.port != -1) uri.port else if (uri.scheme == "https") 443 else 80
         old.scheme != next.scheme || old.host != next.host || port(old) != port(next)
     }
-    val keyFingerprint = remember(key) { MessageDigest.getInstance("SHA-256").digest(key.toByteArray()).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') } }
+    val keyFingerprint = remember(key) { providerKeyFingerprint(key) }
+    val modelPickerEntries = remember(modelOptions, selected, busy, name) {
+        (modelOptions.map { it.id } + selected)
+            .distinct()
+            .map { modelId ->
+                val summary = modelOptions.firstOrNull { it.id == modelId }
+                ModelPickerEntry(
+                    id = modelId,
+                    displayName = summary?.name?.ifBlank { modelId } ?: modelId,
+                    providerName = name,
+                    detail = if (summary == null) "当前目录未返回，仍保留已保存选择" else modelId,
+                    enabled = !busy,
+                )
+            }
+    }
+    fun applyModelSelection(nextIds: Set<String>) {
+        val current = selected.toSet()
+        (current - nextIds).forEach { policy.toggle(it, false) }
+        (nextIds - current).forEach { policy.toggle(it, true) }
+        selected = modelPickerEntries.map { it.id }.filter { it in nextIds } +
+            nextIds.filter { requested -> modelPickerEntries.none { it.id == requested } }
+        selectionMutation++
+        manualText = selected.joinToString("\n")
+    }
     LaunchedEffect(open, normalized, keyFingerprint, localHttp, owner, snapshot?.revision, retryCatalog) {
         val sequence = ++catalogSequence
         discoveryLoading = false; discoveryDone = false; discoveryError = ""
@@ -159,10 +199,43 @@ fun ProvidersPanel(
         delay(1000) // settle URL/credential changes; old requests cannot apply to this generation
         var request: ProviderModelDiscoveryRequest? = null
         try {
+            val requestedBaseUrl = runCatching { ProviderBaseUrl.normalize(baseUrl) }.getOrNull()
+                ?: return@LaunchedEffect
+            if (requestedBaseUrl != normalized) return@LaunchedEffect
+            val requestedKeyFingerprint = providerKeyFingerprint(key)
+            val requestedLocalHttp = localHttp
+            val requestedProviderId = snapshot?.id
+            val requestedRevision = snapshot?.revision
             val activeRequest = ProviderModelDiscoveryRequest(baseUrl, key, snapshot?.id, snapshot?.revision, localHttp)
             request = activeRequest
             val catalog = withContext(Dispatchers.IO) { NativeCoreSession.providerClient().discoverModels(activeRequest) }
-            if (sequence == catalogSequence && latestEnabled && owner == NativeCoreSession.providerSessionId()) {
+            val requestStillCurrent = ProviderCatalogSyncPolicy.requestIsCurrent(
+                requestedSequence = sequence,
+                currentSequence = catalogSequence,
+                requestedBaseUrl = requestedBaseUrl,
+                currentBaseUrl = baseUrl,
+                requestedKeyFingerprint = requestedKeyFingerprint,
+                currentKeyFingerprint = providerKeyFingerprint(key),
+                requestedLocalHttp = requestedLocalHttp,
+                currentLocalHttp = localHttp,
+                requestedProviderId = requestedProviderId,
+                currentProviderId = snapshot?.id,
+                requestedRevision = requestedRevision,
+                currentRevision = snapshot?.revision,
+                editorOpen = open,
+                sessionCurrent = latestEnabled && owner == NativeCoreSession.providerSessionId(),
+            )
+            if (requestStillCurrent) {
+                ProviderCatalogSyncPolicy.adoptedBaseUrl(
+                    requestedBaseUrl = requestedBaseUrl,
+                    currentBaseUrl = baseUrl,
+                    returnedBaseUrl = catalog.baseUrl,
+                    requestStillCurrent = true,
+                    alreadyAdopted = catalogBaseAdopted,
+                )?.let { adopted ->
+                    catalogBaseAdopted = true
+                    baseUrl = adopted
+                }
                 modelOptions = catalog.models; selected = policy.applyCatalog(catalog.models.map { it.id })
                 manualText = selected.joinToString("\n"); discoveryDone = true
                 if (catalog.models.isEmpty()) discoveryError = "目录为空；可检查凭据权限，或打开高级设置补充模型ID。"
@@ -222,9 +295,12 @@ fun ProvidersPanel(
                     val shownBase = runCatching { ProviderBaseUrl.normalize(edit.chatUrl) }.getOrDefault(edit.chatUrl)
                     snapshot = edit; id = edit.id; name = edit.name; baseUrl = shownBase; key = ""; serverPin = edit.serverPin
                     nameTouched = true; idTouched = true; localHttp = edit.chatUrl.startsWith("http://")
-                    manual = false; editorTab = 0; showKey = false; modelSearch = ""
+                    manual = false; editorTab = 0; showKey = false
                     policy = ProviderEditorPolicy(false, edit.modelIds, edit.noModels); selected = edit.modelIds
-                    modelOptions = provider.models; manualText = selected.joinToString("\n"); message = ""; open = true
+                    modelOptions = provider.models; manualText = selected.joinToString("\n"); message = ""
+                    modelPickerOpen = false
+                    catalogBaseAdopted = false
+                    open = true
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (current(session, sequence)) message = errorText(e) }
@@ -232,153 +308,467 @@ fun ProvidersPanel(
         }
     }
     Column(verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("你的连接", style = MaterialTheme.typography.titleMedium)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("你的提供商", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "管理连接、凭据与可用模型",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
-                TextButton(enabled = enabled && !busy, onClick = { refresh(force = true) }) { Text(if (recoveryRequired) "核对结果" else "刷新") }
-                Button(enabled = enabled && listHealthy && !busy && !operationBusy && !recoveryRequired, onClick = { newProvider() }) {
-                    AppIcon(AppSymbol.ADD); Spacer(Modifier.width(UiSpacing.small)); Text("添加")
+                TextButton(
+                    enabled = enabled && !busy,
+                    onClick = { refresh(force = true) },
+                ) {
+                    Text(if (recoveryRequired) "核对结果" else "刷新")
+                }
+                Button(
+                    enabled = canAddProvider,
+                    onClick = { addSheet = true },
+                ) {
+                    AppIcon(AppSymbol.ADD)
+                    Spacer(Modifier.width(UiSpacing.small))
+                    Text("添加")
                 }
             }
         }
-        if (message.isNotEmpty()) Text(message, style = MaterialTheme.typography.bodySmall)
-        if (recoveryRequired) Text("有待核对的保存结果（" + pendingProviderId + "），核对后可继续编辑。", color = MaterialTheme.colorScheme.error)
-        OutlinedTextField(search, { search = it }, singleLine = true, label = { Text("搜索提供商") }, modifier = Modifier.fillMaxWidth())
+        if (message.isNotEmpty()) {
+            Text(message, style = MaterialTheme.typography.bodySmall)
+        }
+        if (recoveryRequired) {
+            Text(
+                "有待核对的保存结果（$pendingProviderId），核对后可继续编辑。",
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        OutlinedTextField(
+            value = search,
+            onValueChange = { search = it },
+            singleLine = true,
+            shape = CircleShape,
+            placeholder = { Text("搜索提供商") },
+            leadingIcon = { AppIcon(AppSymbol.SEARCH, description = null) },
+            trailingIcon = {
+                if (search.isNotEmpty()) {
+                    TextButton(onClick = { search = "" }) { Text("清除") }
+                }
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
         val all = providers?.providers.orEmpty()
         val matches = all.filter { it.name.contains(search, true) || it.id.contains(search, true) }
-        if (listHealthy && all.isEmpty()) EmptyState("添加第一个连接", "填写 API 地址与密钥，选择你要使用的模型。")
-        else if (matches.isEmpty() && search.isNotEmpty()) TextButton(onClick = { search = "" }) { Text("没有匹配项，清除筛选") }
-        matches.take(50).forEach { provider ->
-            ProviderRow(provider,
-                enabled = enabled && !busy && !operationBusy && listHealthy && !recoveryRequired && (provider.editable || onExternalEditor != null),
-                onClick = { openProvider(provider) })
+        if (listHealthy && all.isEmpty()) {
+            ProviderFormGroup(
+                title = "还没有提供商",
+                supporting = "选择 OpenAI、DeepSeek、OpenRouter，或添加自定义兼容连接。",
+            ) {
+                Button(
+                    enabled = canAddProvider,
+                    onClick = { addSheet = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    AppIcon(AppSymbol.ADD)
+                    Spacer(Modifier.width(UiSpacing.small))
+                    Text("添加第一个提供商")
+                }
+            }
+        } else if (matches.isEmpty() && search.isNotEmpty()) {
+            ProviderFormGroup(title = "没有匹配项") {
+                Text(
+                    "换一个名称或标识试试。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = { search = "" }) { Text("清除搜索") }
+            }
         }
-        if (matches.size > 50) Text("显示前 50 个连接，请搜索定位其他提供商。", style = MaterialTheme.typography.bodySmall)
+        matches.take(50).forEach { provider ->
+            ProviderRow(
+                provider = provider,
+                enabled = enabled && !busy && !operationBusy && listHealthy &&
+                    !recoveryRequired && (provider.editable || onExternalEditor != null),
+                onClick = { openProvider(provider) },
+            )
+        }
+        if (matches.size > 50) {
+            Text(
+                "显示前 50 个连接，请搜索定位其他提供商。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
+    ProviderAddSheet(
+        visible = addSheet,
+        onDismiss = { addSheet = false },
+        onSelect = { template ->
+            addSheet = false
+            newProvider(template.id, template.name, template.baseUrl)
+        },
+    )
     if (open) Dialog(onDismissRequest = { if (!busy) close() },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         FullScreenDialogSystemBars()
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = UiSpacing.medium)) {
-                Row(Modifier.fillMaxWidth().padding(vertical = UiSpacing.small), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(UiSpacing.small),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     IconButton(enabled = !busy, onClick = ::close) { AppIcon(AppSymbol.BACK, description = "返回提供商列表") }
-                    Column(Modifier.weight(1f)) {
-                        Text(if (snapshot == null) "添加提供商" else name, style = MaterialTheme.typography.titleLarge)
-                        Text("OpenAI 兼容连接", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    ProviderAvatar(
+                        name = name.ifBlank {
+                            providerAddTemplates.firstOrNull { it.id == id }?.name ?: "新提供商"
+                        },
+                        size = 40.dp,
+                    )
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(
+                            name.ifBlank { "添加提供商" },
+                            style = MaterialTheme.typography.titleLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            if (snapshot == null) "新建 OpenAI 兼容连接" else "编辑提供商配置",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
-                TabRow(selectedTabIndex = editorTab, containerColor = MaterialTheme.colorScheme.background) {
-                    listOf("配置", "模型", "高级").forEachIndexed { index, label ->
-                        Tab(selected = editorTab == index, onClick = { editorTab = index }, text = { Text(label) },
-                            selectedContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
+                ProviderEditorTabs(selected = editorTab, onSelect = { editorTab = it })
                 Column(
-                    Modifier.weight(1f).verticalScroll(editorScrolls[editorTab]).padding(vertical = UiSpacing.medium),
+                    Modifier
+                        .weight(1f)
+                        .verticalScroll(editorScrolls[editorTab])
+                        .padding(top = UiSpacing.medium, bottom = UiSpacing.small),
                     verticalArrangement = Arrangement.spacedBy(UiSpacing.medium),
                 ) {
                     when (editorTab) {
                         0 -> {
-                            if (snapshot == null) Row(horizontalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
-                                FilterChip(selected = id == "deepseek-api", enabled = !busy,
-                                    onClick = { newProvider("deepseek-api", "DeepSeek API", "https://api.deepseek.com") }, label = { Text("DeepSeek") })
-                                FilterChip(selected = id == "openai-api", enabled = !busy,
-                                    onClick = { newProvider("openai-api", "OpenAI API", "https://api.openai.com/v1") }, label = { Text("OpenAI") })
+                            ProviderFormGroup(
+                                title = "连接信息",
+                                supporting = "平台会在此地址后追加 OpenAI Chat Completions 路径。",
+                            ) {
+                                OutlinedTextField(
+                                    value = name,
+                                    onValueChange = { name = it; nameTouched = true },
+                                    enabled = !busy,
+                                    singleLine = true,
+                                    label = { Text("提供商名称") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
+                                    value = baseUrl,
+                                    onValueChange = {
+                                        baseUrl = it
+                                        catalogBaseAdopted = false
+                                    },
+                                    enabled = !busy,
+                                    singleLine = true,
+                                    label = { Text("API 地址") },
+                                    placeholder = { Text("https://api.example.com/v1") },
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Uri,
+                                        imeAction = ImeAction.Next,
+                                    ),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                when {
+                                    normalized.isNotEmpty() -> Text(
+                                        "实际地址：$normalized",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    baseUrl.isNotBlank() -> Text(
+                                        "请检查 HTTPS、端口和路径；地址不能包含密钥。",
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
                             }
-                            ContentCard {
-                                Text("连接设置", style = MaterialTheme.typography.titleMedium)
-                                OutlinedTextField(name, { name = it; nameTouched = true }, enabled = !busy, singleLine = true,
-                                    label = { Text("名称") }, modifier = Modifier.fillMaxWidth())
-                                OutlinedTextField(baseUrl, { baseUrl = it }, enabled = !busy, singleLine = true,
-                                    label = { Text("API 地址") }, placeholder = { Text("https://api.example.com/v1") },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next), modifier = Modifier.fillMaxWidth())
-                                if (normalized.isNotEmpty()) Text("实际地址：" + normalized, style = MaterialTheme.typography.bodySmall)
-                                else if (baseUrl.isNotBlank()) Text("请检查 HTTPS、端口和路径；地址不能包含密钥。", color = MaterialTheme.colorScheme.error)
-                                OutlinedTextField(key, { key = it }, enabled = !busy, singleLine = true,
+                            ProviderFormGroup(
+                                title = "访问凭据",
+                                supporting = "密钥只保存在本机核心私有目录，不进入列表、日志或导出备份。",
+                            ) {
+                                OutlinedTextField(
+                                    value = key,
+                                    onValueChange = { key = it },
+                                    enabled = !busy,
+                                    singleLine = true,
                                     label = { Text(if (snapshot == null) "API 密钥" else "新密钥（留空保留现有密钥）") },
                                     visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
                                     trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "隐藏" else "显示") } },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                                    keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }), modifier = Modifier.fillMaxWidth())
-                                if (newOriginNeedsKey) Text("服务来源已改变，请填写新密钥。", color = MaterialTheme.colorScheme.error)
+                                    keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                if (newOriginNeedsKey) {
+                                    Text(
+                                        "服务来源已改变，请填写新密钥。",
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
                             }
-                            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.medium) {
-                                Row(Modifier.fillMaxWidth().padding(UiSpacing.medium), verticalAlignment = Alignment.CenterVertically) {
-                                    AppIcon(AppSymbol.MODELS); Spacer(Modifier.width(UiSpacing.medium))
-                                    Column(Modifier.weight(1f)) {
-                                        Text("已选择 ${selected.size} 个模型", style = MaterialTheme.typography.titleSmall)
-                                        Text(if (discoveryLoading) "正在获取目录…" else "在模型页查看与调整", style = MaterialTheme.typography.bodySmall)
+                            ProviderFormGroup(
+                                title = "模型目录",
+                                supporting = if (discoveryLoading) "正在读取提供商返回的模型目录…"
+                                else if (discoveryError.isNotEmpty()) discoveryError
+                                else "已选择 ${selected.size} 个模型，可在下一步调整。",
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                    shape = MaterialTheme.shapes.large,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(UiSpacing.medium),
+                                        horizontalArrangement = Arrangement.spacedBy(UiSpacing.medium),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        AppIcon(AppSymbol.MODELS)
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                "${selected.size} 个模型已启用",
+                                                style = MaterialTheme.typography.titleSmall,
+                                            )
+                                            Text(
+                                                if (modelOptions.isEmpty()) "等待目录或手动添加"
+                                                else "${modelOptions.size} 个目录模型可用",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        TextButton(onClick = { editorTab = 1 }) { Text("选择模型") }
                                     }
-                                    TextButton(onClick = { editorTab = 1 }) { Text("管理") }
                                 }
                             }
                         }
                         1 -> {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("模型 · ${selected.size} 已选", style = MaterialTheme.typography.titleMedium)
-                                TextButton(enabled = !busy && !discoveryLoading, onClick = { focus.clearFocus(); retryCatalog++ }) { Text("刷新目录") }
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text("选择模型", style = MaterialTheme.typography.headlineSmall)
+                                    Text(
+                                        "${selected.size} 已启用 · ${modelOptions.size} 可发现",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                TextButton(
+                                    enabled = !busy && !discoveryLoading,
+                                    onClick = { focus.clearFocus(); retryCatalog++ },
+                                ) { Text("刷新目录") }
                             }
-                            if (discoveryLoading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            if (discoveryError.isNotEmpty()) Text(discoveryError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                            OutlinedTextField(modelSearch, { modelSearch = it }, singleLine = true, label = { Text("搜索模型") }, modifier = Modifier.fillMaxWidth())
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                TextButton(enabled = modelOptions.isNotEmpty() && !busy, onClick = { selected = policy.chooseAll(); selectionMutation++; manualText = selected.joinToString("\n") }) { Text("全选") }
-                                TextButton(enabled = !busy, onClick = { selected = policy.chooseNone(); selectionMutation++; manualText = "" }) { Text("取消全选") }
-                            }
-                            val options = (modelOptions.map { it.id } + selected).distinct().filter { it.contains(modelSearch, true) }
-                            if (options.size > 100) Text("显示前 100 个匹配模型，请搜索定位；已有选择会保留。", style = MaterialTheme.typography.bodySmall)
-                            if (options.isEmpty() && !discoveryLoading) EmptyState("暂无匹配模型", "检查连接信息并刷新目录，或在高级页补充模型 ID。")
-                            options.take(100).forEach { model ->
-                                Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.medium) {
-                                    Row(
-                                        Modifier.fillMaxWidth().heightIn(min = UiSpacing.touch)
-                                            .toggleable(value = model in selected, enabled = !busy, role = Role.Checkbox,
-                                                onValueChange = { selected = policy.toggle(model, it); selectionMutation++; manualText = selected.joinToString("\n") })
-                                            .padding(UiSpacing.small), verticalAlignment = Alignment.CenterVertically,
+                            ModelSelectionField(
+                                displayName = when {
+                                    selected.isEmpty() -> "选择要启用的模型"
+                                    selected.size == 1 -> selected.single()
+                                    else -> "已选择 ${selected.size} 个模型"
+                                },
+                                enabled = !busy,
+                                onClick = { modelPickerOpen = true },
+                                supportingText = if (discoveryLoading) "正在刷新目录"
+                                else "打开模型目录，搜索并多选",
+                            )
+                            ProviderFormGroup(
+                                title = "已启用模型",
+                                supporting = when {
+                                    discoveryLoading -> "正在读取提供商返回的模型目录…"
+                                    discoveryError.isNotEmpty() -> discoveryError
+                                    selected.isEmpty() -> "当前没有启用的模型。"
+                                    else -> "点选卡片可快速停用模型；完整目录在上方模型面板中。"
+                                },
+                            ) {
+                                if (selected.isEmpty()) {
+                                    Button(
+                                        onClick = { modelPickerOpen = true },
+                                        enabled = !busy && modelPickerEntries.isNotEmpty(),
+                                        modifier = Modifier.fillMaxWidth(),
                                     ) {
-                                        Checkbox(model in selected, onCheckedChange = null)
-                                        val title = modelOptions.firstOrNull { it.id == model }?.name?.ifBlank { model } ?: model
-                                        Column(Modifier.weight(1f)) {
-                                            Text(title, style = MaterialTheme.typography.bodyMedium)
-                                            if (title != model) Text(model, style = MaterialTheme.typography.labelSmall)
-                                            if (modelOptions.none { it.id == model }) Text("已保存 · 当前目录未返回", style = MaterialTheme.typography.bodySmall)
-                                        }
+                                        AppIcon(AppSymbol.ADD)
+                                        Spacer(Modifier.width(UiSpacing.small))
+                                        Text("打开模型目录")
                                     }
+                                } else {
+                                    selected.sorted().forEach { model ->
+                                        val summary = modelOptions.firstOrNull { it.id == model }
+                                        ProviderModelChoiceRow(
+                                            modelId = model,
+                                            displayName = summary?.name?.ifBlank { model } ?: model,
+                                            available = summary != null,
+                                            selected = true,
+                                            enabled = !busy,
+                                            onToggle = { checked ->
+                                                applyModelSelection(
+                                                    if (checked) selected.toSet() + model
+                                                    else selected.toSet() - model,
+                                                )
+                                            },
+                                        )
+                                    }
+                                }
+                                if (modelPickerEntries.isEmpty() && !discoveryLoading) {
+                                    Text(
+                                        "检查连接信息并刷新目录，或在“高级”页手动补充模型 ID。",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
                                 }
                             }
                         }
-                        2 -> ContentCard {
-                            Text("高级设置", style = MaterialTheme.typography.titleMedium)
-                            OutlinedTextField(id, { id = it; idTouched = true }, enabled = snapshot == null && !busy,
-                                singleLine = true, label = { Text("内部标识") }, modifier = Modifier.fillMaxWidth())
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(localHttp, enabled = !busy, onCheckedChange = { localHttp = it })
-                                Text("允许本机 HTTP", style = MaterialTheme.typography.bodyMedium)
+                        2 -> {
+                            ProviderFormGroup(
+                                title = "连接行为",
+                                supporting = "这些设置仅用于当前提供商，保存后会参与真实推理。",
+                            ) {
+                                OutlinedTextField(
+                                    value = id,
+                                    onValueChange = { id = it; idTouched = true },
+                                    enabled = snapshot == null && !busy,
+                                    singleLine = true,
+                                    label = { Text("内部标识") },
+                                    supportingText = { Text("创建后不可修改，可与其他提供商区分。") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                ProviderSwitchRow(
+                                    checked = localHttp,
+                                    onCheckedChange = { localHttp = it },
+                                    enabled = !busy,
+                                    title = "允许本机 HTTP",
+                                    description = "仅用于 127.0.0.1 或 [::1] 的本地服务。",
+                                )
+                                ProviderSwitchRow(
+                                    checked = manual,
+                                    onCheckedChange = { manual = it },
+                                    enabled = !busy,
+                                    title = "手动补充模型 ID",
+                                    description = "当提供商没有标准模型目录时使用。",
+                                )
+                                if (manual) {
+                                    OutlinedTextField(
+                                        value = manualText,
+                                        onValueChange = {
+                                            manualText = it
+                                            selected = policy.manual(
+                                                it.split(',', '\n')
+                                                    .map(String::trim)
+                                                    .filter(String::isNotEmpty),
+                                            )
+                                            selectionMutation++
+                                        },
+                                        minLines = 3,
+                                        label = { Text("模型 ID，每行一个") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(manual, enabled = !busy, onCheckedChange = { manual = it })
-                                Text("手动补充模型 ID", style = MaterialTheme.typography.bodyMedium)
+                            ProviderFormGroup(
+                                title = "传输安全",
+                                supporting = "证书指纹用于固定自定义服务的 TLS 证书。",
+                            ) {
+                                OutlinedTextField(
+                                    value = serverPin,
+                                    onValueChange = { serverPin = it },
+                                    enabled = !busy,
+                                    singleLine = true,
+                                    label = { Text("服务器证书 SHA-256 指纹") },
+                                    supportingText = { Text("可选 · 64 位小写十六进制") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
                             }
-                            if (manual) OutlinedTextField(manualText, {
-                                manualText = it; selected = policy.manual(it.split(',', '\n').map(String::trim).filter(String::isNotEmpty)); selectionMutation++
-                            }, label = { Text("模型 ID，每行一个") }, modifier = Modifier.fillMaxWidth())
-                            OutlinedTextField(serverPin, { serverPin = it }, enabled = !busy, singleLine = true,
-                                label = { Text("服务器证书 SHA-256 指纹") }, supportingText = { Text("可选 · 64 位小写 hex") }, modifier = Modifier.fillMaxWidth())
                         }
                     }
-                    if (message.isNotEmpty()) Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    Button(
-                        modifier = Modifier.fillMaxWidth().padding(top = UiSpacing.medium),
-                        enabled = enabled && !operationBusy && !busy && listHealthy && !recoveryRequired && normalized.isNotEmpty() && !newOriginNeedsKey && !discoveryLoading &&
-                            (snapshot != null || key.isNotBlank()) && (selected.isNotEmpty() || selectedModelEdit?.isEmpty() == true || (snapshot != null && selectedModelEdit == null)) &&
-                            (snapshot != null || discoveryDone || manual),
-                        onClick = { focus.clearFocus(); if (selected.isEmpty() && selectedModelEdit?.isEmpty() == true) confirmDisable = true else submit() },
-                    ) { Text(if (busy) "保存中…" else "保存连接") }
+                    if (message.isNotEmpty()) {
+                        Text(
+                            message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(UiSpacing.small),
+                ) {
+                    Text(
+                        when {
+                            busy -> "正在处理…"
+                            recoveryRequired -> "等待核对保存结果"
+                            snapshot == null -> "保存后可测试；未保存内容不会发送到上游"
+                            else -> "连通测试只使用已保存的配置和模型"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(UiSpacing.small),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ProviderConnectivityTestButton(
+                            enabled = enabled && !operationBusy && !busy && listHealthy && !recoveryRequired,
+                            providerId = snapshot?.id,
+                            providerName = name.ifBlank { "提供商" },
+                            testModels = providers?.providers
+                                ?.firstOrNull { it.id == snapshot?.id }
+                                ?.chosen.orEmpty(),
+                            modifier = Modifier.weight(1f),
+                        )
+                        Button(
+                            enabled = enabled && !operationBusy && !busy && listHealthy &&
+                                !recoveryRequired && normalized.isNotEmpty() &&
+                                !newOriginNeedsKey && !discoveryLoading &&
+                                (snapshot != null || key.isNotBlank()) &&
+                                (selected.isNotEmpty() || selectedModelEdit?.isEmpty() == true ||
+                                    (snapshot != null && selectedModelEdit == null)) &&
+                                (snapshot != null || discoveryDone || manual),
+                            onClick = {
+                                focus.clearFocus()
+                                if (selected.isEmpty() && selectedModelEdit?.isEmpty() == true) {
+                                    confirmDisable = true
+                                } else {
+                                    submit()
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(if (busy) "保存中…" else "保存连接")
+                        }
+                    }
                 }
             }
         }
     }
+    ModelSelectionSheet(
+        visible = modelPickerOpen,
+        groups = listOf(
+            ModelPickerGroup(
+                id = "provider-${id.ifBlank { "new" }}",
+                title = name.ifBlank { "当前提供商" },
+                entries = modelPickerEntries,
+            ),
+        ),
+        selectedIds = selected.toSet(),
+        onDismissRequest = { modelPickerOpen = false },
+        onSelectionChange = ::applyModelSelection,
+        title = "选择提供商模型",
+        confirmLabel = "应用",
+    )
     if (confirmDisable) AlertDialog(onDismissRequest = { confirmDisable = false }, title = { Text("禁用全部模型？") }, text = { Text("此操作会明确禁用该提供商的全部模型，不是获取目录失败。") },
         confirmButton = { TextButton(colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error), onClick = { confirmDisable = false; submit() }) { Text("确认禁用并保存") } }, dismissButton = { TextButton(onClick = { confirmDisable = false }) { Text("返回选择") } })
 }

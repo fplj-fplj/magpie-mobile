@@ -17,6 +17,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -98,6 +100,7 @@ fun Dashboard(
     var gatewaySectionName by rememberSaveable { mutableStateOf<String?>(null) }
     var moreSectionName by rememberSaveable { mutableStateOf<String?>(null) }
     var chatSettings by rememberSaveable { mutableStateOf(false) }
+    val chatPage = shell.page == AppPage.CHAT
     val sectionName = when (shell.page) {
         AppPage.GATEWAY -> gatewaySectionName
         AppPage.MORE -> moreSectionName
@@ -171,6 +174,11 @@ fun Dashboard(
                             color = if (gateway.phase == GatewayEngineController.Phase.FAILED) MaterialTheme.colorScheme.error
                                 else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        if (chatPage) {
+                            IconButton(onClick = { chatSettings = true }) {
+                                AppIcon(AppSymbol.MORE, description = "模型与对话配置")
+                            }
+                        }
                     }
                     if (chat.sending) Text(
                         "正在回复 · 可切换页面",
@@ -215,7 +223,19 @@ fun Dashboard(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(), contentAlignment = Alignment.TopCenter) {
             pageStates.SaveableStateProvider(shell.page.name + "/" + (section?.name ?: "HOME")) {
-                Column(
+                if (chatPage) {
+                    val groups = remember(shell.models) { modelPickerGroupsFromCatalog(shell.models) }
+                    ChatPanel(
+                        viewModel = chatViewModel,
+                        modelGroups = groups,
+                        selectedModel = shell.selectedModel,
+                        onSelectModel = appShell::selectModel,
+                        canConnect = clientReady && shell.catalogValid,
+                        providerBusy = providerBusy,
+                        modifier = Modifier.widthIn(max = UiSpacing.contentWidth).fillMaxSize()
+                            .padding(horizontal = UiSpacing.medium, vertical = UiSpacing.small),
+                    )
+                } else Column(
                     Modifier.widthIn(max = UiSpacing.contentWidth).fillMaxSize()
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = UiSpacing.medium, vertical = if (compactHeight) UiSpacing.small else UiSpacing.card),
@@ -279,21 +299,7 @@ fun Dashboard(
                                 externalRevision = externalState.returnRevision,
                                 onExternalEditor = if (clientReady && connection.webEditor) ::openBrowserEditor else null)
                         }
-                        AppPage.CHAT -> {
-                            PageHeading("从一个问题开始。", "选择模型，继续你的对话。", "CONVERSATIONS / 03")
-                            TextButton(onClick = { chatSettings = !chatSettings }) {
-                                AppIcon(AppSymbol.MORE)
-                                Spacer(Modifier.width(UiSpacing.small))
-                                Text(if (chatSettings) "收起模型与 Profile 配置" else "模型与 Profile 配置")
-                            }
-                            if (chatSettings) {
-                                ModelCatalogCard(shell, clientReady, !chat.sending, appShell::refreshModels)
-                                ChatProfileCard(profileViewModel, profileState)
-                            }
-                            ChatPanel(chatViewModel, shell.models.map { it.id },
-                                shell.models.associate { it.id to (it.displayName?.takeIf(String::isNotBlank) ?: it.id) },
-                                shell.selectedModel, appShell::selectModel, clientReady && shell.catalogValid, providerBusy)
-                        }
+                        AppPage.CHAT -> Unit // The conversation above owns its own scroll area.
                         AppPage.MORE -> {
                             PageHeading("按你的方式使用。", "模型、工具与本机设置，各有其位。", "WORKSPACE / 04")
                             EditorChoiceCard(clientReady && connection.webEditor && !providerBusy, externalState,
@@ -305,6 +311,32 @@ fun Dashboard(
                             }
                             PreferencesCard(shell, appShell)
                         }
+                    }
+                }
+            }
+        }
+    }
+    if (chatPage && chatSettings) {
+        Dialog(
+            onDismissRequest = { chatSettings = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Surface(
+                modifier = Modifier.padding(UiSpacing.medium).widthIn(max = UiSpacing.contentWidth)
+                    .fillMaxWidth().fillMaxHeight(0.85f),
+                shape = MaterialTheme.shapes.large,
+            ) {
+                Column(Modifier.padding(UiSpacing.medium)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("模型与对话配置", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        TextButton(onClick = { chatSettings = false }) { Text("关闭") }
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(UiSpacing.medium),
+                    ) {
+                        ModelCatalogCard(shell, clientReady, !chat.sending, appShell::refreshModels)
+                        ChatProfileCard(profileViewModel, profileState)
                     }
                 }
             }

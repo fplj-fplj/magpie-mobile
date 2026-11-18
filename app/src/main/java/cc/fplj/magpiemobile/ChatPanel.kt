@@ -1,28 +1,30 @@
 package cc.fplj.magpiemobile
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -38,9 +40,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -51,21 +55,30 @@ import cc.fplj.magpiemobile.theme.UiSpacing
 @Composable
 fun ChatPanel(
     viewModel: ChatViewModel,
-    modelIds: List<String>,
-    modelLabels: Map<String, String>,
+    modelGroups: List<ModelPickerGroup>,
     selectedModel: String,
     onSelectModel: (String) -> Unit,
     canConnect: Boolean,
     providerBusy: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var historyOpen by remember { mutableStateOf(false) }
-    var modelMenu by remember { mutableStateOf(false) }
+    var modelSheet by remember { mutableStateOf(false) }
     val idle = state.ready && !state.busy && !state.sending
     val messagesScroll = rememberLazyListState()
+    val configuration = LocalConfiguration.current
+    val compactChrome = configuration.screenHeightDp < 520 || WindowInsets.isImeVisible
+    val modelEntries = remember(modelGroups) { modelGroups.flatMap { it.entries } }
+    val modelIds = remember(modelEntries) { modelEntries.map { it.id } }
+    val selectedEntry = remember(modelEntries, selectedModel) {
+        modelEntries.firstOrNull { it.id == selectedModel }
+    }
     var previousMessageCount by rememberSaveable(state.selected?.id) { mutableIntStateOf(0) }
-    val viewportHeight = (LocalConfiguration.current.screenHeightDp * 0.52f)
-        .coerceIn(320f, 560f).dp
+    var lastScrolledConversationId by rememberSaveable { mutableStateOf<String?>(null) }
+    var wasViewingOlderMessages by rememberSaveable(state.selected?.id) {
+        mutableStateOf(state.viewingOlderMessages)
+    }
     val liveVisible = state.sending || state.partial.isNotEmpty() ||
         state.partialReasoning.isNotEmpty()
     val listItems = state.messages.size + if (liveVisible) 1 else 0
@@ -77,6 +90,10 @@ fun ChatPanel(
         state.selected?.id,
         state.viewingOlderMessages,
     ) {
+        val conversationChanged = lastScrolledConversationId != state.selected?.id
+        if (conversationChanged) lastScrolledConversationId = state.selected?.id
+        val returnedToLatest = wasViewingOlderMessages && !state.viewingOlderMessages
+        wasViewingOlderMessages = state.viewingOlderMessages
         if (listItems == 0) {
             previousMessageCount = state.messages.size
             return@LaunchedEffect
@@ -84,207 +101,233 @@ fun ChatPanel(
         val lastVisible = messagesScroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
         val nearEnd = lastVisible >= listItems - 2
         val messageAdded = state.messages.size > previousMessageCount
-        if (!state.viewingOlderMessages && (previousMessageCount == 0 || nearEnd || messageAdded)) {
+        if (!state.viewingOlderMessages &&
+            (conversationChanged || returnedToLatest || previousMessageCount == 0 ||
+                nearEnd || messageAdded)
+        ) {
             messagesScroll.scrollToItem(listItems - 1)
         }
         previousMessageCount = state.messages.size
     }
 
-    SectionCard(state.selected?.title ?: "新的对话") {
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(UiSpacing.small),
-            verticalArrangement = Arrangement.spacedBy(UiSpacing.tiny),
+    Card(
+        modifier = modifier
+            .fillMaxSize()
+            .testTag("chat-panel"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .imePadding()
+                .padding(if (compactChrome) 8.dp else UiSpacing.card),
+            verticalArrangement = Arrangement.spacedBy(
+                if (compactChrome) 6.dp else UiSpacing.small,
+            ),
         ) {
-            TextButton(
-                enabled = idle && !providerBusy,
-                onClick = viewModel::newConversation,
-            ) { Text("新会话") }
-            TextButton(enabled = idle, onClick = { historyOpen = true }) { Text("历史会话") }
-            TextButton(
-                enabled = !state.busy && !state.sending,
-                onClick = viewModel::refresh,
-            ) { Text("重读记录") }
-        }
-        state.selected?.let { selected ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "更新于 " + chatDate(selected.updatedAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Surface(
-                    shape = MaterialTheme.shapes.small,
-                    color = if (state.sending) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.secondaryContainer,
-                ) {
-                    Text(
-                        when {
-                            state.sending -> "生成中"
-                            selected.legacy -> "只读存档"
-                            else -> "本机记录"
-                        },
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-            }
-            if (selected.legacy) {
-                Text(
-                    "旧版只读存档：无法可靠区分原会话或失败轮次，不会用作推理上下文；请新建会话。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (state.importNotice.isNotBlank()) {
-            Text(state.importNotice, style = MaterialTheme.typography.bodySmall)
-        }
-        if (state.busy) Text("读取本机记录中…")
-        if (state.contextBlocked) {
-            Text(
-                "上下文达到 40 轮或超过 65,536 字符，记录仍保留。请新建会话；不会静默截断旧上下文。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        if (state.viewingOlderMessages) {
-            TextButton(enabled = idle, onClick = viewModel::refresh) { Text("回最新消息") }
-        }
-        if (state.olderMessages) {
-            TextButton(enabled = idle, onClick = viewModel::olderMessages) {
-                Text("读取更早 50 条消息")
-            }
-        }
-
-        if (state.messages.isNotEmpty() || liveVisible) {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().height(viewportHeight),
-                state = messagesScroll,
-                verticalArrangement = Arrangement.spacedBy(UiSpacing.medium),
-            ) {
-                items(state.messages, key = { it.id }) { message ->
-                    ChatMessageBubble(message)
-                }
-                if (liveVisible) {
-                    item(key = "live-current-turn") {
-                        LiveAssistantTurn(
-                            userText = state.draft.takeIf { state.sending },
-                            reasoning = state.partialReasoning,
-                            answer = state.partial,
-                            sending = state.sending,
-                        )
-                    }
-                }
-            }
-        } else if (state.ready) {
-            EmptyState("想聊些什么？", "写下第一个问题，或从历史会话继续。")
-        }
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        ) {
-            Column(
-                modifier = Modifier.padding(UiSpacing.medium),
-                verticalArrangement = Arrangement.spacedBy(UiSpacing.small),
-            ) {
-                Text(
-                    "MODEL / COMPOSER",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Box {
-                    OutlinedButton(
-                        enabled = modelIds.isNotEmpty() && idle && state.selected?.legacy != true,
-                        onClick = { modelMenu = true },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            if (selectedModel.isBlank()) "选择模型"
-                            else modelLabels[selectedModel] ?: selectedModel,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = modelMenu,
-                        onDismissRequest = { modelMenu = false },
-                        modifier = Modifier.heightIn(max = 320.dp),
-                    ) {
-                        modelIds.forEach { id ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(modelLabels[id] ?: id)
-                                        if (modelLabels[id] != id) {
-                                            Text(id, style = MaterialTheme.typography.bodySmall)
-                                        }
-                                    }
-                                },
-                                onClick = {
-                                    onSelectModel(id)
-                                    modelMenu = false
-                                },
-                            )
-                        }
-                    }
-                }
-                OutlinedTextField(
-                    value = state.draft,
-                    onValueChange = viewModel::editDraft,
-                    enabled = idle && state.selected?.legacy != true,
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 3,
-                    maxLines = 8,
-                    placeholder = { Text("写下你的问题…") },
-                )
+            if (!compactChrome) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(UiSpacing.small),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        if (state.contextBlocked) "上下文已达上限"
-                        else "草稿仅保留在内存",
+                        state.selected?.title ?: "新的对话",
                         modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = if (state.sending) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.secondaryContainer,
+                    ) {
+                        Text(
+                            when {
+                                state.sending -> "生成中"
+                                state.selected?.legacy == true -> "只读"
+                                else -> "本机"
+                            },
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+
+            ModelSelectionField(
+                displayName = if (selectedModel.isBlank()) "选择模型"
+                else selectedEntry?.displayName ?: selectedModel,
+                enabled = modelIds.isNotEmpty() && idle && state.selected?.legacy != true,
+                modifier = Modifier.testTag("chat-model-selector").semantics {
+                    testTagsAsResourceId = true
+                },
+                compact = true,
+                onClick = { modelSheet = true },
+            )
+
+            if (!compactChrome) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(UiSpacing.tiny),
+                ) {
+                    TextButton(
+                        enabled = idle && !providerBusy,
+                        onClick = viewModel::newConversation,
+                    ) { Text("新会话", maxLines = 1) }
+                    TextButton(enabled = idle, onClick = { historyOpen = true }) {
+                        Text("历史会话", maxLines = 1)
+                    }
+                    TextButton(
+                        enabled = !state.busy && !state.sending,
+                        onClick = viewModel::refresh,
+                    ) { Text("重读记录", maxLines = 1) }
+                    if (state.viewingOlderMessages) {
+                        TextButton(enabled = idle, onClick = viewModel::refresh) {
+                            Text("回最新消息", maxLines = 1)
+                        }
+                    }
+                    if (state.olderMessages) {
+                        TextButton(enabled = idle, onClick = viewModel::olderMessages) {
+                            Text("更早 50 条", maxLines = 1)
+                        }
+                    }
+                }
+            }
+
+            if (state.selected?.legacy == true) {
+                Text(
+                    "旧版只读存档；新建会话后可继续发送。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (state.messages.isNotEmpty() || liveVisible) {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .testTag("chat-message-list"),
+                    state = messagesScroll,
+                    verticalArrangement = Arrangement.spacedBy(UiSpacing.medium),
+                    contentPadding = PaddingValues(
+                        vertical = if (compactChrome) 0.dp else UiSpacing.small,
+                    ),
+                ) {
+                    items(state.messages, key = { it.id }) { message ->
+                        ChatMessageBubble(message)
+                    }
+                    if (liveVisible) {
+                        item(key = "live-current-turn") {
+                            LiveAssistantTurn(
+                                userText = state.draft.takeIf { state.sending },
+                                reasoning = state.partialReasoning,
+                                answer = state.partial,
+                                sending = state.sending,
+                            )
+                        }
+                    }
+                }
+            } else if (state.busy) {
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("读取本机记录中…", style = MaterialTheme.typography.bodyMedium)
+                }
+            } else if (state.ready) {
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    EmptyState("想聊些什么？", "写下第一个问题，或从历史会话继续。")
+                }
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+
+            if (state.importNotice.isNotBlank()) {
+                Text(state.importNotice, style = MaterialTheme.typography.bodySmall)
+            }
+            if (state.busy && state.messages.isNotEmpty()) {
+                Text("正在刷新本机记录…", style = MaterialTheme.typography.bodySmall)
+            }
+            if (state.contextBlocked) {
+                Text(
+                    "上下文已达到安全上限；记录仍保留，请新建会话。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (!canConnect && !compactChrome) {
+                Text(
+                    "连接网关并选择可用模型后即可发送。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (state.notice.isNotBlank()) {
+                Text(state.notice, style = MaterialTheme.typography.bodySmall)
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(
+                    modifier = Modifier.padding(if (compactChrome) 5.dp else 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    OutlinedTextField(
+                        value = state.draft,
+                        onValueChange = viewModel::editDraft,
+                        enabled = idle && state.selected?.legacy != true,
+                        modifier = Modifier.weight(1f),
+                        minLines = 1,
+                        maxLines = 5,
+                        placeholder = { Text("写下你的问题…") },
                     )
                     Button(
                         enabled = idle && canConnect && !providerBusy &&
                             state.selected?.legacy == false && !state.contextBlocked &&
                             state.draft.isNotBlank() && selectedModel in modelIds,
+                        modifier = Modifier
+                            .size(if (compactChrome) 48.dp else 52.dp)
+                            .testTag("chat-send")
+                            .semantics { testTagsAsResourceId = true },
+                        contentPadding = PaddingValues(0.dp),
+                        shape = MaterialTheme.shapes.medium,
                         onClick = { viewModel.send(selectedModel) },
                     ) {
-                        AppIcon(AppSymbol.SEND, description = null)
-                        Spacer(Modifier.width(UiSpacing.small))
-                        Text(if (state.sending) "正在回复…" else "发送")
+                        AppIcon(
+                            AppSymbol.SEND,
+                            description = if (state.sending) "正在等待模型回复" else "发送消息",
+                        )
                     }
                 }
             }
         }
-
-        Text(
-            "思考内容与正式回答分开保存。发送只把成功对话正文交给所选模型，思考内容不会进入下一轮上下文。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (!canConnect) {
-            Text(
-                "连接网关并选择可用模型后即可发送。",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        if (state.notice.isNotBlank()) {
-            Text(state.notice, style = MaterialTheme.typography.bodySmall)
-        }
     }
+    ModelSelectionSheet(
+        visible = modelSheet,
+        groups = modelGroups,
+        selectedIds = setOfNotNull(selectedModel.takeIf { it.isNotBlank() }),
+        onDismissRequest = { modelSheet = false },
+        onSelectionChange = { selection ->
+            selection.singleOrNull()?.let(onSelectModel)
+        },
+        title = "选择模型",
+        singleSelect = true,
+    )
     if (historyOpen) {
         SessionHistoryDialog(
             state = state,

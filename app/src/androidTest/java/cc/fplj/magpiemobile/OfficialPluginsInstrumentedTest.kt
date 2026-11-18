@@ -111,6 +111,14 @@ class OfficialPluginsInstrumentedTest {
                     await("plugin login cancellation") { client.signInState(cancel.id).state == "canceled" }
                     NativeCoreSession.providerClient().create(ProviderCreateDraft("android-runtime", "Android runtime",
                         upstream.base + "/v1", "synthetic-upstream-key", listOf("fake-echo"), allowLoopbackHttp = true))
+                    val capabilityReport = ProviderModelCapabilityClient(NativeCoreSession.gatewayConfig())
+                        .run("android-runtime", "fake-echo")
+                    assertNotNull("saved provider route missing", capabilityReport.route)
+                    assertTrue("three checks must pass: ${capabilityReport.results}",
+                        capabilityReport.results.all { it.status == ProviderCapabilityStatus.PASSED })
+                    File(artifacts, "provider-capabilities.txt").writeText(
+                        capabilityReport.results.joinToString("\n") { "${it.check}: ${it.status}" },
+                    )
                     val auth = requireNotNull(NativeCoreSession.currentGatewayKey())
                     val models = JSONObject(http("http://127.0.0.1:3425/v1/models", auth).second).getJSONArray("data")
                     val nativeModel = (0 until models.length()).map { models.getJSONObject(it).getString("id") }
@@ -314,9 +322,65 @@ class OfficialPluginsInstrumentedTest {
                     }
                     device.findObject(By.text("提供商")).click()
                     await("provider list visible") { device.hasObject(By.text("模型提供商")) }
-                    await("provider add button visible") { device.hasObject(By.text("添加")) }
+                    await("saved provider visible") {
+                        if (device.hasObject(By.text("Android runtime"))) true
+                        else {
+                            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
+                                device.displayWidth / 2, device.displayHeight / 3, 20)
+                            false
+                        }
+                    }
+                    device.findObject(By.text("Android runtime")).click()
+                    await("saved provider connectivity entry") { device.hasObject(By.text("连通测试")) }
+                    device.findObject(By.text("连通测试")).click()
+                    await("provider test dialog") { device.hasObject(By.text("开始测试")) }
+                    device.findObject(By.text("开始测试")).click()
+                    await("three real provider checks in UI", 90_000) {
+                        device.hasObject(By.text("三项模型能力检查已通过。"))
+                    }
+                    assertTrue(device.takeScreenshot(File(artifacts, "provider-connectivity-results.png")))
+                    device.findObject(By.text("关闭")).click()
+                    device.pressBack()
+                    await("provider add button visible") {
+                        if (device.hasObject(By.text("添加"))) true
+                        else {
+                            device.swipe(device.displayWidth / 2, device.displayHeight / 3,
+                                device.displayWidth / 2, device.displayHeight * 3 / 4, 20)
+                            false
+                        }
+                    }
                     device.findObject(By.text("添加")).click()
+                    await("provider type sheet visible") {
+                        device.hasObject(By.text("自定义 OpenAI 兼容"))
+                    }
+                    assertTrue(device.takeScreenshot(File(artifacts, "provider-add-templates.png")))
+                    device.findObject(By.text("自定义 OpenAI 兼容")).click()
+                    device.waitForIdle()
+                    assertTrue(device.takeScreenshot(File(artifacts, "provider-add-config.png")))
                     await("provider advanced tab visible") { device.hasObject(By.text("高级")) }
+                    await("provider connectivity test visible") {
+                        device.hasObject(By.text("连通测试"))
+                    }
+                    device.findObject(By.text("模型")).click()
+                    await("provider model field visible") {
+                        device.hasObject(By.text("选择要启用的模型"))
+                    }
+                    device.findObject(By.text("选择要启用的模型")).click()
+                    await("provider model picker visible") {
+                        device.hasObject(By.text("选择提供商模型"))
+                    }
+                    assertTrue(
+                        device.takeScreenshot(File(artifacts, "provider-model-picker.png")),
+                    )
+                    device.pressBack()
+                    await("provider detail after model picker") {
+                        device.hasObject(By.text("高级"))
+                    }
+                    device.findObject(By.text("连通测试")).click()
+                    await("unsaved provider test notice") {
+                        device.hasObject(By.text("请先保存提供商，再运行连通测试。"))
+                    }
+                    device.findObject(By.text("关闭")).click()
                     device.findObject(By.text("高级")).click()
                     await("provider save button visible") { device.hasObject(By.text("保存连接")) }
                     device.waitForIdle()
@@ -331,6 +395,28 @@ class OfficialPluginsInstrumentedTest {
                     )
                     device.pressBack()
                     await("provider editor closed") { !device.hasObject(By.text("保存连接")) }
+                    device.findObject(By.text("聊天")).click()
+                    await("chat model selector visible") { device.hasObject(By.res("chat-model-selector")) }
+                    device.findObject(By.res("chat-model-selector")).click()
+                    await("chat model sheet visible") { device.hasObject(By.text("搜索模型或提供商")) }
+                    assertTrue(device.takeScreenshot(File(artifacts, "chat-model-picker.png")))
+                    device.findObject(By.clazz("android.widget.EditText")).text = nativeModel
+                    await("exact chat model visible") { device.hasObject(By.res("model-option:$nativeModel")) }
+                    device.findObject(By.res("model-option:$nativeModel")).click()
+                    await("chat model sheet dismissed") { !device.hasObject(By.text("搜索模型或提供商")) }
+                    device.waitForIdle()
+                    assertTrue(device.takeScreenshot(File(artifacts, "chat-composer-portrait.png")))
+                    device.findObject(By.clazz("android.widget.EditText")).click()
+                    device.waitForIdle()
+                    assertTrue("send control missing with keyboard", device.hasObject(By.res("chat-send")))
+                    assertTrue(device.takeScreenshot(File(artifacts, "chat-composer-keyboard.png")))
+                    device.pressBack()
+                    device.setOrientationLeft()
+                    await("landscape chat") { context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE }
+                    device.waitForIdle()
+                    assertTrue(device.takeScreenshot(File(artifacts, "chat-composer-landscape.png")))
+                    device.setOrientationNatural()
+                    await("portrait chat restored") { context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT }
                     await("gateway navigation after font scale restore") {
                         dismissEmulatorLauncherAnr()
                         if (device.findObject(power)?.isChecked == true) true
@@ -486,6 +572,17 @@ class OfficialPluginsInstrumentedTest {
             if (first.contains("/recall")) { json("{\"context\":\"hook-rewritten\"}"); return }
             if (first.startsWith("GET")) { json("{\"data\":[{\"id\":\"fake-echo\"}]}"); return }
             val body = JSONObject(raw)
+            if (body.has("tools")) {
+                json(JSONObject().put("id", "tool-probe").put("model", "fake-echo")
+                    .put("choices", JSONArray().put(JSONObject().put("index", 0)
+                        .put("finish_reason", "tool_calls").put("message", JSONObject()
+                            .put("role", "assistant").put("content", JSONObject.NULL)
+                            .put("tool_calls", JSONArray().put(JSONObject()
+                                .put("id", "probe-time").put("type", "function")
+                                .put("function", JSONObject().put("name", "get_current_time")
+                                    .put("arguments", "{}"))))))).toString())
+                return
+            }
             val messages = body.getJSONArray("messages")
             val text = messages.getJSONObject(messages.length() - 1).getString("content")
             if (body.optBoolean("stream")) {
