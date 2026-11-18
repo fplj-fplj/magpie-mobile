@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
@@ -51,7 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cc.fplj.magpiemobile.data.StoredChatMessage
 import cc.fplj.magpiemobile.theme.UiSpacing
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalComposeUiApi::class)
 @Composable
 fun ChatPanel(
     viewModel: ChatViewModel,
