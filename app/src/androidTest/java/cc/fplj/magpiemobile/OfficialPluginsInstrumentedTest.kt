@@ -412,6 +412,8 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue(device.takeScreenshot(File(artifacts, "chat-model-picker.png")))
                     device.findObject(By.clazz("android.widget.EditText")).text = nativeModel
                     await("exact chat model visible") { device.hasObject(By.res("model-option:$nativeModel")) }
+                    device.pressBack()
+                    device.waitForIdle()
                     device.findObject(By.res("model-option:$nativeModel")).click()
                     await("chat model sheet dismissed") { !device.hasObject(By.res("model-selection-sheet")) }
                     await("chat model applied") { device.hasObject(By.text("fake-echo")) }
