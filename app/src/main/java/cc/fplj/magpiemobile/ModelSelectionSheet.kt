@@ -212,7 +212,8 @@ internal fun ModelSelectionSheet(
                 .fillMaxHeight(0.86f)
                 .imePadding()
                 .padding(horizontal = UiSpacing.medium)
-                .testTag("model-selection-sheet"),
+                .testTag("model-selection-sheet")
+                .semantics { testTagsAsResourceId = true },
             verticalArrangement = Arrangement.spacedBy(UiSpacing.small),
         ) {
             Row(

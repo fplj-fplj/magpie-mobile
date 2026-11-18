@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -233,6 +234,7 @@ private fun ProviderConnectivityDialog(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .fillMaxHeight(0.9f)
                     .heightIn(max = 760.dp)
                     .testTag("provider-connectivity-dialog"),
                 shape = MaterialTheme.shapes.extraLarge,
@@ -241,107 +243,112 @@ private fun ProviderConnectivityDialog(
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
                 Column(
-                    Modifier.verticalScroll(rememberScrollState())
-                        .padding(UiSpacing.card),
+                    Modifier.padding(UiSpacing.card),
                     verticalArrangement = Arrangement.spacedBy(UiSpacing.medium),
                 ) {
-                    DialogHeader(
-                        providerName = providerName,
-                        running = running,
-                        allPassed = allCapabilityChecksPassed,
-                        hasFailure = hasTerminalFailure,
-                    )
-
-                    when {
-                        providerId.isNullOrBlank() -> SavedConfigurationNotice(
-                            "请先保存提供商，再运行连通测试。",
-                        )
-                        models.isEmpty() -> SavedConfigurationNotice(
-                            "当前提供商没有已保存且启用的模型；保存模型选择后再测试。",
-                        )
-                        else -> {
-                            ModelSelectionField(
-                                displayName = selectedModel,
-                                enabled = !running,
-                                onClick = { modelPickerOpen = true },
-                                supportingText = providerName,
-                            )
-                        }
-                    }
-
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        shape = MaterialTheme.shapes.large,
+                    Column(
+                        Modifier
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(UiSpacing.medium),
                     ) {
-                        Column(
-                            Modifier.padding(UiSpacing.medium),
-                            verticalArrangement = Arrangement.spacedBy(UiSpacing.small),
-                        ) {
-                            Text("模型能力", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "依次检查普通响应、流式响应与工具调用。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        DialogHeader(
+                            providerName = providerName,
+                            running = running,
+                            allPassed = allCapabilityChecksPassed,
+                            hasFailure = hasTerminalFailure,
+                        )
+
+                        when {
+                            providerId.isNullOrBlank() -> SavedConfigurationNotice(
+                                "请先保存提供商，再运行连通测试。",
                             )
-                            ProviderCapabilityCheck.entries.forEach { check ->
-                                val result = results[check] ?: pendingCapabilityResult(check)
-                                CapabilityResultRow(
-                                    result = result,
-                                    expanded = check in expandedChecks,
-                                    stateKey = "provider-capability:${providerId.orEmpty()}:$selectedModel:$check",
-                                    onToggleDetails = {
-                                        expandedChecks = if (check in expandedChecks) {
-                                            expandedChecks - check
-                                        } else {
-                                            expandedChecks + check
-                                        }
-                                    },
+                            models.isEmpty() -> SavedConfigurationNotice(
+                                "当前提供商没有已保存且启用的模型；保存模型选择后再测试。",
+                            )
+                            else -> {
+                                ModelSelectionField(
+                                    displayName = selectedModel,
+                                    enabled = !running,
+                                    onClick = { modelPickerOpen = true },
+                                    supportingText = providerName,
                                 )
                             }
                         }
-                    }
 
-                    if (running) {
                         Surface(
-                            color = MaterialTheme.colorScheme.primaryContainer,
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
                             shape = MaterialTheme.shapes.large,
                         ) {
-                            Row(
-                                Modifier.fillMaxWidth().padding(UiSpacing.medium),
-                                horizontalArrangement = Arrangement.spacedBy(UiSpacing.medium),
-                                verticalAlignment = Alignment.CenterVertically,
+                            Column(
+                                Modifier.padding(UiSpacing.medium),
+                                verticalArrangement = Arrangement.spacedBy(UiSpacing.small),
                             ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(24.dp),
-                                    strokeWidth = 2.dp,
+                                Text("模型能力", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "依次检查普通响应、流式响应与工具调用。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                Column(Modifier.weight(1f)) {
-                                    Text("正在检查模型能力", style = MaterialTheme.typography.titleSmall)
-                                    Text(
-                                        "三项请求依次进行；取消后不会继续下一项。",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ProviderCapabilityCheck.entries.forEach { check ->
+                                    val result = results[check] ?: pendingCapabilityResult(check)
+                                    CapabilityResultRow(
+                                        result = result,
+                                        expanded = check in expandedChecks,
+                                        stateKey = "provider-capability:${providerId.orEmpty()}:$selectedModel:$check",
+                                        onToggleDetails = {
+                                            expandedChecks = if (check in expandedChecks) {
+                                                expandedChecks - check
+                                            } else {
+                                                expandedChecks + check
+                                            }
+                                        },
                                     )
                                 }
                             }
                         }
-                    }
 
-                    if (message.isNotBlank()) {
+                        if (running) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = MaterialTheme.shapes.large,
+                            ) {
+                                Row(
+                                    Modifier.fillMaxWidth().padding(UiSpacing.medium),
+                                    horizontalArrangement = Arrangement.spacedBy(UiSpacing.medium),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                    Column(Modifier.weight(1f)) {
+                                        Text("正在检查模型能力", style = MaterialTheme.typography.titleSmall)
+                                        Text(
+                                            "三项请求依次进行；取消后不会继续下一项。",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (message.isNotBlank()) {
+                            Text(
+                                message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (messageIsError) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+
                         Text(
-                            message,
+                            "测试使用已保存配置，当前未保存修改不会参与。请求会发往真实上游，并可能产生少量费用；每个工具调用仅用于检查，绝不会执行。",
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (messageIsError) MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-
-                    Text(
-                        "测试使用已保存配置，当前未保存修改不会参与。请求会发往真实上游，并可能产生少量费用；每个工具调用仅用于检查，绝不会执行。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(UiSpacing.small),
