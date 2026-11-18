@@ -411,15 +411,39 @@ class OfficialPluginsInstrumentedTest {
                     await("chat model sheet visible") { device.hasObject(By.text("搜索模型或提供商")) }
                     assertTrue(device.takeScreenshot(File(artifacts, "chat-model-picker.png")))
                     device.findObject(By.clazz("android.widget.EditText")).text = nativeModel
-                    await("exact chat model visible") { device.hasObject(By.res("model-option:$nativeModel")) }
-                    device.findObject(By.res("model-option:$nativeModel")).click()
+                    await("model search applied") { device.hasObject(By.text("找到 1 个匹配模型")) }
+                    val modelOption = By.res("model-option:$nativeModel")
+                    var previousModelBounds: android.graphics.Rect? = null
+                    var stableModelBounds = 0
+                    await("model result layout settled") {
+                        val option = device.findObject(modelOption)
+                        val bounds = option?.visibleBounds
+                        if (bounds != null && !bounds.isEmpty && bounds == previousModelBounds) {
+                            stableModelBounds++
+                        } else {
+                            previousModelBounds = bounds
+                            stableModelBounds = 0
+                        }
+                        stableModelBounds >= 3
+                    }
+                    device.findObject(modelOption).click()
                     await("chat model sheet dismissed") { !device.hasObject(By.res("model-selection-sheet")) }
-                    await("chat model applied") { device.hasObject(By.text("fake-echo")) }
+                    await("chat model applied") {
+                        device.findObject(By.res("chat-model-selector"))?.findObject(By.text("fake-echo")) != null
+                    }
                     device.waitForIdle()
                     assertTrue(device.takeScreenshot(File(artifacts, "chat-composer-portrait.png")))
-                    device.findObject(By.clazz("android.widget.EditText")).click()
-                    device.waitForIdle()
-                    assertTrue("send control missing with keyboard", device.hasObject(By.res("chat-send")))
+                    device.executeShellCommand("settings put secure show_ime_with_hard_keyboard 1")
+                    device.findObject(By.res("chat-draft")).click()
+                    await("chat keyboard visible") {
+                        var visible = false
+                        scenario.onActivity { activity ->
+                            visible = androidx.core.view.ViewCompat.getRootWindowInsets(activity.window.decorView)
+                                ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+                        }
+                        visible
+                    }
+                    await("send control visible with keyboard") { device.hasObject(By.res("chat-send")) }
                     assertTrue(device.takeScreenshot(File(artifacts, "chat-composer-keyboard.png")))
                     device.pressBack()
                     device.setOrientationLeft()

@@ -292,7 +292,9 @@ fun ChatPanel(
                         value = state.draft,
                         onValueChange = viewModel::editDraft,
                         enabled = idle && state.selected?.legacy != true,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f)
+                            .testTag("chat-draft")
+                            .semantics { testTagsAsResourceId = true },
                         minLines = 1,
                         maxLines = 5,
                         placeholder = { Text("写下你的问题…") },
