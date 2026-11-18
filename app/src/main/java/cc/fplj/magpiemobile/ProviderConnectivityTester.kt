@@ -36,8 +36,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -61,6 +64,7 @@ import kotlinx.coroutines.withContext
  * The three checks use a live, provider-scoped gateway model route. Only saved configuration is
  * used and provider credentials remain inside the Android host.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun ProviderConnectivityTestButton(
     enabled: Boolean,
@@ -73,7 +77,9 @@ internal fun ProviderConnectivityTestButton(
     OutlinedButton(
         enabled = enabled,
         onClick = { visible = true },
-        modifier = modifier,
+        modifier = modifier
+            .testTag("provider-connectivity-entry")
+            .semantics { testTagsAsResourceId = true },
     ) {
         Text("连通测试")
     }

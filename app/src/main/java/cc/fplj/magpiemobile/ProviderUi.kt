@@ -30,7 +30,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -42,7 +45,7 @@ import cc.fplj.magpiemobile.theme.UiSpacing
  * 提供商管理沿用 RikkaHub 的信息层级，但色值、字体和图标来自 Magpie 现有主题：
  * 概览卡片 -> 简短摘要 -> 状态与模型标签 -> 整行进入详情。
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalComposeUiApi::class)
 @Composable
 internal fun ProviderRow(
     provider: ProviderSummary,
@@ -57,7 +60,8 @@ internal fun ProviderRow(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("provider-row:${provider.id}"),
+            .testTag("provider-row:${provider.id}")
+            .semantics { testTagsAsResourceId = true },
     ) {
         Column {
             Row(
