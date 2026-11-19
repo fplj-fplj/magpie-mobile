@@ -15,6 +15,7 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.net.URLEncoder
 import java.time.Duration
+import java.util.concurrent.CancellationException
 
 /** A read never became a definite response, or its answer did not match the management contract. */
 class PluginReadException : ManagementException("插件状态或市场读取失败；请重新读取，未改变插件配置")
@@ -32,10 +33,12 @@ class PluginWriteUnknownException : ManagementException("插件写入结果未�
 class PluginManagementClient(
     private val credential: ManagerCredential,
     baseUrl: String = "http://127.0.0.1:3430",
+    private val requestControl: ChatRequestControl? = null,
+    private val ensureActive: () -> Unit = {},
 ) {
     private val endpoint = LoopbackEndpoint(baseUrl)
-    private val readTransport = BoundedCoreHttp(endpoint, READ_TIMEOUT, credential.cookieHeader())
-    private val writeTransport = BoundedCoreHttp(endpoint, WRITE_TIMEOUT, credential.cookieHeader())
+    private val readTransport = BoundedCoreHttp(endpoint, READ_TIMEOUT, credential.cookieHeader(), requestControl, ensureActive)
+    private val writeTransport = BoundedCoreHttp(endpoint, WRITE_TIMEOUT, credential.cookieHeader(), requestControl, ensureActive)
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     init {
@@ -50,54 +53,75 @@ class PluginManagementClient(
      * Installed entries are matched only by official identifiers, never by an invented manifest.
      */
     fun market(query: String = ""): PluginMarketSnapshot {
+        checkCurrent()
         val cleaned = query.trim()
         require(cleaned.length <= 256 && cleaned.none { it.isISOControl() }) { "插件搜索词无效" }
         val installedSnapshot: PluginSnapshot
         val listings: List<PluginMarketListing>
         if (cleaned.isEmpty()) {
             val root = readRequest("/api/plugins/market") { json.parseToJsonElement(it).jsonObject }
-            installedSnapshot = readStateObject(root["state"] as? JsonObject)
-            listings = parseListings(root["listings"] as? JsonArray)
+            installedSnapshot = readSafe { readStateObject(root["state"] as? JsonObject) }
+            listings = readSafe { parseListings(root["listings"] as? JsonArray) }
         } else {
             installedSnapshot = plugins()
+            checkCurrent() // A superseded first GET must never authorize the search GET.
             val path = "/api/plugins/search?q=" + URLEncoder.encode(cleaned, Charsets.UTF_8)
             val root = readRequest(path) { json.parseToJsonElement(it).jsonObject }
-            listings = parseListings(root["hits"] as? JsonArray)
+            listings = readSafe { parseListings(root["hits"] as? JsonArray) }
         }
-        val matched = installedSnapshot.entries.filter { entry ->
-            listings.any { listing -> entry.matchesListing(listing) }
-        }.map { it.spec }
-        return PluginMarketSnapshot(
-            query = cleaned,
-            source = if (cleaned.isEmpty()) PluginMarketSource.MARKET else PluginMarketSource.SEARCH,
-            listings = listings,
-            installed = installedSnapshot.entries,
-            matchedSpecs = matched,
-        )
+        return readSafe {
+            val matched = installedSnapshot.entries.filter { entry ->
+                listings.any { listing -> entry.matchesListing(listing) }
+            }.map { it.spec }
+            PluginMarketSnapshot(
+                query = cleaned,
+                source = if (cleaned.isEmpty()) PluginMarketSource.MARKET else PluginMarketSource.SEARCH,
+                listings = listings,
+                installed = installedSnapshot.entries,
+                matchedSpecs = matched,
+            )
+        }
     }
 
-    @Synchronized fun add(spec: String): PluginSnapshot = writePlugin("add", buildJsonObject { put("spec", requireSpec(spec)) })
-    @Synchronized fun remove(spec: String): PluginSnapshot = writePlugin("remove", buildJsonObject { put("spec", requireSpec(spec)) })
-    @Synchronized fun upgrade(spec: String): PluginSnapshot = writePlugin("upgrade", buildJsonObject { put("spec", requireSpec(spec)) })
-    @Synchronized fun updateAll(): PluginSnapshot = writePlugin("update", JsonObject(emptyMap()))
-
-    @Synchronized
-    fun restoreGatewayAccess(): PluginSnapshot = writeRequest(
-        "/api/androidhost/plugin-gateway-access/restore", JsonObject(emptyMap()),
-    ) { raw ->
-        val response = json.parseToJsonElement(raw).jsonObject
-        check(response["ok"]?.jsonPrimitive?.booleanOrNull == true)
-        plugins()
+    @Synchronized fun add(spec: String): PluginSnapshot {
+        checkCurrent()
+        return writePlugin("add", buildJsonObject { put("spec", requireSpec(spec)) })
+    }
+    @Synchronized fun remove(spec: String): PluginSnapshot {
+        checkCurrent()
+        return writePlugin("remove", buildJsonObject { put("spec", requireSpec(spec)) })
+    }
+    @Synchronized fun upgrade(spec: String): PluginSnapshot {
+        checkCurrent()
+        return writePlugin("upgrade", buildJsonObject { put("spec", requireSpec(spec)) })
+    }
+    @Synchronized fun updateAll(): PluginSnapshot {
+        checkCurrent()
+        return writePlugin("update", JsonObject(emptyMap()))
     }
 
     @Synchronized
-    fun setOff(spec: String, off: Boolean): PluginSnapshot = writePlugin(
-        "off",
-        buildJsonObject { put("spec", requireSpec(spec)); put("off", off) },
-    )
+    fun restoreGatewayAccess(): PluginSnapshot {
+        checkCurrent()
+        return writeRequest(
+            "/api/androidhost/plugin-gateway-access/restore", JsonObject(emptyMap()),
+        ) { raw ->
+            val response = json.parseToJsonElement(raw).jsonObject
+            check(response["ok"]?.jsonPrimitive?.booleanOrNull == true)
+            checkCurrent() // A completed POST never permits reads through a replacement session.
+            plugins()
+        }
+    }
+
+    @Synchronized
+    fun setOff(spec: String, off: Boolean): PluginSnapshot {
+        checkCurrent()
+        return writePlugin("off", buildJsonObject { put("spec", requireSpec(spec)); put("off", off) })
+    }
 
     @Synchronized
     fun saveOptions(spec: String, options: JsonObject): PluginSnapshot {
+        checkCurrent()
         requireSpec(spec)
         val request = buildJsonObject { put("spec", spec); put("options", options) }
         require(request.toString().toByteArray(Charsets.UTF_8).size <= MAX_WRITE_BODY_BYTES) { "插件 options 超过安全上限" }
@@ -106,6 +130,7 @@ class PluginManagementClient(
 
     @Synchronized
     fun prefer(spec: String, provider: String): PluginSnapshot {
+        checkCurrent()
         requireSpec(spec)
         require(validGatewayId(provider)) { "插件 provider 标识无效" }
         return writePlugin("prefer", buildJsonObject { put("spec", spec); put("provider", provider) })
@@ -125,6 +150,7 @@ class PluginManagementClient(
         answerKey: String = "",
         answerValue: String = "",
     ): PluginPromptResult {
+        checkCurrent()
         require(validGatewayId(pid)) { "插件 provider pid 无效" }
         require(method >= 0) { "插件登录方式无效" }
         if (answerKey.isNotEmpty()) require(validGatewayId(answerKey)) { "插件登录输入项无效" }
@@ -161,6 +187,7 @@ class PluginManagementClient(
 
     @Synchronized
     fun signIn(pid: String, method: Int, inputs: Map<String, String>, key: String = ""): PluginSignInState {
+        checkCurrent()
         require(validGatewayId(pid)) { "插件 provider pid 无效" }
         require(method >= 0) { "插件登录方式无效" }
         val request = buildJsonObject {
@@ -173,12 +200,14 @@ class PluginManagementClient(
     }
 
     fun signInState(id: String): PluginSignInState {
+        checkCurrent()
         requirePathSegment(id, "插件登录标识无效")
         return readRequest("/api/signin/" + encodedPath(id)) { parseSignIn(it) }
     }
 
     @Synchronized
     fun submitCallback(id: String, value: String) {
+        checkCurrent()
         requirePathSegment(id, "插件登录标识无效")
         val request = buildJsonObject { put("url", value) }
         writeRequest("/api/signin/" + encodedPath(id) + "/callback", request) { rootExpectingSuccess(it) }
@@ -186,6 +215,7 @@ class PluginManagementClient(
 
     @Synchronized
     fun cancelSignIn(id: String) {
+        checkCurrent()
         requirePathSegment(id, "插件登录标识无效")
         writeRequest("/api/signin/" + encodedPath(id) + "/cancel", JsonObject(emptyMap())) { rootExpectingSuccess(it) }
     }
@@ -198,32 +228,60 @@ class PluginManagementClient(
         check(response.text("error").isBlank())
     }
 
-    private inline fun <T> readRequest(path: String, block: (String) -> T): T = try {
-        val body = readTransport.request("GET", path)
-        try {
-            block(body)
-        } catch (_: Exception) {
-            throw PluginReadException()
-        }
-    } catch (_: ManagementProtocolException) {
-        throw PluginReadException()
-    } catch (_: ManagementExecutionUnknown) {
+    private fun checkCurrent() {
+        requestControl?.ensureActive()
+        ensureActive()
+        requestControl?.ensureActive()
+    }
+
+    private inline fun <T> readSafe(block: () -> T): T = try {
+        checkCurrent()
+        block().also { checkCurrent() }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        checkCurrent()
         throw PluginReadException()
     }
 
+    private inline fun <T> readRequest(path: String, block: (String) -> T): T {
+        checkCurrent()
+        return try {
+            val body = readTransport.request("GET", path)
+            readSafe { block(body) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: ManagementProtocolException) {
+            checkCurrent()
+            throw PluginReadException()
+        } catch (_: ManagementExecutionUnknown) {
+            checkCurrent()
+            throw PluginReadException()
+        }
+    }
+
     private inline fun <T> writeRequest(path: String, payload: JsonObject, block: (String) -> T): T {
+        checkCurrent()
         val bytes = payload.toString().toByteArray(Charsets.UTF_8)
         require(bytes.size <= MAX_WRITE_BODY_BYTES) { "插件管理请求超过安全上限" }
         return try {
             val body = writeTransport.request("POST", path, bytes)
             try {
-                block(body)
+                checkCurrent()
+                block(body).also { checkCurrent() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
+                checkCurrent()
                 throw PluginWriteUnknownException()
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: ManagementProtocolException) {
+            checkCurrent()
             throw PluginWriteUnknownException()
         } catch (_: ManagementExecutionUnknown) {
+            checkCurrent()
             throw PluginWriteUnknownException()
         }
     }

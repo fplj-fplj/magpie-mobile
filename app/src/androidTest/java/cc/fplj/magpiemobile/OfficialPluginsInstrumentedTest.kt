@@ -7,6 +7,7 @@ import android.provider.DocumentsContract
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -26,6 +27,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -116,6 +118,7 @@ class OfficialPluginsInstrumentedTest {
                     val cancel = client.signIn(pid, 1, emptyMap())
                     client.cancelSignIn(cancel.id)
                     await("plugin login cancellation") { client.signInState(cancel.id).state == "canceled" }
+                    verifyPendingPluginLoginCancellation(upstream, artifacts, pid)
                     NativeCoreSession.providerClient().create(ProviderCreateDraft("android-runtime", "Android runtime",
                         upstream.base + "/v1", "synthetic-upstream-key", listOf("fake-echo"), allowLoopbackHttp = true))
                     val capabilityReport = ProviderModelCapabilityClient(NativeCoreSession.gatewayConfig())
@@ -295,6 +298,32 @@ class OfficialPluginsInstrumentedTest {
                     device.pressBack()
                     device.findObject(By.text("保存并连接")).click()
                     assertTrue(device.wait(Until.hasObject(By.text("连接成功")), 20_000))
+                    device.findObject(By.text("返回插件")).click()
+                    val delayedLogin = By.text("Test delayed OAuth").enabled(true)
+                    assertTrue(device.wait(Until.hasObject(delayedLogin), 10_000))
+                    device.findObject(delayedLogin).click()
+                    assertTrue(device.wait(Until.hasObject(By.text("开始登录").enabled(true)), 10_000))
+                    device.findObject(By.text("开始登录")).click()
+                    val endTracking = By.res("plugin-login-end-tracking").enabled(true)
+                    await("real OAuth waiting and local tracking controls") {
+                        device.hasObject(By.text("等待完成登录")) && device.hasObject(endTracking)
+                    }
+                    assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-login-recovery.png")))
+                    val confirmEndTracking = By.res("plugin-login-confirm-end-tracking")
+                    await("local tracking confirmation after actual auth worker exits") {
+                        if (device.hasObject(confirmEndTracking)) true
+                        else { device.findObject(endTracking)?.click(); false }
+                    }
+                    assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-login-end-confirmation.png")))
+                    device.findObject(By.text("继续核对")).click()
+                    await("dismiss tracking confirmation without abandoning real OAuth") {
+                        !device.hasObject(confirmEndTracking) && device.hasObject(By.text("等待完成登录"))
+                    }
+                    device.findObject(By.text("取消登录")).click()
+                    await("real OAuth UI cancellation confirmed by core") {
+                        device.hasObject(By.text("登录已取消")) && device.hasObject(By.text("核心已确认登录任务取消"))
+                    }
+                    assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-login-canceled.png")))
                     device.findObject(By.text("返回插件")).click()
                     val connectedOwner = NativeCoreSession.providerSessionId()
                     val connectedProviderSession = NativeCoreSession.providerSessionKey()
@@ -657,10 +686,12 @@ class OfficialPluginsInstrumentedTest {
                     val stoppedProviderSession = requireNotNull(NativeCoreSession.providerSessionKey())
                     val stoppedLease = NativeCoreSession.gatewayRequest(stoppedOwner)
                     val stoppedProviderLease = NativeCoreSession.providerRequest(stoppedProviderSession)
+                    val stoppedPluginLease = NativeCoreSession.pluginRequest(stoppedProviderSession)
                     try {
                         stoppedLease.ensureCurrent()
                         stoppedProviderLease.ensureCurrent()
                         assertFalse(stoppedProviderLease.client.getProviders().hasFileError)
+                        assertTrue(stoppedPluginLease.client.plugins().bun)
                         device.findObject(power).click()
                         await("gateway switched off", 30_000) {
                             !GatewayRuntime.stopping.value && GatewayRuntime.status.value.phase == GatewayEngineController.Phase.STOPPED &&
@@ -672,11 +703,16 @@ class OfficialPluginsInstrumentedTest {
                         assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedProviderLease.control.ensureActive() }
                         assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedProviderLease.client.getProviders() }
                         assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.providerRequest(stoppedProviderSession) }
+                        assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedPluginLease.control.ensureActive() }
+                        assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedPluginLease.client.plugins() }
+                        assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.pluginRequest(stoppedProviderSession) }
                         File(artifacts, "capability-session-cancellation.txt").writeText("PASS: actual core shutdown cancelled registered requests and rejected the stale owner\n")
                         File(artifacts, "provider-session-cancellation.txt").writeText("PASS: authenticated provider GET before stop; actual shutdown cancelled management lease and rejected its client and stale owner\n")
+                        File(artifacts, "plugin-session-cancellation.txt").writeText("PASS: authenticated plugin GET before stop; actual shutdown cancelled plugin lease and rejected its client and stale connection key\n")
                     } finally {
                         stoppedLease.close()
                         stoppedProviderLease.close()
+                        stoppedPluginLease.close()
                     }
                     assertTrue(device.takeScreenshot(File(artifacts, "gateway-off-after-toggle.png")))
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
@@ -724,6 +760,64 @@ class OfficialPluginsInstrumentedTest {
         }
     }
 
+    /** Uses production VM and transport with the APK's Go+Bun; the wrapper only records RPC kinds. */
+    private fun verifyPendingPluginLoginCancellation(upstream: LocalUpstream, artifacts: File, pid: String) {
+        val store = ViewModelStore()
+        val calls = CopyOnWriteArrayList<PluginAuthStep>()
+        val replies = CopyOnWriteArrayList<PluginSignInState>()
+        lateinit var viewModel: PluginManagementViewModel
+        instrumentation.runOnMainSync {
+            viewModel = PluginManagementViewModel(capture = { key ->
+                val operation = PluginOperationController().capture(key)
+                object : PluginSessionOperation by operation {
+                    override suspend fun auth(step: PluginAuthStep): PluginAuthReply {
+                        calls.add(step)
+                        return operation.auth(step).also { result -> result.state?.let { replies.add(it) } }
+                    }
+                }
+            })
+            store.put("plugin-pending-cancel", viewModel)
+            viewModel.attach(requireNotNull(NativeCoreSession.providerSessionKey()))
+        }
+        try {
+            await("real plugin provider list before pending Start") {
+                !viewModel.state.value.loading && viewModel.state.value.providers.any { it.pid == pid }
+            }
+            val provider = viewModel.state.value.providers.single { it.pid == pid }
+            val method = provider.methods.indexOfFirst { it.label == "Test delayed OAuth" }
+            assertTrue("delayed OAuth fixture method missing", method >= 0)
+            instrumentation.runOnMainSync { viewModel.selectLogin(provider, method) }
+            await("real plugin prompt before pending Start") { !viewModel.state.value.authBusy }
+            instrumentation.runOnMainSync { viewModel.startLogin() }
+            assertTrue("real Bun authorize did not reach held upstream", upstream.signInGateReached.await(15, TimeUnit.SECONDS))
+            instrumentation.runOnMainSync { viewModel.cancelLogin(); viewModel.cancelLogin() }
+            assertTrue("Start must remain tracked until its real response", viewModel.state.value.authBusy)
+            assertTrue(viewModel.state.value.loginRecovery?.cancelRequested == true)
+            assertEquals(1, calls.count { it is PluginAuthStep.Start })
+            assertEquals(0, calls.count { it is PluginAuthStep.Cancel })
+
+            upstream.releaseSignInGate.countDown()
+            await("actual late Start ID cancelled and read back", 30_000) {
+                !viewModel.state.value.authBusy && viewModel.state.value.loginRecovery == null &&
+                    replies.any { it.state == "canceled" || it.state == "cancelled" }
+            }
+            assertEquals("Start must never be replayed", 1, calls.count { it is PluginAuthStep.Start })
+            assertEquals("duplicate Cancel clicks must send one RPC", 1, calls.count { it is PluginAuthStep.Cancel })
+            val started = replies.first { it.state == "waiting" }
+            assertTrue(started.id.isNotEmpty())
+            assertEquals(started.id, (calls.single { it is PluginAuthStep.Cancel } as PluginAuthStep.Cancel).id)
+            assertTrue(calls.any { it is PluginAuthStep.Read && it.id == started.id })
+            File(artifacts, "plugin-pending-start-cancel.txt").writeText(
+                "PASS: production VM held a real Go+Bun OAuth Start before its response; duplicate cancel clicks " +
+                    "retained intent, late ID received one cancel RPC in the original connection, then read back " +
+                    "actual canceled state; Start was sent once and recovery cleared only after confirmation\n",
+            )
+        } finally {
+            upstream.releaseSignInGate.countDown()
+            instrumentation.runOnMainSync { store.clear() }
+        }
+    }
+
     /** Re-authenticates the real running core, without restarting its process or Service owner. */
     private fun verifySameOwnerProviderReconnect(artifacts: File) = runBlocking {
         val beforeStatus = NativeCoreSession.status.value
@@ -743,11 +837,13 @@ class OfficialPluginsInstrumentedTest {
         }
         assertSame(oldList, cache.read(before) { error("same-connection cache was not reused") })
         val oldLease = NativeCoreSession.providerRequest(before)
+        val oldPluginLease = NativeCoreSession.pluginRequest(before)
         try {
             NativeCoreSession.suspend(before.owner)
             assertNull(NativeCoreSession.providerSessionKey())
             assertNull(NativeCoreSession.status.value.providerSession)
             assertThrows(java.util.concurrent.CancellationException::class.java) { oldLease.control.ensureActive() }
+            assertThrows(java.util.concurrent.CancellationException::class.java) { oldPluginLease.control.ensureActive() }
             NativeCoreSession.connect(before.owner, context.filesDir)
             await("same-owner real core re-authentication", 30_000) { NativeCoreSession.status.value.ready }
             val after = requireNotNull(NativeCoreSession.providerSessionKey())
@@ -757,6 +853,8 @@ class OfficialPluginsInstrumentedTest {
             assertNotEquals("READY snapshots coalesced across reconnect", beforeStatus, NativeCoreSession.status.value)
             assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.providerRequest(before) }
             assertThrows(java.util.concurrent.CancellationException::class.java) { oldLease.client.getProviders() }
+            assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.pluginRequest(before) }
+            assertThrows(java.util.concurrent.CancellationException::class.java) { oldPluginLease.client.plugins() }
             NativeCoreSession.connect(after.owner, context.filesDir)
             assertEquals("duplicate RUNNING changed the verified connection", after, NativeCoreSession.providerSessionKey())
             val refreshed = cache.read(after) {
@@ -765,13 +863,19 @@ class OfficialPluginsInstrumentedTest {
             assertFalse(refreshed.hasFileError)
             assertEquals(updatedName, refreshed.providers.single { it.id == "android-runtime" }.name)
             assertEquals(2, fetches)
+            NativeCoreSession.pluginRequest(after).use { fresh -> assertTrue(fresh.client.plugins().bun) }
             File(artifacts, "provider-same-owner-reconnect.txt").writeText(
                 "PASS: real management edit followed by suspend/re-authentication of the same running core; " +
                     "Service owner unchanged, epoch advanced, READY snapshot changed, duplicate RUNNING stable; " +
                     "old key/client rejected and healthy old list replaced by a fresh authenticated GET\n",
             )
+            File(artifacts, "plugin-same-owner-reconnect.txt").writeText(
+                "PASS: same-owner real re-authentication cancelled the old plugin lease, rejected the " +
+                    "old connection key/client, and allowed a fresh authenticated plugin GET\n",
+            )
         } finally {
             oldLease.close()
+            oldPluginLease.close()
         }
     }
 
@@ -939,6 +1043,8 @@ class OfficialPluginsInstrumentedTest {
         private val executor = Executors.newCachedThreadPool()
         private val sockets = CopyOnWriteArrayList<Socket>()
         val requests = CopyOnWriteArrayList<String>()
+        val signInGateReached = CountDownLatch(1)
+        val releaseSignInGate = CountDownLatch(1)
         val base = "http://127.0.0.1:${server.localPort}"
         @Volatile var streamFinished = false
         init {
@@ -985,6 +1091,12 @@ class OfficialPluginsInstrumentedTest {
                 output.flush()
             }
             if (first.contains("/recall")) { json("{\"context\":\"hook-rewritten\"}"); return }
+            if (first.contains("/plugin-signin-delay")) {
+                signInGateReached.countDown()
+                check(releaseSignInGate.await(30, TimeUnit.SECONDS))
+                json("{}")
+                return
+            }
             if (first.startsWith("GET")) { json("{\"data\":[{\"id\":\"fake-echo\"}]}"); return }
             val body = JSONObject(raw)
             if (body.has("tools")) {
@@ -1021,6 +1133,7 @@ class OfficialPluginsInstrumentedTest {
             }
         }
         override fun close() {
+            releaseSignInGate.countDown()
             server.close()
             sockets.forEach { runCatching { it.close() } }
             executor.shutdownNow()
@@ -1038,7 +1151,10 @@ class OfficialPluginsInstrumentedTest {
               },
               auth: { provider:"androidfixture",methods:[{type:"api",label:"Test API key"},
                 {type:"oauth",label:"Test OAuth",authorize:async()=>({url:"https://example.invalid/authorize",method:"code",instructions:"Paste good",
-                  callback:async(code)=>code==="good"?({type:"success",refresh:"synthetic-refresh",access:"synthetic-access",expires:Date.now()+3600000}):({type:"failed"})})}],
+                  callback:async(code)=>code==="good"?({type:"success",refresh:"synthetic-refresh",access:"synthetic-access",expires:Date.now()+3600000}):({type:"failed"})})},
+                {type:"oauth",label:"Test delayed OAuth",authorize:async()=>{await fetch(options.base + "/plugin-signin-delay");return {
+                  url:"https://example.invalid/delayed-authorize",method:"code",instructions:"Pending cancel fixture",
+                  callback:async()=>({type:"failed"})}}}],
                 loader: async () => ({apiKey:"synthetic",baseURL:options.base + "/v1"}) },
               tool: {echo:{description:"Android runtime echo",args:{type:"object",properties:{text:{type:"string"}},required:["text"]},
                 execute: async (args) => {writeFileSync(process.env.HOME + "/runtime-tool.txt",args.text);return args.text}}}

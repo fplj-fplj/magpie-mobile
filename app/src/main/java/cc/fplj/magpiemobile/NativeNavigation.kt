@@ -115,9 +115,10 @@ fun Dashboard(
         GatewayEngineController.Phase.RUNNING, GatewayEngineController.Phase.BACKOFF)
     val clientReady = running && !stopping && connection.ready
     val owner = if (clientReady) NativeCoreSession.providerSessionId() else null
-    LaunchedEffect(owner) { officialPlugins.attach(owner) }
-    LaunchedEffect(section, owner) {
-        if (section == GatewaySection.PLUGINS && owner != null && !officialPlugins.state.value.loading && !officialPlugins.state.value.busy) {
+    val pluginSession = if (clientReady) connection.providerSession else null
+    LaunchedEffect(pluginSession) { officialPlugins.attach(pluginSession) }
+    LaunchedEffect(section, pluginSession) {
+        if (section == GatewaySection.PLUGINS && pluginSession != null && !officialPlugins.state.value.loading && !officialPlugins.state.value.busy) {
             officialPlugins.refresh()
         }
     }

@@ -5,17 +5,18 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cc.fplj.magpiemobile.core.*
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import java.net.URI
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal sealed interface PluginEdit {
     val spec: String
@@ -54,43 +55,16 @@ internal data class OfficialPluginsState(
     val prompt: PluginPrompt? = null,
     val signIn: PluginSignInState? = null,
     val authBusy: Boolean = false,
+    val loginRecovery: PluginLoginRecovery? = null,
+    val authWorkers: Int = 0,
 ) {
     override fun toString() = "OfficialPluginsState(entries=${snapshot.entries.size}, busy=$busy, pending=$pending, login=${signIn?.state})"
-}
-
-private suspend fun liveEdit(edit: PluginEdit): PluginSnapshot = withContext(Dispatchers.IO) {
-    val client = NativeCoreSession.pluginClient()
-    when (edit) {
-        is PluginEdit.Add -> client.add(edit.spec)
-        is PluginEdit.Remove -> client.remove(edit.spec)
-        is PluginEdit.Upgrade -> client.upgrade(edit.spec)
-        is PluginEdit.Off -> client.setOff(edit.spec, edit.off)
-        is PluginEdit.Options -> client.saveOptions(edit.spec, edit.value)
-        is PluginEdit.Prefer -> client.prefer(edit.spec, edit.provider)
-        PluginEdit.UpdateAll -> client.updateAll()
-        PluginEdit.RestoreGatewayAccess -> client.restoreGatewayAccess()
-    }
-}
-
-private suspend fun liveAuth(step: PluginAuthStep): PluginAuthReply = withContext(Dispatchers.IO) {
-    val client = NativeCoreSession.pluginClient()
-    when (step) {
-        is PluginAuthStep.Prompt -> PluginAuthReply(prompt = client.nextPrompt(step.pid, step.method, step.inputs, step.key, step.value))
-        is PluginAuthStep.Start -> PluginAuthReply(state = client.signIn(step.pid, step.method, step.inputs, step.key))
-        is PluginAuthStep.Read -> PluginAuthReply(state = client.signInState(step.id))
-        is PluginAuthStep.Callback -> { client.submitCallback(step.id, step.value); PluginAuthReply() }
-        is PluginAuthStep.Cancel -> { client.cancelSignIn(step.id); PluginAuthReply() }
-    }
 }
 
 /** Only nonsecret operation markers are saved. OAuth links and answers stay in memory. */
 internal class PluginManagementViewModel(
     private val savedState: SavedStateHandle = SavedStateHandle(),
-    private val readPlugins: suspend () -> PluginSnapshot = { withContext(Dispatchers.IO) { NativeCoreSession.pluginClient().plugins() } },
-    private val readProviders: suspend () -> List<PluginProvider> = { withContext(Dispatchers.IO) { NativeCoreSession.pluginClient().providers() } },
-    private val readMarket: suspend (String) -> PluginMarketSnapshot = { query -> withContext(Dispatchers.IO) { NativeCoreSession.pluginClient().market(query) } },
-    private val performEdit: suspend (PluginEdit) -> PluginSnapshot = ::liveEdit,
-    private val performAuth: suspend (PluginAuthStep) -> PluginAuthReply = ::liveAuth,
+    private val capture: (ProviderSessionKey) -> PluginSessionOperation = PluginOperationController()::capture,
     private val clock: () -> Long = System::currentTimeMillis,
     private val reconcileImports: suspend (PluginSnapshot) -> Unit = {},
     private val removeImport: suspend (String, PluginSnapshot) -> Unit = { _, _ -> },
@@ -99,9 +73,11 @@ internal class PluginManagementViewModel(
     private val mutable = MutableStateFlow(OfficialPluginsState(
         pending = savedState["plugin.pending"] ?: false,
         pendingSpec = savedState["plugin.spec"] ?: "",
+        loginRecovery = PluginLoginRecovery.restore(savedState),
+        authWorkers = PluginAuthWorkTracker.active.value,
     ))
     val state = mutable.asStateFlow()
-    private var owner: Long? = null
+    private var owner: ProviderSessionKey? = null
     private var generation = 0L
     private var marketGeneration = 0L
     private var refreshQueued = false
@@ -114,12 +90,69 @@ internal class PluginManagementViewModel(
     private var authGeneration = 0L
     private var authRequest = 0L
     private var poll: Job? = null
+    private var pollingStarted = false
     private var answers = emptyMap<String, String>()
     private var signInUrl = ""
     private var signInId = ""
+    private var authOrigin: ProviderSessionKey? = null
+    private val operationLock = Any()
+    private val operations = mutableSetOf<PluginSessionOperation>()
     var onChanged: () -> Unit = {}
 
+    private fun captureOperation(session: ProviderSessionKey): PluginSessionOperation? {
+        var operation: PluginSessionOperation? = null
+        return try {
+            capture(session).also { operation = it; it.ensureCurrent() }
+        } catch (_: CancellationException) {
+            operation?.close()
+            null
+        } catch (error: Exception) {
+            operation?.close()
+            if (owner == session) mutable.update { it.copy(error = safeError(error)) }
+            null
+        }
+    }
+
+    /** Owns a synchronously captured lease even when the scope dies before a lazy body starts. */
+    private fun launchOperation(
+        operation: PluginSessionOperation,
+        onFinished: () -> Unit = {},
+        onReleased: () -> Unit = {},
+        block: suspend () -> Unit,
+    ): Job {
+        val released = AtomicBoolean()
+        fun release() {
+            if (released.compareAndSet(false, true)) {
+                synchronized(operationLock) { operations.remove(operation) }
+                try { operation.close() } finally { onFinished() }
+            }
+        }
+        synchronized(operationLock) { operations.add(operation) }
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                operation.ensureCurrent()
+                block()
+            } catch (cancelled: CancellationException) {
+                operation.cancel()
+                throw cancelled
+            } finally {
+                release()
+            }
+        }
+        job.invokeOnCompletion { cause ->
+            try {
+                if (cause is CancellationException) operation.cancel()
+                release()
+            } finally { onReleased() }
+        }
+        job.start()
+        return job
+    }
+
     init {
+        viewModelScope.launch {
+            PluginAuthWorkTracker.active.collect { count -> mutable.update { it.copy(authWorkers = count) } }
+        }
         // Older versions could retain a spec before the HTTP client rejected URL credentials.
         // Discard that recovery marker instead of restoring it into the public operation state.
         savedState.get<String>("plugin.spec")?.takeIf { it.isNotEmpty() }?.let { spec ->
@@ -127,13 +160,15 @@ internal class PluginManagementViewModel(
         }
     }
 
-    fun attach(session: Long?) {
+    fun attach(session: ProviderSessionKey?) {
         if (owner == session) return
+        synchronized(operationLock) { operations.toList() }.forEach { it.cancel() }
         owner = session
         generation++
         marketGeneration++
         refreshQueued = false
-        clearLogin()
+        mutable.value.loginRecovery?.let { setLoginRecovery(it.copy(stage = PluginLoginRecovery.Stage.DETACHED)) }
+        clearLogin(keepRecovery = true)
         mutable.update { it.copy(snapshot = PluginSnapshot(), providers = emptyList(), market = PluginMarketSnapshot(), loading = false, busy = false, error = "",
             pending = savedState["plugin.pending"] ?: false, pendingSpec = savedState["plugin.spec"] ?: "") }
         if (session != null) refresh()
@@ -142,50 +177,63 @@ internal class PluginManagementViewModel(
     fun refresh() {
         val session = owner ?: return
         if (mutable.value.busy) { refreshQueued = true; return }
+        val operation = captureOperation(session) ?: return
         val revision = ++generation
         marketGeneration++
         mutable.update { it.copy(loading = true, error = "") }
-        viewModelScope.launch {
+        launchOperation(operation, onFinished = {
+            if (owner == session && revision == generation) mutable.update { it.copy(loading = false) }
+        }) {
             try {
-                val plugins = readPlugins()
-                if (owner != session || revision != generation) return@launch
+                val plugins = operation.plugins()
+                operation.ensureCurrent()
+                if (owner != session || revision != generation) return@launchOperation
                 mutable.update { it.copy(snapshot = plugins, providers = emptyList(), market = it.market.withInstalled(plugins)) }
-                val providers = readProviders()
-                if (owner != session || revision != generation) return@launch
+                val providers = operation.providers()
+                operation.ensureCurrent()
+                if (owner != session || revision != generation) return@launchOperation
                 val pending = mutable.value.pending
                 val proved = pending && confirmed(pendingEdit, plugins, providers)
                 val elapsed = pending && clock() - (savedState.get<Long>("plugin.started") ?: clock()) >= UNKNOWN_WAIT
                 if (proved && pendingEdit is PluginEdit.Remove) removeImport(pendingEdit!!.spec, plugins)
+                operation.ensureCurrent()
+                if (owner != session || revision != generation) return@launchOperation
                 if (proved || elapsed) clearPending()
                 if (!mutable.value.pending) reconcileImports(plugins)
-                if (owner != session || revision != generation) return@launch
+                operation.ensureCurrent()
+                if (owner != session || revision != generation) return@launchOperation
                 mutable.update { it.copy(snapshot = plugins, providers = providers,
                     notice = if (proved) "操作结果已核对" else if (elapsed) "安装任务时限已结束，已重新读取核心配置" else it.notice) }
                 if (pending && (proved || elapsed)) onChanged()
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { if (revision == generation) mutable.update { it.copy(error = safeError(e)) } }
-            finally { if (revision == generation) mutable.update { it.copy(loading = false) } }
+            catch (e: Exception) { if (owner == session && revision == generation) mutable.update { it.copy(error = safeError(e)) } }
         }
     }
 
     fun market(query: String) {
-        if (owner == null || mutable.value.busy || mutable.value.loading) return
-        val session = owner
+        if (mutable.value.busy || mutable.value.loading) return
+        val session = owner ?: return
+        val operation = captureOperation(session) ?: return
         val revision = ++marketGeneration
         mutable.update { it.copy(loading = true, error = "") }
-        viewModelScope.launch {
+        launchOperation(operation, onFinished = {
+            if (owner == session && revision == marketGeneration) mutable.update { it.copy(loading = false) }
+        }) {
             try {
-                val result = readMarket(query)
+                val result = operation.market(query)
+                operation.ensureCurrent()
                 if (owner == session && revision == marketGeneration) mutable.update { it.copy(market = result) }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (owner == session && revision == marketGeneration) mutable.update { it.copy(error = safeError(e)) } }
-            finally { if (owner == session && revision == marketGeneration) mutable.update { it.copy(loading = false) } }
         }
     }
 
-    fun edit(edit: PluginEdit): Boolean {
+    fun currentSession(): ProviderSessionKey? = owner
+
+    fun edit(edit: PluginEdit, expectedSession: ProviderSessionKey? = owner): Boolean {
         val session = owner ?: return false
-        if (mutable.value.busy || mutable.value.pending || mutable.value.authBusy) return false
+        if (session != expectedSession) return false
+        if (mutable.value.busy || mutable.value.pending || mutable.value.authBusy || mutable.value.loginRecovery != null) return false
         val savedSpec = if (edit != PluginEdit.UpdateAll && edit != PluginEdit.RestoreGatewayAccess) {
             try {
                 PluginManagementClient.validateSpec(edit.spec)
@@ -194,6 +242,7 @@ internal class PluginManagementViewModel(
                 return false
             }
         } else ""
+        val operation = captureOperation(session) ?: return false
         val revision = ++generation
         marketGeneration++
         pendingEdit = edit
@@ -207,29 +256,38 @@ internal class PluginManagementViewModel(
             else -> savedState.remove<String>("plugin.operation")
         }
         mutable.update { it.copy(busy = true, loading = false, pendingSpec = savedSpec, error = "", notice = "") }
-        viewModelScope.launch {
-            var known = false
+        var known = false
+        launchOperation(operation, onFinished = {
+            if (owner == session && revision == generation) mutable.update { it.copy(busy = false,
+                pending = !known && savedState.get<Boolean>("plugin.pending") == true) }
+            if (owner == session && revision == generation && refreshQueued) { refreshQueued = false; refresh() }
+        }) {
             try {
-                val result = performEdit(edit)
+                val result = operation.edit(edit)
+                operation.ensureCurrent()
                 known = true
-                if (owner != session || revision != generation) return@launch
+                if (owner != session || revision != generation) return@launchOperation
                 if (edit is PluginEdit.Remove && result.entries.none { sameSpec(it.spec, edit.spec) }) removeImport(edit.spec, result)
+                operation.ensureCurrent()
+                if (owner != session || revision != generation) return@launchOperation
                 reconcileImports(result)
-                if (owner != session || revision != generation) return@launch
+                operation.ensureCurrent()
+                if (owner != session || revision != generation) return@launchOperation
                 clearPending()
                 mutable.update { it.copy(snapshot = result, market = it.market.withInstalled(result), notice = "核心配置已更新") }
                 onChanged()
-                val providers = readProviders()
-                if (revision == generation) mutable.update { it.copy(providers = providers) }
+                val providers = operation.providers()
+                operation.ensureCurrent()
+                if (owner == session && revision == generation) mutable.update { it.copy(providers = providers) }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                if (revision == generation) {
+                if (owner == session && revision == generation) {
                     val unknown = !known && (e is ManagementExecutionUnknown || e is PluginWriteUnknownException)
                     if (!known && !unknown && edit is PluginEdit.Add) {
                         try { rejectImport(edit.spec) } catch (cancel: CancellationException) { throw cancel }
                         catch (_: Exception) { /* Preserve the submitted journal if disk cleanup fails. */ }
                         // A definite HTTP rejection still needs a successful read before deleting files.
-                        val actual = try { readPlugins() } catch (cancel: CancellationException) { throw cancel }
+                        val actual = try { operation.plugins() } catch (cancel: CancellationException) { throw cancel }
                             catch (_: Exception) { null }
                         if (owner == session && revision == generation && actual != null &&
                             actual.entries.none { sameSpec(it.spec, edit.spec) }) {
@@ -237,14 +295,11 @@ internal class PluginManagementViewModel(
                             catch (_: Exception) { /* Retry via a later successful reconciliation. */ }
                         }
                     }
-                    if (owner != session || revision != generation) return@launch
+                    operation.ensureCurrent()
+                    if (owner != session || revision != generation) return@launchOperation
                     if (!unknown) clearPending()
                     mutable.update { it.copy(pending = unknown, error = if (known) "配置已保存，刷新失败；请重新读取" else safeError(e)) }
                 }
-            } finally {
-                if (revision == generation) mutable.update { it.copy(busy = false,
-                    pending = !known && savedState.get<Boolean>("plugin.pending") == true) }
-                if (owner == session && revision == generation && refreshQueued) { refreshQueued = false; refresh() }
             }
         }
         return true
@@ -282,8 +337,14 @@ internal class PluginManagementViewModel(
         mutable.update { it.copy(pending = false, pendingSpec = "") }
     }
 
+    private fun setLoginRecovery(recovery: PluginLoginRecovery?) {
+        if (recovery == null) PluginLoginRecovery.clear(savedState) else recovery.save(savedState)
+        mutable.update { it.copy(loginRecovery = recovery) }
+    }
+
     fun selectLogin(provider: PluginProvider, method: Int) {
-        if (mutable.value.busy || mutable.value.pending || mutable.value.authBusy || method !in provider.methods.indices) return
+        if (mutable.value.busy || mutable.value.pending || mutable.value.authBusy ||
+            mutable.value.loginRecovery != null || method !in provider.methods.indices) return
         clearLogin()
         mutable.update { it.copy(authProvider = provider, authMethod = method, error = "") }
         prompt()
@@ -292,9 +353,10 @@ internal class PluginManagementViewModel(
     fun prompt(value: String? = null) {
         val current = mutable.value
         val provider = current.authProvider ?: return
+        if (current.loginRecovery != null) return
         val question = current.prompt
         auth(PluginAuthStep.Prompt(provider.pid, current.authMethod, answers,
-            if (value != null) question?.key.orEmpty() else "", value.orEmpty())) { reply ->
+            if (value != null) question?.key.orEmpty() else "", value.orEmpty())) { _, reply ->
             val result = reply.prompt ?: return@auth
             if (result.error.isNotBlank()) { mutable.update { it.copy(error = "此项输入未通过插件校验，请检查后重试") }; return@auth }
             answers = result.inputs
@@ -305,91 +367,193 @@ internal class PluginManagementViewModel(
     fun startLogin(key: String = "") {
         val current = mutable.value
         val provider = current.authProvider ?: return
-        auth(PluginAuthStep.Start(provider.pid, current.authMethod, answers, key)) { reply ->
-            reply.state?.let { acceptSignIn(it) }
+        if (current.loginRecovery != null) return
+        auth(PluginAuthStep.Start(provider.pid, current.authMethod, answers, key), beforeLaunch = { session ->
+            authOrigin = session
+            setLoginRecovery(PluginLoginRecovery(provider.pid, PluginLoginRecovery.Stage.STARTING))
+        }) { operation, reply ->
+            val result = reply.state ?: throw PluginWriteUnknownException()
+            signInId = result.id
             answers = emptyMap()
+            if (mutable.value.loginRecovery?.cancelRequested == true && !terminal(result)) {
+                if (result.id.isEmpty()) throw PluginWriteUnknownException()
+                cancelAndRead(operation, result.id)
+            } else acceptSignIn(result)
         }
     }
 
+    private fun terminal(result: PluginSignInState): Boolean = result.state in setOf("done", "failed", "cancelled", "canceled")
+
     private fun acceptSignIn(result: PluginSignInState) {
         signInId = result.id
-        signInUrl = result.url.takeIf(::validPluginBrowserUrl).orEmpty()
+        val pending = mutable.value.loginRecovery
+        signInUrl = if (pending?.cancelRequested == true) "" else result.url.takeIf(::validPluginBrowserUrl).orEmpty()
         mutable.update { it.copy(signIn = result.copy(url = "", keysUrl = "", error = "", proxy = "", openError = ""),
-            error = if (result.error.isBlank()) "" else "插件登录失败，请重新选择登录方式") }
-        if (result.state == "done") { onChanged(); refresh() }
-        else if (result.id.isNotEmpty() && result.error.isEmpty() && result.state !in setOf("failed", "cancelled", "canceled")) startPolling()
+            error = if (result.error.isBlank()) "" else "插件登录未完成，请只读核对当前状态") }
+        if (terminal(result)) {
+            poll?.cancel()
+            poll = null
+            setLoginRecovery(null)
+            mutable.update { it.copy(notice = when (result.state) {
+                "done" -> if (pending?.cancelRequested == true) "登录已经完成；没有将其误报为取消。" else "插件登录已完成"
+                "cancelled", "canceled" -> "核心已确认登录任务取消"
+                else -> "核心已返回登录失败状态"
+            }) }
+            if (result.state == "done") { onChanged(); refresh() }
+        } else {
+            pending?.let { setLoginRecovery(it.copy(stage = if (it.cancelRequested)
+                PluginLoginRecovery.Stage.CANCEL_UNKNOWN else PluginLoginRecovery.Stage.WAITING)) }
+            if (result.id.isNotEmpty() && result.error.isEmpty()) startPolling()
+        }
     }
 
+    /** Polling schedules read operations; each request captures the current key before launch. */
     private fun startPolling() {
-        poll?.cancel()
+        // A waiting reply must not restart the ten-minute observation budget.
+        if (pollingStarted) return
+        pollingStarted = true
         val session = owner
         val revision = authGeneration
-        val id = signInId
         poll = viewModelScope.launch {
             repeat(300) {
                 delay(2000)
-                if (owner != session || revision != authGeneration) return@launch
-                if (mutable.value.authBusy) return@repeat
-                try {
-                    val result = performAuth(PluginAuthStep.Read(id)).state ?: return@repeat
-                    if (revision != authGeneration) return@launch
-                    signInUrl = result.url.takeIf(::validPluginBrowserUrl).orEmpty()
-                    mutable.update { it.copy(signIn = result.copy(url = "", keysUrl = "", error = "", proxy = "", openError = ""),
-                        error = if (result.error.isBlank()) "" else "插件登录未完成，请重新发起") }
-                    if (result.state == "done") { onChanged(); refresh(); return@launch }
-                    if (result.error.isNotBlank() || result.state in setOf("failed", "cancelled", "canceled")) return@launch
-                } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { if (revision == authGeneration) mutable.update { it.copy(error = "登录状态读取失败，可以手动重新读取") }; return@launch }
+                if (owner != session || revision != authGeneration || mutable.value.loginRecovery == null) return@launch
+                if (!mutable.value.authBusy) refreshLogin()
             }
         }
     }
 
     fun refreshLogin() {
-        if (signInId.isEmpty()) return
-        auth(PluginAuthStep.Read(signInId)) { reply -> reply.state?.let(::acceptSignIn) }
+        if (mutable.value.authBusy) return
+        if (signInId.isEmpty() || authOrigin == null || authOrigin != owner) {
+            // There is no official lookup by provider ID. A provider list cannot prove this Start.
+            refresh()
+            return
+        }
+        auth(PluginAuthStep.Read(signInId)) { _, reply ->
+            reply.state?.let(::acceptSignIn) ?: throw PluginReadException()
+        }
     }
 
     fun submitCallback(value: String) {
-        if (signInId.isEmpty() || value.isBlank()) return
-        auth(PluginAuthStep.Callback(signInId, value)) { refreshLogin() }
+        val recovery = mutable.value.loginRecovery ?: return
+        if (signInId.isEmpty() || value.isBlank() || authOrigin != owner ||
+            recovery.cancelRequested || recovery.stage != PluginLoginRecovery.Stage.WAITING) return
+        auth(PluginAuthStep.Callback(signInId, value)) { operation, _ ->
+            val result = operation.auth(PluginAuthStep.Read(signInId)).state ?: throw PluginReadException()
+            operation.ensureCurrent()
+            acceptSignIn(result)
+        }
     }
 
     fun cancelLogin() {
-        if (signInId.isEmpty()) { clearLogin(); return }
-        auth(PluginAuthStep.Cancel(signInId)) { clearLogin() }
+        val current = mutable.value
+        if (current.signIn?.let(::terminal) == true) { clearLogin(); return }
+        val recovery = current.loginRecovery
+        if (recovery == null) { clearLogin(); return }
+        setLoginRecovery(recovery.copy(cancelRequested = true))
+        // Do not cancel Start's socket or lose a late task ID. It has a bounded response timeout.
+        if (current.authBusy || recovery.cancelAttempted || authOrigin != owner || signInId.isEmpty()) return
+        auth(PluginAuthStep.Cancel(signInId)) { _, _ -> }
+    }
+
+    private suspend fun cancelAndRead(operation: PluginSessionOperation, id: String) {
+        val recovery = mutable.value.loginRecovery ?: return
+        if (!recovery.cancelAttempted) {
+            setLoginRecovery(recovery.copy(cancelRequested = true, cancelAttempted = true,
+                stage = PluginLoginRecovery.Stage.CANCEL_UNKNOWN))
+            try {
+                operation.auth(PluginAuthStep.Cancel(id))
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { /* POST may have run. Only its following GET may confirm state. */ }
+        }
+        operation.ensureCurrent()
+        val result = operation.auth(PluginAuthStep.Read(id)).state ?: throw PluginReadException()
+        operation.ensureCurrent()
+        acceptSignIn(result)
+    }
+
+    /** Explicitly abandon local observation, never a remote cancellation or a repeated Start. */
+    fun endLoginTracking() {
+        if (PluginAuthWorkTracker.active.value != 0 || mutable.value.authBusy || mutable.value.loginRecovery == null) return
+        clearLogin()
+        mutable.update { it.copy(notice = "已结束本地跟踪；这不撤销原核心登录，旧任务仍可能继续。", error = "") }
+    }
+
+    fun hideLogin() {
+        if (mutable.value.loginRecovery != null) mutable.update { it.copy(authProvider = null, prompt = null) }
     }
 
     fun openLoginBrowser(open: (String) -> Unit) {
+        if (mutable.value.loginRecovery?.cancelRequested == true || authOrigin != owner) return
         if (!validPluginBrowserUrl(signInUrl)) { mutable.update { it.copy(error = "插件没有提供可打开的登录地址") }; return }
         try { open(signInUrl) } catch (_: Exception) { mutable.update { it.copy(error = "未能打开浏览器，请确认浏览器可用后重试") } }
     }
 
-    private fun auth(step: PluginAuthStep, receive: (PluginAuthReply) -> Unit) {
+    private fun auth(
+        step: PluginAuthStep,
+        beforeLaunch: (ProviderSessionKey) -> Unit = {},
+        receive: suspend (PluginSessionOperation, PluginAuthReply) -> Unit,
+    ) {
         val session = owner ?: return
         if (mutable.value.authBusy || mutable.value.busy || mutable.value.pending) return
+        val operation = captureOperation(session) ?: return
         val revision = authGeneration
         val request = ++authRequest
+        beforeLaunch(session)
         mutable.update { it.copy(authBusy = true, error = "") }
-        viewModelScope.launch {
+        val finished = PluginAuthWorkTracker.register()
+        launchOperation(operation, onReleased = finished, onFinished = {
+            if (owner == session && revision == authGeneration && request == authRequest) {
+                mutable.update { it.copy(authBusy = false) }
+                mutable.value.loginRecovery?.takeIf { it.stage == PluginLoginRecovery.Stage.STARTING }?.let {
+                    setLoginRecovery(it.copy(stage = PluginLoginRecovery.Stage.START_UNKNOWN))
+                }
+            }
+        }) {
             try {
-                val result = performAuth(step)
-                if (owner == session && revision == authGeneration) {
-                    mutable.update { it.copy(authBusy = false) }
-                    receive(result)
+                if (step is PluginAuthStep.Cancel) {
+                    cancelAndRead(operation, step.id)
+                } else {
+                    val result = operation.auth(step)
+                    operation.ensureCurrent()
+                    if (owner != session || revision != authGeneration || request != authRequest) return@launchOperation
+                    receive(operation, result)
+                    operation.ensureCurrent()
+                    val recovery = mutable.value.loginRecovery
+                    if (recovery?.cancelRequested == true && !recovery.cancelAttempted && signInId.isNotEmpty()) {
+                        cancelAndRead(operation, signInId)
+                    }
                 }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { if (revision == authGeneration) mutable.update { it.copy(error = safeError(e)) } }
-            finally { if (revision == authGeneration && request == authRequest) mutable.update { it.copy(authBusy = false) } }
+            catch (e: Exception) {
+                if (owner == session && revision == authGeneration && request == authRequest) {
+                    mutable.value.loginRecovery?.let { recovery ->
+                        val stage = when (step) {
+                            is PluginAuthStep.Start -> if (recovery.cancelAttempted) PluginLoginRecovery.Stage.CANCEL_UNKNOWN
+                                else PluginLoginRecovery.Stage.START_UNKNOWN
+                            is PluginAuthStep.Cancel -> PluginLoginRecovery.Stage.CANCEL_UNKNOWN
+                            is PluginAuthStep.Callback -> PluginLoginRecovery.Stage.CALLBACK_UNKNOWN
+                            else -> recovery.stage
+                        }
+                        setLoginRecovery(recovery.copy(stage = stage))
+                    }
+                    mutable.update { it.copy(error = if (it.loginRecovery != null) "登录结果待核对；不会自动重复提交。" else safeError(e)) }
+                }
+            }
         }
     }
 
-    private fun clearLogin() {
+    private fun clearLogin(keepRecovery: Boolean = false) {
         poll?.cancel()
         poll = null
+        pollingStarted = false
         authGeneration++
         answers = emptyMap()
         signInUrl = ""
         signInId = ""
+        authOrigin = null
+        if (!keepRecovery) setLoginRecovery(null)
         mutable.update { it.copy(authProvider = null, prompt = null, signIn = null, authBusy = false) }
     }
 

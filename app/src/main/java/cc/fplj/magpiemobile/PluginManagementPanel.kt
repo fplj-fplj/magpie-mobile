@@ -53,9 +53,10 @@ internal fun PluginManagementPanel(
     var selectedSpec by remember { mutableStateOf<String?>(null) }
     var removingSpec by remember { mutableStateOf<String?>(null) }
     var importing by remember { mutableStateOf(false) }
-    val canWrite = enabled && !state.loading && !state.busy && !state.pending && !state.authBusy && !importing
+    val canWrite = enabled && !state.loading && !state.busy && !state.pending && !state.authBusy && state.loginRecovery == null && !importing
     fun importSelection(uri: Uri?, tree: Boolean) {
         if (uri == null || !canWrite) return
+        val session = viewModel.currentSession() ?: return
         importing = true
         scope.launch {
             var staged: String? = null
@@ -64,7 +65,7 @@ internal fun PluginManagementPanel(
                 val spec = withContext(Dispatchers.IO) { importer.importPlugin(uri, tree).also { staged = it } }
                 withContext(Dispatchers.IO) { importer.markSubmitted(spec) }
                 installOpen = false
-                submitted = viewModel.edit(PluginEdit.Add(spec))
+                submitted = viewModel.edit(PluginEdit.Add(spec), expectedSession = session)
                 if (!submitted) {
                     viewModel.notice("核心连接已变化，请重新连接后导入")
                 }
@@ -104,6 +105,7 @@ internal fun PluginManagementPanel(
             Text("连接已中断，核心任务可能仍在执行。重新读取可核对结果；不会重复提交安装。", style = MaterialTheme.typography.bodySmall)
             TextButton(enabled = enabled && !state.busy, onClick = viewModel::refresh) { Text("核对结果") }
         }
+        if (state.loginRecovery != null && state.authProvider == null) PluginLoginRecoveryCard(viewModel, state, enabled)
         if (state.error.isNotBlank()) Text(state.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         if (state.notice.isNotBlank()) Text(state.notice, style = MaterialTheme.typography.bodySmall)
         TabRow(selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.background) {
@@ -213,6 +215,30 @@ private fun PluginTag(label: String) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.small) {
         Text(label, Modifier.padding(horizontal = UiSpacing.small, vertical = UiSpacing.tiny), style = MaterialTheme.typography.labelSmall)
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+private fun PluginLoginRecoveryCard(viewModel: PluginManagementViewModel, state: OfficialPluginsState, enabled: Boolean) {
+    val recovery = state.loginRecovery ?: return
+    var confirmingEnd by remember { mutableStateOf(false) }
+    val canEnd = state.authWorkers == 0 && !state.authBusy
+    ContentCard {
+        Text("登录结果待核对", style = MaterialTheme.typography.titleMedium)
+        Text(recovery.notice, style = MaterialTheme.typography.bodySmall)
+        if (!canEnd) Text("正在等待本地请求退出，暂时不能结束跟踪。", style = MaterialTheme.typography.bodySmall)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(UiSpacing.small)) {
+            TextButton(enabled = enabled && !state.authBusy && !state.loading, onClick = viewModel::refreshLogin) { Text("只读核对") }
+            TextButton(enabled = canEnd, onClick = { confirmingEnd = true },
+                modifier = Modifier.testTag("plugin-login-end-tracking").semantics { testTagsAsResourceId = true }) { Text("结束本地跟踪") }
+        }
+    }
+    if (confirmingEnd) AlertDialog(onDismissRequest = { confirmingEnd = false },
+        title = { Text("结束本地跟踪？") },
+        text = { Text("这只会清除本机的跟踪记录，不撤销原核心的登录任务，也不能证明任务已经取消。旧任务仍可能继续；之后不会自动重新发起登录。") },
+        confirmButton = { TextButton(enabled = canEnd, onClick = { viewModel.endLoginTracking(); confirmingEnd = false },
+            modifier = Modifier.testTag("plugin-login-confirm-end-tracking").semantics { testTagsAsResourceId = true }) { Text("结束跟踪") } },
+        dismissButton = { TextButton(onClick = { confirmingEnd = false }) { Text("继续核对") } })
 }
 
 @OptIn(ExperimentalLayoutApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
@@ -337,39 +363,48 @@ private fun PluginLoginDialog(viewModel: PluginManagementViewModel, state: Offic
     var answer by remember(provider.pid, state.authMethod, state.prompt?.key) { mutableStateOf("") }
     var apiKey by remember(provider.pid, state.authMethod) { mutableStateOf("") }
     var callback by remember(state.signIn?.id) { mutableStateOf("") }
-    FullScreenDialog(onDismissRequest = viewModel::cancelLogin) {
+    val cancelRequested = state.loginRecovery?.cancelRequested == true
+    val canSubmit = !state.authBusy && state.loginRecovery == null
+    val canCallback = !state.authBusy && !cancelRequested && state.loginRecovery?.stage == PluginLoginRecovery.Stage.WAITING
+    FullScreenDialog(onDismissRequest = { viewModel.cancelLogin(); viewModel.hideLogin() }) {
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(UiSpacing.card), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("连接 ${provider.name}", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
-                    TextButton(enabled = !state.authBusy || state.signIn == null, onClick = viewModel::cancelLogin) {
-                        Text(if (state.signIn?.state in setOf("done", "failed", "canceled", "cancelled")) "返回插件" else "取消登录")
+                    TextButton(onClick = { if (cancelRequested) viewModel.hideLogin() else viewModel.cancelLogin() }) {
+                        Text(when {
+                            state.signIn?.state in setOf("done", "failed", "canceled", "cancelled") -> "返回插件"
+                            cancelRequested -> "后台等待"
+                            else -> "取消登录"
+                        })
                     }
                 }
                 Text(method.labels["zh"] ?: method.labels["zh-CN"] ?: method.label, style = MaterialTheme.typography.bodySmall)
                 if (state.authBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
                     if (state.error.isNotBlank()) Text(state.error, color = MaterialTheme.colorScheme.error)
+                    if (state.notice.isNotBlank()) Text(state.notice, style = MaterialTheme.typography.bodySmall)
+                    if (state.loginRecovery != null) PluginLoginRecoveryCard(viewModel, state, true)
                     val prompt = state.prompt
                     val signIn = state.signIn
                     if (prompt != null) {
                         Text(prompt.messages["zh"] ?: prompt.messages["zh-CN"] ?: prompt.message)
                         if (prompt.type == "select") prompt.options.forEach { option ->
-                            OutlinedButton(enabled = !state.authBusy, onClick = { viewModel.prompt(option.value) }, modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(enabled = canSubmit, onClick = { viewModel.prompt(option.value) }, modifier = Modifier.fillMaxWidth()) {
                                 Text(option.labels["zh"] ?: option.labels["zh-CN"] ?: option.label.ifBlank { option.value })
                             }
                         } else {
                             val sensitive = Regex("(?i)key|token|password|secret|credential").containsMatchIn(prompt.key)
-                            OutlinedTextField(answer, { answer = it }, label = { Text(prompt.placeholder.ifBlank { "填写此项" }) }, enabled = !state.authBusy,
+                            OutlinedTextField(answer, { answer = it }, label = { Text(prompt.placeholder.ifBlank { "填写此项" }) }, enabled = canSubmit,
                                 visualTransformation = if (sensitive) PasswordVisualTransformation() else VisualTransformation.None,
                                 modifier = Modifier.fillMaxWidth())
-                            Button(enabled = !state.authBusy, onClick = { viewModel.prompt(answer); answer = "" }) { Text("下一步") }
+                            Button(enabled = canSubmit, onClick = { viewModel.prompt(answer); answer = "" }) { Text("下一步") }
                         }
                     } else if (signIn == null) {
                         if (method.type == "api" && !method.keyless) OutlinedTextField(apiKey, { apiKey = it }, label = { Text(method.placeholder.ifBlank { "API 密钥" }) },
                             singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            enabled = !state.authBusy, modifier = Modifier.fillMaxWidth().testTag("plugin-login-key").semantics { testTagsAsResourceId = true })
-                        Button(enabled = !state.authBusy && (method.type != "api" || method.keyless || apiKey.isNotBlank()), onClick = { viewModel.startLogin(apiKey); apiKey = "" }) {
+                            enabled = canSubmit, modifier = Modifier.fillMaxWidth().testTag("plugin-login-key").semantics { testTagsAsResourceId = true })
+                        Button(enabled = canSubmit && (method.type != "api" || method.keyless || apiKey.isNotBlank()), onClick = { viewModel.startLogin(apiKey); apiKey = "" }) {
                             Text(if (method.type == "api") "保存并连接" else "开始登录")
                         }
                     } else {
@@ -384,11 +419,12 @@ private fun PluginLoginDialog(viewModel: PluginManagementViewModel, state: Offic
                         if (signIn.instructions.isNotBlank()) Text(SecretRedactor.redact(signIn.instructions), style = MaterialTheme.typography.bodyMedium)
                         if (signIn.code.isNotBlank()) Text(signIn.code, style = MaterialTheme.typography.headlineMedium)
                         if (!finished) {
-                            Button(enabled = !state.authBusy, onClick = { viewModel.openLoginBrowser(browser) }) { Text("打开登录浏览器") }
+                            Button(enabled = !state.authBusy && !cancelRequested, onClick = { viewModel.openLoginBrowser(browser) }) { Text("打开登录浏览器") }
                             if (signIn.pasteCallback || signIn.pasteCode || signIn.pasteKey) {
                                 OutlinedTextField(callback, { callback = it }, label = { Text(if (signIn.pasteCode) "授权码" else "完整回调地址 / 回执") },
+                                    enabled = canCallback,
                                     visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                                Button(enabled = !state.authBusy && callback.isNotBlank(), onClick = { viewModel.submitCallback(callback); callback = "" }) { Text("提交回执") }
+                                Button(enabled = canCallback && callback.isNotBlank(), onClick = { viewModel.submitCallback(callback); callback = "" }) { Text("提交回执") }
                             }
                             TextButton(enabled = !state.authBusy, onClick = viewModel::refreshLogin) { Text("重新读取登录状态") }
                         }

@@ -35,6 +35,7 @@ object NativeCoreSession {
     private val providerSessions = ProviderSessionEpochs<Binding, GatewayConfig>()
     private val requests = GatewayRequestLeases()
     private val providerRequests = ProviderRequestLeases()
+    private val pluginRequests = PluginRequestLeases()
     private val mutableStatus = MutableStateFlow(Snapshot(Phase.DISCONNECTED, "网关未连接"))
     val status = mutableStatus.asStateFlow()
     // All key provisioning is serial, including cancelled/old Service runs.
@@ -49,6 +50,7 @@ object NativeCoreSession {
         onConnecting = { current ->
             requests.invalidate()
             providerRequests.invalidate()
+            pluginRequests.invalidate()
             providerSessions.begin(current.owner, current)
             current.config = null
             current.providers = null
@@ -77,6 +79,7 @@ object NativeCoreSession {
     fun attach(owner: Long, adminKey: String) = synchronized(lock) {
         requests.invalidate()
         providerRequests.invalidate()
+        pluginRequests.invalidate()
         providerSessions.invalidate()
         val current = Binding(owner, ManagerCredential.fromKey(adminKey))
         binding = current
@@ -98,6 +101,7 @@ object NativeCoreSession {
         connections.suspend(current)
         requests.invalidate()
         providerRequests.invalidate()
+        pluginRequests.invalidate()
         providerSessions.invalidate()
         current.config = null
         current.providers = null
@@ -112,6 +116,7 @@ object NativeCoreSession {
         connections.disconnect(current)
         requests.invalidate()
         providerRequests.invalidate()
+        pluginRequests.invalidate()
         providerSessions.invalidate()
         binding = null
         mutableStatus.value = Snapshot(Phase.DISCONNECTED, "网关已断开，管理凭据已从会话释放")
@@ -152,6 +157,19 @@ object NativeCoreSession {
         val config = current?.config
         val captured = providerSessions.capture(key, current, config, current != null && isRunningOwner(current))
         providerRequests.acquire(captured.binding.credential) {
+            synchronized(lock) {
+                val active = binding
+                providerSessions.isCurrent(captured, active, active?.config, active != null && isRunningOwner(active))
+            }
+        }
+    }
+
+    /** Plugin operations capture this verified connection before any work can be queued. */
+    internal fun pluginRequest(key: ProviderSessionKey): PluginRequestLease = synchronized(lock) {
+        val current = binding
+        val config = current?.config
+        val captured = providerSessions.capture(key, current, config, current != null && isRunningOwner(current))
+        pluginRequests.acquire(captured.binding.credential) {
             synchronized(lock) {
                 val active = binding
                 providerSessions.isCurrent(captured, active, active?.config, active != null && isRunningOwner(active))
