@@ -19,89 +19,87 @@ object NativeCoreSession {
         val ready: Boolean get() = phase == Phase.READY
     }
     private data class Binding(val owner: Long, val credential: ManagerCredential) {
-        var connecting = false
         var config: GatewayConfig? = null
         var providers: cc.fplj.magpiemobile.core.ProviderManagementClient? = null
         var plugins: cc.fplj.magpiemobile.core.PluginManagementClient? = null
         var webEditor: Boolean = false
     }
+    private data class ConnectedCore(val config: GatewayConfig, val webEditor: Boolean)
     private val lock = Any()
     private var binding: Binding? = null
     private val requests = GatewayRequestLeases()
+    private val providerRequests = ProviderRequestLeases()
     private val mutableStatus = MutableStateFlow(Snapshot(Phase.DISCONNECTED, "网关未连接"))
     val status = mutableStatus.asStateFlow()
     // All key provisioning is serial, including cancelled/old Service runs.
     private val worker = Executors.newSingleThreadExecutor { task ->
         Thread(task, "MagpieCoreConnect").apply { isDaemon = true }
     }
+    private val connections = SessionConnectionCoordinator<Binding, File, ConnectedCore>(
+        lock = lock,
+        executor = worker,
+        isRunning = ::isRunningOwner,
+        authenticate = ::authenticate,
+        onConnecting = { current ->
+            requests.invalidate()
+            providerRequests.invalidate()
+            current.config = null
+            current.providers = null
+            current.plugins = null
+            current.webEditor = false
+            mutableStatus.value = Snapshot(Phase.CONNECTING, "正在鉴权管理会话并注册/核对本机客户端密钥…")
+        },
+        onReady = { current, result ->
+            current.config = result.config
+            current.webEditor = result.webEditor
+            mutableStatus.value = Snapshot(Phase.READY, "核心连接已就绪；本机客户端密钥已登记", result.webEditor)
+        },
+        onError = { current, error ->
+            current.config = null
+            mutableStatus.value = Snapshot(Phase.ERROR, connectionFailureMessage(error))
+        },
+        onCancelled = { current ->
+            current.config = null
+            mutableStatus.value = Snapshot(Phase.DISCONNECTED, "核心连接已取消，等待网关重新就绪")
+        },
+    )
 
     fun attach(owner: Long, adminKey: String) = synchronized(lock) {
         requests.invalidate()
-        binding = Binding(owner, ManagerCredential.fromKey(adminKey))
+        providerRequests.invalidate()
+        val current = Binding(owner, ManagerCredential.fromKey(adminKey))
+        binding = current
+        connections.attach(current)
         mutableStatus.value = Snapshot(Phase.DISCONNECTED, "等待网关端口就绪，随后验证核心安全能力")
     }
 
     fun connect(owner: Long, filesDir: File) {
-        val current = synchronized(lock) {
+        synchronized(lock) {
             val current = binding ?: return
-            if (current.owner != owner || current.connecting) return
-            requests.invalidate()
-            current.connecting = true
-            current.config = null
-            mutableStatus.value = Snapshot(Phase.CONNECTING, "正在鉴权管理会话并注册/核对本机客户端密钥…")
-            current
-        }
-        worker.execute {
-            try {
-                if (!isRunningOwner(current)) return@execute
-                val client = CoreManagementClient(current.credential)
-                val capabilities = client.capabilities()
-                check(capabilities.coreVersion == BuildConfig.CORE_VERSION) { "Core version differs from bundled version" }
-                val store = GatewayCredentialStore(File(filesDir.canonicalFile, "app-gateway-credential.json")) // Android user-0 system path may be an alias
-                val key = GatewayKeyProvisioner(client, store).provision()
-                val config = GatewayConfig(gatewayKey = key.secret)
-                val hello = cc.fplj.magpiemobile.core.GatewayHelloClient(config).hello()
-                check(hello.version == capabilities.coreVersion) { "Gateway and management core versions differ" }
-                synchronized(lock) {
-                    if (binding === current && isRunningOwner(current)) {
-                        current.config = config
-                        current.webEditor = capabilities.webEditor && capabilities.fullAdmin
-                        mutableStatus.value = Snapshot(Phase.READY, "核心连接已就绪；本机客户端密钥已登记", current.webEditor)
-                    }
-                }
-            } catch (e: Exception) {
-                synchronized(lock) {
-                    if (binding === current && isRunningOwner(current)) {
-                        // Do not expose arbitrary upstream errors which may carry a credential.
-                        current.config = null
-                        val reason = when (e) {
-                            is cc.fplj.magpiemobile.core.ManagementHttpException -> "管理请求失败：HTTP " + e.httpCode
-                            is cc.fplj.magpiemobile.core.ManagementCapabilitiesMismatch -> "核心宿主能力不兼容，已拒绝注册密钥"
-                            is cc.fplj.magpiemobile.core.ManagementExecutionUnknown -> "密钥操作结果未知；下次连接会先重读核心列表，不自动重复写入"
-                            is cc.fplj.magpiemobile.core.GatewayKeyProvisioningException -> "密钥已撤销/受限/过期或身份不唯一，不会自动创建替代密钥"
-                            is cc.fplj.magpiemobile.core.GatewayCredentialStoreException -> "私有凭据文件异常，未覆盖原文件；请保留数据再排查"
-                            else -> "核心安全连接失败（" + e.javaClass.simpleName + "）"
-                        }
-                        mutableStatus.value = Snapshot(Phase.ERROR, reason)
-                    }
-                }
-            } finally {
-                synchronized(lock) { if (binding === current) current.connecting = false }
-            }
+            if (current.owner != owner) return
+            connections.connect(current, filesDir)
         }
     }
 
     fun suspend(owner: Long) = synchronized(lock) {
         val current = binding ?: return
         if (current.owner != owner) return
+        connections.suspend(current)
         requests.invalidate()
+        providerRequests.invalidate()
         current.config = null
+        current.providers = null
+        current.plugins = null
+        current.webEditor = false
         mutableStatus.value = Snapshot(Phase.DISCONNECTED, "网关暂未就绪，暂停客户端请求")
     }
 
     fun disconnect(owner: Long) = synchronized(lock) {
-        if (binding?.owner != owner) return
+        val current = binding ?: return
+        if (current.owner != owner) return
+        connections.disconnect(current)
         requests.invalidate()
+        providerRequests.invalidate()
         binding = null
         mutableStatus.value = Snapshot(Phase.DISCONNECTED, "网关已断开，管理凭据已从会话释放")
     }
@@ -124,6 +122,20 @@ object NativeCoreSession {
             throw CancellationException("Gateway session is no longer current")
         }
         requests.acquire(config) {
+            synchronized(lock) {
+                binding === current && current.config === config && isRunningOwner(current)
+            }
+        }
+    }
+
+    /** Management credential and current config identity are registered before leaving the lock. */
+    internal fun providerRequest(owner: Long): ProviderRequestLease = synchronized(lock) {
+        val current = binding
+        val config = current?.config
+        if (current == null || current.owner != owner || config == null || !isRunningOwner(current)) {
+            throw CancellationException("Provider session is no longer current")
+        }
+        providerRequests.acquire(current.credential) {
             synchronized(lock) {
                 binding === current && current.config === config && isRunningOwner(current)
             }
@@ -166,8 +178,37 @@ object NativeCoreSession {
     }
 
     fun retry(filesDir: File) {
-        val owner = synchronized(lock) { binding?.owner } ?: return
-        connect(owner, filesDir)
+        synchronized(lock) {
+            val current = binding ?: return
+            connections.connect(current, filesDir, retry = true)
+        }
+    }
+
+    private fun authenticate(current: Binding, filesDir: File, ensureCurrent: () -> Unit): ConnectedCore {
+        ensureCurrent()
+        val client = CoreManagementClient(current.credential)
+        val capabilities = client.capabilities()
+        ensureCurrent()
+        check(capabilities.coreVersion == BuildConfig.CORE_VERSION) { "Core version differs from bundled version" }
+        val store = GatewayCredentialStore(File(filesDir.canonicalFile, "app-gateway-credential.json")) // Android user-0 system path may be an alias
+        ensureCurrent()
+        val key = GatewayKeyProvisioner(client, store).provision()
+        ensureCurrent()
+        val config = GatewayConfig(gatewayKey = key.secret)
+        val hello = cc.fplj.magpiemobile.core.GatewayHelloClient(config).hello()
+        ensureCurrent()
+        check(hello.version == capabilities.coreVersion) { "Gateway and management core versions differ" }
+        return ConnectedCore(config, capabilities.webEditor && capabilities.fullAdmin)
+    }
+
+    private fun connectionFailureMessage(error: Exception): String = when (error) {
+        // Do not expose arbitrary upstream errors which may carry a credential.
+        is cc.fplj.magpiemobile.core.ManagementHttpException -> "管理请求失败：HTTP " + error.httpCode
+        is cc.fplj.magpiemobile.core.ManagementCapabilitiesMismatch -> "核心宿主能力不兼容，已拒绝注册密钥"
+        is cc.fplj.magpiemobile.core.ManagementExecutionUnknown -> "密钥操作结果未知；下次连接会先重读核心列表，不自动重复写入"
+        is cc.fplj.magpiemobile.core.GatewayKeyProvisioningException -> "密钥已撤销/受限/过期或身份不唯一，不会自动创建替代密钥"
+        is cc.fplj.magpiemobile.core.GatewayCredentialStoreException -> "私有凭据文件异常，未覆盖原文件；请保留数据再排查"
+        else -> "核心安全连接失败（" + error.javaClass.simpleName + "）"
     }
 
     private fun isRunningOwner(current: Binding): Boolean = !GatewayRuntime.stopping.value && GatewayRuntime.isCurrent(current.owner) &&

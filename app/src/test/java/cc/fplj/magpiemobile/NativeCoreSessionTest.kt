@@ -18,6 +18,7 @@ class NativeCoreSessionTest {
             assertThrows(IllegalStateException::class.java) { NativeCoreSession.providerClient() }
             assertThrows(IllegalStateException::class.java) { NativeCoreSession.gatewayConfig() }
             assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(owner) }
+            assertThrows(CancellationException::class.java) { NativeCoreSession.providerRequest(owner) }
         } finally { NativeCoreSession.disconnect(owner) }
     }
     @Test fun lateOldServiceDisconnectDoesNotDestroyNewBinding() {
@@ -28,9 +29,11 @@ class NativeCoreSessionTest {
         val before = NativeCoreSession.status.value
         NativeCoreSession.disconnect(old)
         assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(old) }
+        assertThrows(CancellationException::class.java) { NativeCoreSession.providerRequest(old) }
         assertEquals(before, NativeCoreSession.status.value)
         NativeCoreSession.disconnect(current)
         assertEquals(NativeCoreSession.Phase.DISCONNECTED, NativeCoreSession.status.value.phase)
         assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(current) }
+        assertThrows(CancellationException::class.java) { NativeCoreSession.providerRequest(current) }
     }
 }

@@ -650,8 +650,11 @@ class OfficialPluginsInstrumentedTest {
                     }
                     val stoppedOwner = requireNotNull(NativeCoreSession.providerSessionId())
                     val stoppedLease = NativeCoreSession.gatewayRequest(stoppedOwner)
+                    val stoppedProviderLease = NativeCoreSession.providerRequest(stoppedOwner)
                     try {
                         stoppedLease.ensureCurrent()
+                        stoppedProviderLease.ensureCurrent()
+                        assertFalse(stoppedProviderLease.client.getProviders().hasFileError)
                         device.findObject(power).click()
                         await("gateway switched off", 30_000) {
                             !GatewayRuntime.stopping.value && GatewayRuntime.status.value.phase == GatewayEngineController.Phase.STOPPED &&
@@ -660,8 +663,15 @@ class OfficialPluginsInstrumentedTest {
                         assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedLease.control.ensureActive() }
                         assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedLease.ensureCurrent() }
                         assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.gatewayRequest(stoppedOwner) }
+                        assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedProviderLease.control.ensureActive() }
+                        assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedProviderLease.client.getProviders() }
+                        assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.providerRequest(stoppedOwner) }
                         File(artifacts, "capability-session-cancellation.txt").writeText("PASS: actual core shutdown cancelled registered requests and rejected the stale owner\n")
-                    } finally { stoppedLease.close() }
+                        File(artifacts, "provider-session-cancellation.txt").writeText("PASS: authenticated provider GET before stop; actual shutdown cancelled management lease and rejected its client and stale owner\n")
+                    } finally {
+                        stoppedLease.close()
+                        stoppedProviderLease.close()
+                    }
                     assertTrue(device.takeScreenshot(File(artifacts, "gateway-off-after-toggle.png")))
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
                 } finally {

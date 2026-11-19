@@ -26,10 +26,8 @@ import cc.fplj.magpiemobile.core.*
 import cc.fplj.magpiemobile.theme.UiSpacing
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private fun providerKeyFingerprint(value: String): String =
     MessageDigest.getInstance("SHA-256")
@@ -49,6 +47,7 @@ fun ProvidersPanel(
     cacheViewModel: ProviderListCacheViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
 ) {
     val scope = rememberCoroutineScope()
+    val providerOperations = remember(scope) { ProviderOperationController(scope) }
     val focus = LocalFocusManager.current
     val latestEnabled by rememberUpdatedState(enabled)
     var providers by remember { mutableStateOf<ProviderListSnapshot?>(null) }
@@ -117,9 +116,11 @@ fun ProvidersPanel(
         listHealthy = false; setBusy(true)
         scope.launch {
             try {
-                val result = cacheViewModel.read(session, force = force) {
-                    NativeCoreSession.providerClient().getProviders()
+                val fetch: suspend () -> ProviderListSnapshot = {
+                    withProviderRequest(session) { it.getProviders() }
                 }
+                val result = if (recoveryRequired) cacheViewModel.readForRecovery(session, fetch)
+                else cacheViewModel.read(session, force = force, fetch = fetch)
                 if (current(session, sequence)) {
                     providers = result; listHealthy = !result.hasFileError
                     if (listHealthy) { recoveryRequired = false; pendingProviderId = ""; message = "" }
@@ -148,7 +149,11 @@ fun ProvidersPanel(
         open = true
     }
     LaunchedEffect(enabled, owner) {
-        if (!enabled) { key = ""; discoveryLoading = false; listHealthy = false; setBusy(false); message = "核心已断开，草稿名称、地址与选择已保留；重连后请补充密钥" }
+        // A new session must be allowed to load even while an invalidated old worker unwinds.
+        ++operationSequence
+        listHealthy = false
+        setBusy(false)
+        if (!enabled || owner == null) { key = ""; discoveryLoading = false; message = "核心已断开，草稿名称、地址与选择已保留；重连后请补充密钥" }
         else refresh(force = false)
     }
     LaunchedEffect(externalRevision) {
@@ -187,7 +192,7 @@ fun ProvidersPanel(
     LaunchedEffect(open, normalized, keyFingerprint, localHttp, owner, snapshot?.revision, retryCatalog) {
         val sequence = ++catalogSequence
         discoveryLoading = false; discoveryDone = false; discoveryError = ""
-        if (!open || !enabled || normalized.isEmpty() || newOriginNeedsKey) return@LaunchedEffect
+        if (!open || !enabled || owner == null || normalized.isEmpty() || newOriginNeedsKey) return@LaunchedEffect
         if (snapshot == null) {
             if (!nameTouched) name = ProviderBaseUrl.suggestName(baseUrl)
             if (!idTouched) {
@@ -200,7 +205,6 @@ fun ProvidersPanel(
         }
         discoveryLoading = true
         delay(1000) // settle URL/credential changes; old requests cannot apply to this generation
-        var request: ProviderModelDiscoveryRequest? = null
         try {
             val requestedCanonicalBaseUrl = runCatching { ProviderBaseUrl.normalize(baseUrl) }.getOrNull()
                 ?: return@LaunchedEffect
@@ -209,9 +213,14 @@ fun ProvidersPanel(
             val requestedLocalHttp = localHttp
             val requestedProviderId = snapshot?.id
             val requestedRevision = snapshot?.revision
-            val activeRequest = ProviderModelDiscoveryRequest(baseUrl, key, snapshot?.id, snapshot?.revision, localHttp)
-            request = activeRequest
-            val catalog = withContext(Dispatchers.IO) { NativeCoreSession.providerClient().discoverModels(activeRequest) }
+            val requestedBaseForm = baseUrl
+            val requestedKey = key
+            val catalog = withProviderRequest(owner) { client ->
+                val activeRequest = ProviderModelDiscoveryRequest(
+                    requestedBaseForm, requestedKey, requestedProviderId, requestedRevision, requestedLocalHttp,
+                )
+                try { client.discoverModels(activeRequest) } finally { activeRequest.clearSecret() }
+            }
             val requestStillCurrent = ProviderCatalogSyncPolicy.requestIsCurrent(
                 requestedSequence = sequence,
                 currentSequence = catalogSequence,
@@ -245,8 +254,10 @@ fun ProvidersPanel(
             }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
-            if (sequence == catalogSequence && latestEnabled) discoveryError = if (e is ProviderModelDiscoveryException) e.message ?: "无法读取模型目录" else "目录读取失败，请重试读取；没有修改配置。"
-        } finally { request?.clearSecret(); if (sequence == catalogSequence) discoveryLoading = false }
+            if (sequence == catalogSequence && latestEnabled && open &&
+                owner == NativeCoreSession.providerSessionId()
+            ) discoveryError = if (e is ProviderModelDiscoveryException) e.message ?: "无法读取模型目录" else "目录读取失败，请重试读取；没有修改配置。"
+        } finally { if (sequence == catalogSequence) discoveryLoading = false }
     }
     fun submit() {
         if (busy || operationBusy || recoveryRequired || !listHealthy || !enabled || owner == null) return
@@ -254,60 +265,93 @@ fun ProvidersPanel(
         val initial = snapshot; val inputKey = key; val inputName = name; val inputId = id
         val inputUrl = baseUrl; val inputModels = selected; val editedModels = policy.editedModels(); val allow = localHttp; val inputPin = serverPin
         setBusy(true)
-        scope.launch {
-            var create: ProviderCreateDraft? = null; var edit: ProviderEditDraft? = null
-            var submitted = false; var confirmed = false
-            try {
-                if (initial == null) create = ProviderCreateDraft(inputId, inputName, inputUrl, inputKey, inputModels, allow, inputPin)
-                else edit = ProviderEditDraft(initial, inputName, inputUrl, inputKey, editedModels, allow, inputPin)
-                // Validate locally before any network call. A typo does not erase the password field.
-                create?.validate(); edit?.validate()
-                if (!current(session, sequence)) return@launch
-                recoveryRequired = true; pendingProviderId = inputId; submitted = true; key = ""
-                withContext(Dispatchers.IO) {
-                    val client = NativeCoreSession.providerClient()
-                    val draft = create
-                    if (draft != null) client.create(draft) else client.edit(checkNotNull(edit))
-                }
-                confirmed = true
-                if (current(session, sequence)) {
-                    recoveryRequired = false; pendingProviderId = ""; close(); onProvidersChanged()
-                    message = "已保存；正在自动刷新目录，尚未验证真实推理"
-                    cacheViewModel.invalidate()
-                    val latest = cacheViewModel.read(session, force = true) {
-                        NativeCoreSession.providerClient().getProviders()
+        try {
+            providerOperations.launch(session, onFinished = {
+                if (sequence == operationSequence) setBusy(false)
+            }) {
+                var confirmed = false
+                try {
+                    // Validate locally before any network call. A typo does not erase the password field.
+                    // Mutable one-shot drafts only exist in a worker block and are always cleared.
+                    request {
+                        if (initial == null) {
+                            val draft = ProviderCreateDraft(inputId, inputName, inputUrl, inputKey, inputModels, allow, inputPin)
+                            try { draft.validate() } finally { draft.clearSecret() }
+                        } else {
+                            val draft = ProviderEditDraft(initial, inputName, inputUrl, inputKey, editedModels, allow, inputPin)
+                            try { draft.validate() } finally { draft.clearSecret() }
+                        }
                     }
-                    if (current(session, sequence)) { providers = latest; listHealthy = !latest.hasFileError; message = "配置已保存" }
+                    if (!current(session, sequence)) return@launch
+                    write(
+                        cache = cacheViewModel,
+                        owner = session,
+                        onPending = {
+                            recoveryRequired = true; pendingProviderId = inputId; key = ""
+                        },
+                    ) { client ->
+                        if (initial == null) {
+                            val draft = ProviderCreateDraft(inputId, inputName, inputUrl, inputKey, inputModels, allow, inputPin)
+                            try { client.create(draft) } finally { draft.clearSecret() }
+                        } else {
+                            val draft = ProviderEditDraft(initial, inputName, inputUrl, inputKey, editedModels, allow, inputPin)
+                            try { client.edit(draft) } finally { draft.clearSecret() }
+                        }
+                    }
+                    confirmed = true
+                    if (current(session, sequence)) {
+                        recoveryRequired = false; pendingProviderId = ""; close(); onProvidersChanged()
+                        message = "已保存；正在自动刷新目录，尚未验证真实推理"
+                        val latest = cacheViewModel.readForRecovery(session) {
+                            withProviderRequest(session) { it.getProviders() }
+                        }
+                        if (current(session, sequence)) { providers = latest; listHealthy = !latest.hasFileError; message = "配置已保存" }
+                    }
+                } catch (e: CancellationException) { throw e } // pending nonsecret marker survives cancellation/recreation
+                catch (e: Exception) {
+                    if (current(session, sequence)) {
+                        if (confirmed) { recoveryRequired = false; listHealthy = false; message = "保存已确认，但刷新失败；请重新读取，勿再保存。" }
+                        else { if (e !is ManagementExecutionUnknown) { recoveryRequired = false; pendingProviderId = "" }; message = errorText(e) }
+                    }
                 }
-            } catch (e: CancellationException) { throw e } // pending nonsecret marker survives cancellation/recreation
-            catch (e: Exception) {
-                if (current(session, sequence)) {
-                    if (confirmed) { recoveryRequired = false; listHealthy = false; message = "保存已确认，但刷新失败；请重新读取，勿再保存。" }
-                    else { if (e !is ManagementExecutionUnknown) { recoveryRequired = false; pendingProviderId = "" }; message = errorText(e) }
-                }
-            } finally { create?.clearSecret(); edit?.clearSecret(); if (submitted) key = ""; if (sequence == operationSequence) setBusy(false) }
+            }
+        } catch (_: CancellationException) {
+            setBusy(false)
+            message = "核心连接已变化，请重新读取提供商后再保存。"
+        } catch (e: Exception) {
+            setBusy(false)
+            message = errorText(e)
         }
     }
     fun openProvider(provider: ProviderSummary) {
         if (!provider.editable) { onExternalEditor?.invoke(); return }
-        val session = owner; val sequence = ++operationSequence; setBusy(true)
-        scope.launch {
-            try {
-                val edit = withContext(Dispatchers.IO) { NativeCoreSession.providerClient().editable(provider.id) }
-                if (current(session, sequence)) {
-                    val shownBase = runCatching { ProviderBaseUrl.storedBaseFormValue(edit.chatUrl) }.getOrDefault(edit.chatUrl)
-                    snapshot = edit; id = edit.id; name = edit.name; baseUrl = shownBase; key = ""; serverPin = edit.serverPin
-                    nameTouched = true; idTouched = true; localHttp = edit.chatUrl.startsWith("http://")
-                    manual = false; editorTab = 0; showKey = false
-                    policy = ProviderEditorPolicy(false, edit.modelIds, edit.noModels); selected = edit.modelIds
-                    modelOptions = provider.models; manualText = selected.joinToString("\n"); message = ""
-                    modelPickerOpen = false
-                    catalogBaseAdopted = false
-                    open = true
-                }
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { if (current(session, sequence)) message = errorText(e) }
-            finally { if (sequence == operationSequence) setBusy(false) }
+        val session = owner ?: return; val sequence = ++operationSequence; setBusy(true)
+        try {
+            providerOperations.launch(session, onFinished = {
+                if (sequence == operationSequence) setBusy(false)
+            }) {
+                try {
+                    val edit = request { it.editable(provider.id) }
+                    if (current(session, sequence)) {
+                        val shownBase = runCatching { ProviderBaseUrl.storedBaseFormValue(edit.chatUrl) }.getOrDefault(edit.chatUrl)
+                        snapshot = edit; id = edit.id; name = edit.name; baseUrl = shownBase; key = ""; serverPin = edit.serverPin
+                        nameTouched = true; idTouched = true; localHttp = edit.chatUrl.startsWith("http://")
+                        manual = false; editorTab = 0; showKey = false
+                        policy = ProviderEditorPolicy(false, edit.modelIds, edit.noModels); selected = edit.modelIds
+                        modelOptions = provider.models; manualText = selected.joinToString("\n"); message = ""
+                        modelPickerOpen = false
+                        catalogBaseAdopted = false
+                        open = true
+                    }
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { if (current(session, sequence)) message = errorText(e) }
+            }
+        } catch (_: CancellationException) {
+            setBusy(false)
+            message = "核心连接已变化，请重新读取提供商。"
+        } catch (e: Exception) {
+            setBusy(false)
+            message = errorText(e)
         }
     }
     Column(verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {

@@ -4,6 +4,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
+import java.time.Duration
 import javax.net.SocketFactory
 import okhttp3.Authenticator
 import okhttp3.MediaType
@@ -25,10 +26,12 @@ internal object ChatHttpTransport {
         .proxyAuthenticator(Authenticator.NONE)
         .build()
 
-    fun client(config: GatewayConfig): OkHttpClient = base.newBuilder()
-        .connectTimeout(config.connectTimeout)
-        .readTimeout(config.readTimeout)
-        .writeTimeout(config.readTimeout)
+    fun client(config: GatewayConfig): OkHttpClient = client(config.connectTimeout, config.readTimeout)
+
+    fun client(connectTimeout: Duration, readTimeout: Duration): OkHttpClient = base.newBuilder()
+        .connectTimeout(connectTimeout)
+        .readTimeout(readTimeout)
+        .writeTimeout(readTimeout)
         .build()
 
     fun jsonBody(json: String): RequestBody {

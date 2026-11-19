@@ -2,6 +2,7 @@ package cc.fplj.magpiemobile.core
 
 import java.time.Duration
 import java.util.Collections
+import java.util.concurrent.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -19,6 +20,8 @@ class ProviderManagementClient(
     baseUrl: String = "http://127.0.0.1:3430",
     timeout: Duration = Duration.ofSeconds(5),
     writeTimeout: Duration = Duration.ofSeconds(30),
+    private val requestControl: ChatRequestControl? = null,
+    private val ensureActive: () -> Unit = {},
 ) {
     private val endpoint = LoopbackEndpoint(baseUrl)
     private val transport: BoundedCoreHttp
@@ -29,8 +32,8 @@ class ProviderManagementClient(
     init {
         require(endpoint.port != 3425) { "管理 cookie 不得发送到网关" }
         require(endpoint.port == credential.port) { "管理 cookie 端口不匹配" }
-        transport = BoundedCoreHttp(endpoint, timeout, credential.cookieHeader())
-        writeTransport = BoundedCoreHttp(endpoint, writeTimeout, credential.cookieHeader())
+        transport = BoundedCoreHttp(endpoint, timeout, credential.cookieHeader(), requestControl, ensureActive)
+        writeTransport = BoundedCoreHttp(endpoint, writeTimeout, credential.cookieHeader(), requestControl, ensureActive)
     }
 
     fun list(): ProviderListSnapshot = getProviders()
@@ -90,9 +93,16 @@ class ProviderManagementClient(
         ensureProviderCapabilities()
         if (!modelDiscoverySupported) throw ProviderModelDiscoveryException(ProviderModelDiscoveryFailure.UNSUPPORTED)
         val reply = transport.request("POST", "/api/mobile/providers/models", body)
-        try { parseCatalog(reply, discovery, listOfNotNull(submittedKey)) } catch (_: Exception) {
+        try {
+            parseCatalog(reply, discovery, listOfNotNull(submittedKey)).also { checkCurrent() }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            checkCurrent()
             throw ProviderModelDiscoveryException(ProviderModelDiscoveryFailure.INVALID_RESPONSE)
         }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (error: ProviderModelDiscoveryException) {
         throw error
     } catch (error: ManagementHttpException) {
@@ -151,6 +161,7 @@ class ProviderManagementClient(
     /** One negotiation per owner-bound native session; older cores may list but cannot write. */
     @Synchronized
     private fun ensureProviderCapabilities() {
+        checkCurrent()
         if (providerCapabilitiesVerified) return
         val body = request("GET", "/api/mobile/capabilities")
         val row = readSafe { Json.parseToJsonElement(body).objectValue() }
@@ -262,8 +273,29 @@ class ProviderManagementClient(
         if (id != raw || redactor.credentialEcho(id)) throw ManagementProtocolException()
         return id
     }
-    private fun <T> readSafe(action: () -> T): T = try { action() } catch (_: Exception) { throw ManagementProtocolException() }
-    private fun <T> writeSafe(action: () -> T): T = try { action() } catch (_: Exception) { throw ManagementExecutionUnknown() }
+    private fun checkCurrent() {
+        requestControl?.ensureActive()
+        ensureActive()
+        requestControl?.ensureActive()
+    }
+    private fun <T> readSafe(action: () -> T): T = try {
+        checkCurrent()
+        action().also { checkCurrent() }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        checkCurrent()
+        throw ManagementProtocolException()
+    }
+    private fun <T> writeSafe(action: () -> T): T = try {
+        checkCurrent()
+        action().also { checkCurrent() }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        checkCurrent()
+        throw ManagementExecutionUnknown()
+    }
     companion object { internal const val MAX_REQUEST_BYTES = 512 * 1024 }
 }
 

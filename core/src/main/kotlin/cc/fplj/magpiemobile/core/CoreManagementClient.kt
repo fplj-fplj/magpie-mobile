@@ -7,10 +7,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import java.io.ByteArrayOutputStream
-import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.Proxy
 import java.net.URI
 import java.time.Duration
 import java.time.Instant
@@ -18,7 +14,7 @@ import java.time.Instant
 /** Authenticated GUI management API, pinned to upstream 54dc257f plus the mobile overlay.
  * The gateway (3425) alone has /api/hello; GUI (3430) has state/caller-keys/capabilities.
  * Native GET/POST intentionally have no Origin and use the direct, port-bound webGuard cookie.
- * No redirects or application retries. POST uses fixed-length streaming to disable JDK replay.
+ * No redirects or application retries. POST uses a fixed-length, one-shot body to prevent replay.
  */
 class CoreManagementClient(
     private val credential: ManagerCredential,
@@ -383,66 +379,4 @@ internal class LoopbackEndpoint(baseUrl: String) {
         port = candidatePort
         base = "http://$authority"
     }
-}
-
-/** Shared bounded transport; cookie is passed explicitly only by the management client. */
-internal class BoundedCoreHttp(
-    private val endpoint: LoopbackEndpoint,
-    timeout: Duration,
-    private val cookie: String? = null,
-) {
-    private val timeoutMillis: Int
-    init {
-        val millis: Long = try { timeout.toMillis() } catch (_: ArithmeticException) { -1L }
-        require(millis in 1..Int.MAX_VALUE.toLong()) { "核心请求超时无效" }
-        timeoutMillis = millis.toInt()
-    }
-
-    fun request(method: String, path: String, payload: ByteArray? = null): String {
-        var conn: HttpURLConnection? = null
-        try {
-            conn = URI(endpoint.base + path).toURL().openConnection(Proxy.NO_PROXY) as HttpURLConnection
-            conn.instanceFollowRedirects = false
-            conn.useCaches = false
-            conn.connectTimeout = timeoutMillis
-            conn.readTimeout = timeoutMillis
-            conn.requestMethod = method
-            conn.setRequestProperty("Accept", "application/json")
-            conn.setRequestProperty("Accept-Encoding", "identity")
-            if (cookie != null) conn.setRequestProperty("Cookie", cookie)
-            if (payload != null) {
-                conn.doOutput = true
-                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                conn.setFixedLengthStreamingMode(payload.size)
-                conn.outputStream.use { it.write(payload) }
-            }
-            val code = conn.responseCode
-            if (code < 100) throw ManagementExecutionUnknown()
-            // Never read free-form errorBody, follow Location, or replay a POST.
-            if (code !in 200..299) throw ManagementHttpException(code, safeModelErrorCode(conn.getHeaderField("X-Magpie-Mobile-Error-Code")))
-            if (conn.contentLengthLong > MAX_RESPONSE_BYTES) throw ManagementProtocolException()
-            val bytes = conn.inputStream.use { input ->
-                val out = ByteArrayOutputStream()
-                val buffer = ByteArray(8192)
-                while (true) {
-                    val read = input.read(buffer, 0, minOf(buffer.size, MAX_RESPONSE_BYTES + 1 - out.size()))
-                    if (read < 0) break
-                    out.write(buffer, 0, read)
-                    if (out.size() > MAX_RESPONSE_BYTES) throw ManagementProtocolException()
-                }
-                out.toByteArray()
-            }
-            return bytes.toString(Charsets.UTF_8)
-        } catch (_: IOException) {
-            // Native/JDK errors may quote addresses, headers or bodies: no original cause retained.
-            throw ManagementExecutionUnknown()
-        } catch (e: ManagementProtocolException) {
-            if (method == "POST") throw ManagementExecutionUnknown()
-            throw e
-        } finally {
-            conn?.disconnect()
-        }
-    }
-
-    companion object { const val MAX_RESPONSE_BYTES = 1024 * 1024 }
 }
