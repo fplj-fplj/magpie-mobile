@@ -366,11 +366,11 @@ class OfficialPluginsInstrumentedTest {
                         providerCatalogModel,
                         "saved provider directory model",
                     )
-                    assertTrue("saved provider model should start selected", providerModelOption.isSelected)
+                    assertTrue("saved provider model should start selected", providerModelOption.isChecked)
                     assertTrue(device.takeScreenshot(File(artifacts, "provider-model-picker.png")))
                     providerModelOption.click()
                     await("provider model deselected") {
-                        device.findObject(By.res("model-option:$providerCatalogModel"))?.isSelected == false
+                        device.findObject(By.res("model-option:$providerCatalogModel"))?.isChecked == false
                     }
                     val modelConfirm = By.res("model-selection-confirm")
                         .enabled(true)
@@ -388,10 +388,10 @@ class OfficialPluginsInstrumentedTest {
                         providerCatalogModel,
                         "saved provider directory model after apply",
                     )
-                    assertFalse("provider deselection should survive apply", providerModelOption.isSelected)
+                    assertFalse("provider deselection should survive apply", providerModelOption.isChecked)
                     providerModelOption.click()
                     await("provider model reselected") {
-                        device.findObject(By.res("model-option:$providerCatalogModel"))?.isSelected == true
+                        device.findObject(By.res("model-option:$providerCatalogModel"))?.isChecked == true
                     }
                     device.findObject(modelConfirm).click()
                     await("provider multi-select selection applied") {
