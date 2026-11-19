@@ -857,8 +857,11 @@ class OfficialPluginsInstrumentedTest {
                     GatewayRuntime.cleanupCompleted(owner)
                 }
             }
+            File(artifacts, "gateway-exit-diagnostics.txt").writeText(evidence.toString())
             // Audit is read on page entry; explicitly re-enter instead of claiming a live reread.
             openDiagnostics()
+            // The shared destination scroll state can restore the bottom of the earlier live tail.
+            revealDiagnosticText("版本与诊断", towardsTop = true)
             revealDiagnosticText("退出码=137")
             assertTrue(device.takeScreenshot(File(artifacts, "gateway-exit-diagnostics.png")))
             evidence.append("PASS: re-entered existing diagnostics page shows observed exitCode=137\n")
@@ -884,11 +887,13 @@ class OfficialPluginsInstrumentedTest {
         await("diagnostics child entered") { device.hasObject(By.desc("返回更多")) }
     }
 
-    private fun revealDiagnosticText(text: String) {
+    private fun revealDiagnosticText(text: String, towardsTop: Boolean = false) {
         await("visible diagnostic text: $text") {
             if (device.hasObject(By.textContains(text))) true else {
-                device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
-                    device.displayWidth / 2, device.displayHeight / 3, 20)
+                val upper = device.displayHeight / 3
+                val lower = device.displayHeight * 3 / 4
+                device.swipe(device.displayWidth / 2, if (towardsTop) upper else lower,
+                    device.displayWidth / 2, if (towardsTop) lower else upper, 20)
                 false
             }
         }
