@@ -11,6 +11,33 @@ package cc.fplj.magpiemobile.core
  */
 object SecretRedactor {
 
+    /**
+     * Public process diagnostics must never reveal a growing credential suffix.
+     * Call on complete lines (or the final EOF line), before truncating the safe tail.
+     * Unlike [redact], this uses a fixed, idempotent full mask even for short values.
+     * It recognises credential syntax, not arbitrary unlabelled secrets.
+     */
+    fun redactDiagnostic(input: String): String {
+        var out = diagnosticAuthorization.replace(input) { it.groupValues[1] + "***" }
+        out = diagnosticBearer.replace(out, "Bearer ***")
+        out = diagnosticAssignment.replace(out) { it.groupValues[1] + "***" }
+        out = diagnosticLegacyMask.replace(out, "***")
+        return diagnosticSk.replace(out, "***")
+    }
+
+    // Header values can contain spaces; masking only the word "Bearer"/"Basic"
+    // would leave the actual credential behind. Quoted JSON/config values are
+    // handled separately from an unquoted header ending at newline/comma.
+    private val diagnosticAuthorization = Regex(
+        """(?i)((?<![A-Za-z0-9_])["']?(?:authorization|proxy-authorization)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\\r\n])*+"?|'(?:\\.|[^'\\\r\n])*+'?|[^\r\n,;}]+)""",
+    )
+    private val diagnosticBearer = Regex("""(?i)\bBearer(?:\s+|:)[^\s"'&,;<>\]}]+""")
+    private val diagnosticAssignment = Regex(
+        """(?i)((?<![A-Za-z0-9_])["']?(?:password|passwd|token|access[_-]?token|refresh[_-]?token|api[_-]?key|gateway[_ -]?key|admin[_ -]?(?:web[_ -]?)?key|secret|k)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\\r\n])*+"?|'(?:\\.|[^'\\\r\n])*+'?|[^\s&,;"'<>\]}]*)""",
+    )
+    private val diagnosticSk = Regex("""(?i)(?<![A-Za-z0-9_])sk-[A-Za-z0-9_.~/-]*""")
+    private val diagnosticLegacyMask = Regex("""(?i)\b(?:gw|sk):\*\*[A-Za-z0-9_-]*""")
+
     fun redact(input: String): String {
         var out = input
         // 1) 网关 key：掩码为 gw+末4位（不含 "sk-m" 等前缀触发词，防二次匹配）

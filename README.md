@@ -2,10 +2,11 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
-## 当前源码版本：0.1.53-chat-session（聊天与模型目录连接隔离）
+## 当前源码版本：0.1.54-gateway-diagnostics（实时诊断与实际退出码）
 
+- **本轮修复**：网关运行期间以既有 worker 合并刷新安全日志，同 phase 的日志不再重复执行连接、启动指标或通知；停止清理保留最终日志与真实观察到的退出码。异常审计使用结构化 nullable 退出码，历史 `-1` 显示未知。完整行先固定全掩码再截断，过长行有界丢弃。云端运行验收待完成；通过前不发布 Release。详见 [0.1.54 修复与验收记录](docs/bugfixes-0.1.54.md)。
 - **上游核心**：v0.1.3781（commit `b52c7111`）；
-- **本轮修复**：聊天与模型目录在排队前绑定完整连接轮次，同一服务重连也撤销旧请求。模型选择及发送使用已验证目录的连接标识，点击时再核对有效性，覆盖重绘之前的旧按钮窗口；失败保留草稿，成功保存以 Room 的实际提交为准，不自动重发。新增 47 项 JVM 回归，总计 922 项，完整 Actions、真实 Android 核心重连、签名候选与正式发布均通过。详见 [0.1.53 修复与验收记录](docs/bugfixes-0.1.53.md)。
+- **聊天与模型目录**：聊天与模型目录在排队前绑定完整连接轮次，同一服务重连也撤销旧请求。模型选择及发送使用已验证目录的连接标识，点击时再核对有效性，覆盖重绘之前的旧按钮窗口；失败保留草稿，成功保存以 Room 的实际提交为准，不自动重发。新增 47 项 JVM 回归，总计 922 项，完整 Actions、真实 Android 核心重连、签名候选与正式发布均通过。详见 [0.1.53 修复与验收记录](docs/bugfixes-0.1.53.md)。
 - **插件登录与取消**：插件读取、编辑、市场及登录绑定完整连接轮次；Start 返回前的取消意图会保留，取得 ID 后只在原连接取消一次，并只读核对真实终态。未知结果保留恢复提示，重建后不接管旧任务，文件导入也校验复制前的连接。0.1.52 新增 47 项 JVM 回归，总计 875 项，完整 Actions、真实 Android 登录取消、签名候选与正式发布均通过。详见 [0.1.52 验收记录](docs/bugfixes-0.1.52.md)。
 - **提供商重连**：提供商页面按完整连接轮次刷新，同一服务重连也不复用旧缓存或旧请求；新轮次仍等待旧写入真正退出。未知保存核对成功后清除旧编辑／新建状态，提示从列表重新打开，普通刷新保留草稿。0.1.51 的 828 项 JVM 回归、完整 Actions、签名候选与正式发布均通过。详见 [0.1.51 验收记录](docs/bugfixes-0.1.51.md)。
 - **提供商保存与网关恢复**：提供商操作绑定发起会话并主动取消真实连接，未知保存使用写入屏障与新 GET 核对，BACKOFF 恢复保持最新请求和串行密钥核对。0.1.50 的 804 项 JVM 回归、完整 Actions、签名候选和正式发布均通过。详见 [0.1.50 验收记录](docs/bugfixes-0.1.50.md)。
@@ -27,6 +28,8 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/bugfixes-0.1.54.md](docs/bugfixes-0.1.54.md) | 运行中安全日志、停止后最终诊断与实际退出码 |
+| [docs/bugfixes-0.1.53.md](docs/bugfixes-0.1.53.md) | 聊天与模型目录完整连接轮次、实际取消与 Room 收尾 |
 | [docs/bugfixes-0.1.52.md](docs/bugfixes-0.1.52.md) | 插件完整会话、实际请求取消、延迟登录取消及恢复记录边界 |
 | [docs/bugfixes-0.1.51.md](docs/bugfixes-0.1.51.md) | 同服务重连的连接轮次、跨轮次写入屏障与保存核对后编辑状态 |
 | [docs/bugfixes-0.1.50.md](docs/bugfixes-0.1.50.md) | 提供商会话绑定、保存核对屏障、缓存代次与网关恢复修复及 Actions 验收 |
@@ -70,7 +73,7 @@
 
 `Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`，才会把同一轮验证产物发布为 Latest Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
-当前可用版本：[`0.1.52-plugin-session` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.52-plugin-session-d5eee979)，SHA-256 `07c66d75e43ae09cdba5155eaaaa690462c2e3734b2cd0038a3a39929a87783e`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44622931319)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44620941935)均通过；JVM 875 项、Go、真实官方／社区插件、race 与 Android API 35 模拟器运行结果均为 0 失败。本轮中间候选仅归档到 Actions，完整验证通过后才发布 Release；已核实 Latest、固定签名、正式 tag 与四项附件，完整证据与后续巡查范围见 [0.1.52 验收记录](docs/bugfixes-0.1.52.md)。
+当前已验证可用版本：[`0.1.53-chat-session` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.53-chat-session-19a3fdb1)，SHA-256 `f5aa95cc730b0f904972b7d9fbd6f281735be26c0f72d97e5536cd9cd6a90f6b`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44630304385)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44628144849)均通过；JVM 922 项、Go、真实官方／社区插件、race 与 Android API 35 模拟器运行结果均为 0 失败。0.1.54 仍等待云端完整验证，当前不作为可用版本发布。详见 [0.1.53 验收记录](docs/bugfixes-0.1.53.md)。
 
 官方插件完整通过基线仍可通过 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)追溯；对应历史 Release 条目已按清理策略移除，运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 

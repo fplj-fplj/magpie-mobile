@@ -26,6 +26,7 @@ import java.net.Socket
 class GatewayService : Service() {
     private var controller: GatewayEngineController? = null
     private var owner = 0L
+    private lateinit var reporter: GatewayServiceReporter
     @Volatile private var foregroundReady = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private val adminKey = ByteArray(32).also(java.security.SecureRandom()::nextBytes)
@@ -35,6 +36,34 @@ class GatewayService : Service() {
         super.onCreate()
         owner = GatewayRuntime.attach()
         NativeCoreSession.attach(owner, adminKey)
+        reporter = GatewayServiceReporter(owner, object : GatewayServiceEffects {
+            override fun ready() = cc.fplj.magpiemobile.core.StartupBenchmark.recordGatewayReady()
+            override fun connect() = NativeCoreSession.connect(owner, filesDir)
+            override fun suspend() = NativeCoreSession.suspend(owner)
+            override fun audit(status: GatewayEngineController.Status) {
+                try {
+                    cc.fplj.magpiemobile.core.PostMortemAuditor(java.io.File(filesDir, "config"))
+                        .recordAbnormalExit(status.phase.name, status.exitCode, status.message + "\n" + status.outputTail)
+                } catch (_: Exception) {}
+            }
+            override fun log(status: GatewayEngineController.Status) {
+                Log.i("MagpieGateway", status.phase.name + ": " + status.message)
+            }
+            override fun notify(status: GatewayEngineController.Status) {
+                if (foregroundReady) {
+                    try {
+                        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(status.message))
+                    } catch (_: SecurityException) {
+                        // Denied notifications do not hide state/error in the app.
+                    }
+                }
+            }
+            override fun stopSelf() {
+                mainHandler.post {
+                    if (GatewayRuntime.isCurrent(owner)) this@GatewayService.stopSelf()
+                }
+            }
+        })
         try {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "Magpie 网关", NotificationManager.IMPORTANCE_LOW),
@@ -51,7 +80,6 @@ class GatewayService : Service() {
                 GatewayEngineController.Phase.FAILED,
                 "前台服务启动失败：" + (e.message ?: e.javaClass.simpleName),
             ))
-            stopSelf()
         }
     }
 
@@ -67,8 +95,8 @@ class GatewayService : Service() {
         when (decision.operation) {
             GatewayActionPolicy.Operation.STOP -> {
                 // Stop immediately; no preference await or persistence retry may delay shutdown.
-                GatewayRuntime.requestStop()
-                NativeCoreSession.suspend(owner)
+                reporter.requestStop()
+                // Never acquire/wait for the controller while holding the report/retirement lock.
                 controller?.stop()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 try {
@@ -129,35 +157,7 @@ class GatewayService : Service() {
     }
 
     private fun report(status: GatewayEngineController.Status) {
-        GatewayRuntime.publish(owner, status)
-        if (!GatewayRuntime.isCurrent(owner)) return
-        val safe = GatewayRuntime.status.value
-        if (status.phase == GatewayEngineController.Phase.RUNNING) {
-            cc.fplj.magpiemobile.core.StartupBenchmark.recordGatewayReady()
-            NativeCoreSession.connect(owner, filesDir)
-        } else {
-            NativeCoreSession.suspend(owner)
-            if (status.phase == GatewayEngineController.Phase.FAILED || status.phase == GatewayEngineController.Phase.BACKOFF) {
-                try {
-                    val detail = safe.message + "\n" + safe.outputTail
-                    cc.fplj.magpiemobile.core.PostMortemAuditor(java.io.File(filesDir, "config"))
-                        .recordAbnormalExit(status.phase.name, -1, detail)
-                } catch (_: Exception) {}
-            }
-        }
-        Log.i("MagpieGateway", safe.phase.name + ": " + safe.message)
-        if (foregroundReady) {
-            try {
-                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(safe.message))
-            } catch (_: SecurityException) {
-                // Denied notifications do not hide the state/error in the app.
-            }
-        }
-        if (status.phase == GatewayEngineController.Phase.FAILED) {
-            mainHandler.post {
-                if (GatewayRuntime.isCurrent(owner)) stopSelf()
-            }
-        }
+        reporter.report(status)
     }
 
     private fun notification(message: String): Notification {
@@ -177,8 +177,9 @@ class GatewayService : Service() {
     override fun onDestroy() {
         // Preserve startup failures on screen; stopping a failed service must not overwrite FAILED.
         val stoppedController = controller
+        reporter.retire { NativeCoreSession.disconnect(owner) }
+        // Reports may still merge final diagnostics; they cannot reconnect or run effects now.
         stoppedController?.stop()
-        NativeCoreSession.disconnect(owner)
         val stoppedOwner = owner
         Thread({
             if (stoppedController == null || stoppedController.awaitStopped(6000)) GatewayRuntime.cleanupCompleted(stoppedOwner)

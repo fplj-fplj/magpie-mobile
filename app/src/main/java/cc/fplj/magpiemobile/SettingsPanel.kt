@@ -55,7 +55,7 @@ internal fun DiagnosticsPanel(layout: EnginePaths.Layout, gateway: GatewayEngine
             var postMortem by remember(layout) { mutableStateOf(auditor.readReport()) }
             if (postMortem != null) {
                 Text(
-                    "异常退出审计记录: [" + postMortem!!.lastKnownPhase + "] 退出码=" + postMortem!!.exitCode,
+                    "异常退出审计记录: [" + postMortem!!.lastKnownPhase + "] 退出码=" + (postMortem!!.exitCode?.toString() ?: "未知"),
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall
                 )

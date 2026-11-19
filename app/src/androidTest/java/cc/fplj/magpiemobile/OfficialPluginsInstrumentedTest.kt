@@ -688,6 +688,7 @@ class OfficialPluginsInstrumentedTest {
                     }
                     verifySameOwnerProviderReconnect(artifacts)
                     verifyChatAndCatalogReconnect(upstream, artifacts)
+                    verifyLiveGatewayDiagnostics(nativeModel, artifacts)
                     val stoppedOwner = requireNotNull(NativeCoreSession.providerSessionId())
                     val stoppedProviderSession = requireNotNull(NativeCoreSession.providerSessionKey())
                     val stoppedLease = NativeCoreSession.gatewayRequest(stoppedOwner)
@@ -703,6 +704,13 @@ class OfficialPluginsInstrumentedTest {
                             !GatewayRuntime.stopping.value && GatewayRuntime.status.value.phase == GatewayEngineController.Phase.STOPPED &&
                                 device.findObject(power)?.isChecked == false
                         }
+                        assertTrue("normal stop discarded final diagnostics",
+                            GatewayRuntime.status.value.outputTail.contains(LIVE_DIAGNOSTIC_MARKER))
+                        assertNotNull("normal stop never observed its process exit code", GatewayRuntime.status.value.exitCode)
+                        File(artifacts, "gateway-final-diagnostics.txt").writeText(
+                            "PASS: normal core stop preserved marker and observed exitCode=${GatewayRuntime.status.value.exitCode}\n" +
+                                GatewayRuntime.status.value.outputTail,
+                        )
                         assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedLease.control.ensureActive() }
                         assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedLease.ensureCurrent() }
                         assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.gatewayRequest(stoppedOwner) }
@@ -721,6 +729,7 @@ class OfficialPluginsInstrumentedTest {
                         stoppedPluginLease.close()
                     }
                     assertTrue(device.takeScreenshot(File(artifacts, "gateway-off-after-toggle.png")))
+                    verifyRealProcessExitDiagnostics(artifacts)
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
                 } finally {
                     try {
@@ -762,6 +771,125 @@ class OfficialPluginsInstrumentedTest {
                             device.executeShellCommand("ls /data/local/tmp/magpie-plugin-runtime/core-status.txt").trim())
                     }
                 }
+            }
+        }
+    }
+
+    /** Console output travels through Bun -> actual Go stderr -> Controller -> Runtime -> UI. */
+    private fun verifyLiveGatewayDiagnostics(model: String, artifacts: File) {
+        val before = GatewayRuntime.status.value
+        val session = requireNotNull(NativeCoreSession.providerSessionKey())
+        val key = requireNotNull(NativeCoreSession.currentGatewayKey())
+        val metrics = StartupBenchmark.getMetrics()
+        assertEquals(GatewayEngineController.Phase.RUNNING, before.phase)
+        openDiagnostics()
+        revealDiagnosticText("引擎状态与脱敏输出")
+        assertFalse(GatewayRuntime.status.value.outputTail.contains(LIVE_DIAGNOSTIC_MARKER))
+        val body = JSONObject().put("model", model).put("stream", false)
+            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", LIVE_DIAGNOSTIC_PROBE)))
+        assertEquals(200, http("http://127.0.0.1:3425/v1/chat/completions", key, body.toString()).first)
+        await("live output while the actual core remains RUNNING", 10_000) {
+            GatewayRuntime.status.value.outputTail.contains(LIVE_DIAGNOSTIC_MARKER)
+        }
+        val after = GatewayRuntime.status.value
+        assertEquals(GatewayEngineController.Phase.RUNNING, after.phase)
+        assertEquals(before.restartCount, after.restartCount)
+        assertEquals(session, NativeCoreSession.providerSessionKey())
+        assertEquals(key, NativeCoreSession.currentGatewayKey())
+        assertEquals(metrics, StartupBenchmark.getMetrics())
+        assertFalse(after.outputTail.contains(LIVE_DIAGNOSTIC_SECRET))
+        assertFalse(after.outputTail.contains(LIVE_DIAGNOSTIC_SECRET.takeLast(4)))
+        assertTrue(after.outputTail.length <= 8192)
+        revealDiagnosticText(LIVE_DIAGNOSTIC_MARKER)
+        revealDiagnosticText("配置安全备份与恢复")
+        assertTrue(device.takeScreenshot(File(artifacts, "gateway-live-diagnostics.png")))
+        File(artifacts, "gateway-live-diagnostics.txt").writeText(
+            "PASS: Bun console -> Go stderr -> RUNNING Runtime and visible diagnostics\n" +
+                "PASS: restartCount, provider connection epoch, gateway key and startup metrics unchanged\n" +
+                "PASS: synthetic credential and suffix absent from bounded public tail\n" + after.outputTail,
+        )
+        device.findObject(By.text("网关")).click()
+        await("gateway after live diagnostics") { device.hasObject(By.res("gateway-power-switch")) }
+    }
+
+    /** Controlled Android shell processes, never signals/OOM or killing the app/core. */
+    private fun verifyRealProcessExitDiagnostics(artifacts: File) {
+        val auditor = PostMortemAuditor(File(context.filesDir, "config"))
+        val evidence = StringBuilder()
+        try {
+            for (code in listOf(23, 137)) {
+                assertTrue(GatewayRuntime.requestStart())
+                val owner = GatewayRuntime.attach()
+                val reporter = GatewayServiceReporter(owner, object : GatewayServiceEffects {
+                    override fun ready() = Unit
+                    override fun connect() = Unit
+                    override fun suspend() = Unit
+                    override fun audit(status: GatewayEngineController.Status) {
+                        auditor.recordAbnormalExit(status.phase.name, status.exitCode, status.message + "\n" + status.outputTail)
+                    }
+                    override fun log(status: GatewayEngineController.Status) = Unit
+                    override fun notify(status: GatewayEngineController.Status) = Unit
+                    override fun stopSelf() = Unit
+                })
+                val controller = GatewayEngineController(
+                    launch = { ProcessBuilder("/system/bin/sh", "-c",
+                        "printf 'controlled-exit-marker token=$LIVE_DIAGNOSTIC_SECRET\\n'; exit $code").start() },
+                    ready = { false }, report = { reporter.report(it) }, pollIntervalMs = 10,
+                    supervisor = EngineSupervisor(maxAutoRestart = 0),
+                )
+                try {
+                    assertTrue(controller.start())
+                    assertTrue("controlled process cleanup timed out", controller.awaitStopped(10_000))
+                    val status = GatewayRuntime.status.value
+                    assertEquals(GatewayEngineController.Phase.FAILED, status.phase)
+                    assertEquals(code, status.exitCode)
+                    assertTrue(status.outputTail.contains("controlled-exit-marker"))
+                    val report = requireNotNull(auditor.readReport())
+                    assertEquals(code, report.exitCode)
+                    val json = File(context.filesDir, "config/${PostMortemAuditor.AUDIT_FILE_NAME}").readText()
+                    assertFalse(json.contains(LIVE_DIAGNOSTIC_SECRET))
+                    assertFalse(json.contains(LIVE_DIAGNOSTIC_SECRET.takeLast(4)))
+                    evidence.append("PASS: Android shell exit $code -> Controller -> production ServiceReporter -> audit JSON; fixed full mask\n")
+                } finally {
+                    reporter.retire { }
+                    controller.stop()
+                    assertTrue(controller.awaitStopped(10_000))
+                    GatewayRuntime.cleanupCompleted(owner)
+                }
+            }
+            // Audit is read on page entry; explicitly re-enter instead of claiming a live reread.
+            openDiagnostics()
+            revealDiagnosticText("退出码=137")
+            assertTrue(device.takeScreenshot(File(artifacts, "gateway-exit-diagnostics.png")))
+            evidence.append("PASS: re-entered existing diagnostics page shows observed exitCode=137\n")
+            File(artifacts, "gateway-exit-diagnostics.txt").writeText(evidence.toString())
+        } finally {
+            GatewayRuntime.stoppedWithoutService()
+        }
+    }
+
+    private fun openDiagnostics() {
+        device.findObject(By.text("更多")).click()
+        // More remembers its own child destination independently of the Gateway tab.
+        await("diagnostics destination") {
+            val back = device.findObject(By.desc("返回更多"))
+            val row = device.findObject(By.text("系统与诊断"))
+            if (back != null) { back.click(); false }
+            else if (row != null) { row.click(); true } else {
+                device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
+                    device.displayWidth / 2, device.displayHeight / 3, 20)
+                false
+            }
+        }
+        await("diagnostics child entered") { device.hasObject(By.desc("返回更多")) }
+    }
+
+    private fun revealDiagnosticText(text: String) {
+        await("visible diagnostic text: $text") {
+            if (device.hasObject(By.textContains(text))) true else {
+                device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
+                    device.displayWidth / 2, device.displayHeight / 3, 20)
+                false
             }
         }
     }
@@ -1271,6 +1399,9 @@ class OfficialPluginsInstrumentedTest {
 
     companion object {
         private const val RECONNECT_PROBE = "android-reconnect-silent-probe"
+        private const val LIVE_DIAGNOSTIC_PROBE = "android-live-diagnostic-probe"
+        private const val LIVE_DIAGNOSTIC_MARKER = "magpie-live-diagnostic-marker"
+        private const val LIVE_DIAGNOSTIC_SECRET = "synthetic-live-credential-4837"
         private val PROVIDER = """
             import { writeFileSync } from "node:fs"
             export const AndroidFixture = async (_, options = {}) => ({
@@ -1301,6 +1432,7 @@ class OfficialPluginsInstrumentedTest {
             import { appendFileSync } from "node:fs"
             export async function onRequest(body, ctx) {
               const text = String(body.messages.at(-1).content)
+              if (text.startsWith("$LIVE_DIAGNOSTIC_PROBE")) console.log("$LIVE_DIAGNOSTIC_MARKER token=$LIVE_DIAGNOSTIC_SECRET")
               if (text.includes("hook-throw")) throw new Error("fixture hook failure")
               if (text.includes("hook-timeout")) await new Promise((resolve, reject) => {
                 const timer = setTimeout(resolve, 30000)

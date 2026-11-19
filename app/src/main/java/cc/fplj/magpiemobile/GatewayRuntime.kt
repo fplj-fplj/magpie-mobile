@@ -28,16 +28,30 @@ object GatewayRuntime {
     @Synchronized
     fun isCurrent(owner: Long): Boolean = owner == generation
 
+    /** Returns a safe accepted lifecycle snapshot; rejected events can only merge final diagnostics. */
     @Synchronized
-    fun publish(owner: Long, status: GatewayEngineController.Status) {
-        if (owner != generation) return // cancelled/old service cannot overwrite a newer start
-        if (mutableStopping.value) return // STOPPED from stop() is not proof cleanup has finished
-        if (mutableStatus.value.phase == GatewayEngineController.Phase.FAILED &&
-            status.phase == GatewayEngineController.Phase.STOPPED) return // keep the actual error visible
-        mutableStatus.value = status.copy(
-            message = SecretRedactor.redact(status.message),
-            outputTail = SecretRedactor.redact(status.outputTail),
+    fun publish(
+        owner: Long,
+        status: GatewayEngineController.Status,
+        allowLifecycle: Boolean = true,
+    ): GatewayEngineController.Status? {
+        if (owner != generation) return null
+        val safe = status.copy(
+            message = SecretRedactor.redactDiagnostic(status.message),
+            outputTail = SecretRedactor.redactDiagnostic(status.outputTail).takeLast(MAX_OUTPUT_TAIL),
         )
+        val current = mutableStatus.value
+        if (!allowLifecycle || mutableStopping.value || (current.phase == GatewayEngineController.Phase.FAILED &&
+                safe.phase == GatewayEngineController.Phase.STOPPED)) {
+            // STOPPED is not cleanup proof. Keep phase/reason/barrier while retaining final evidence.
+            mutableStatus.value = current.copy(
+                outputTail = safe.outputTail.ifEmpty { current.outputTail },
+                exitCode = safe.exitCode ?: current.exitCode,
+            )
+            return null
+        }
+        mutableStatus.value = safe
+        return safe
     }
 
     @Synchronized
@@ -56,9 +70,20 @@ object GatewayRuntime {
 
     @Synchronized
     fun requestStop(): Long {
-        stopRequested = true; mutableStopping.value = true
-        mutableStatus.value = mutableStatus.value.copy(message = "正在停止并回收进程…")
+        stopRequested = true
+        beginCleanup(generation)
         return generation
+    }
+
+    /** Service retirement must not turn an abnormal exit into an explicit user stop. */
+    @Synchronized
+    fun beginCleanup(owner: Long): Boolean {
+        if (owner != generation) return false
+        mutableStopping.value = true
+        if (mutableStatus.value.phase != GatewayEngineController.Phase.FAILED) {
+            mutableStatus.value = mutableStatus.value.copy(message = "正在停止并回收进程…")
+        }
+        return true
     }
 
     @Synchronized
@@ -69,16 +94,16 @@ object GatewayRuntime {
         if (owner != generation) return
         val failed = mutableStatus.value.phase == GatewayEngineController.Phase.FAILED
         mutableStopping.value = false
-        if (!failed || stopRequested) mutableStatus.value = GatewayEngineController.Status(
-            GatewayEngineController.Phase.STOPPED, "网关已停止（进程清理完成）",
+        if (!failed) mutableStatus.value = mutableStatus.value.copy(
+            phase = GatewayEngineController.Phase.STOPPED, message = "网关已停止（进程清理完成）",
         )
     }
 
     @Synchronized
     fun requestFailed(error: Exception) {
-        mutableStatus.value = GatewayEngineController.Status(
-            GatewayEngineController.Phase.FAILED,
-            SecretRedactor.redact("启动请求失败：" + (error.message ?: error.javaClass.simpleName)),
+        mutableStatus.value = mutableStatus.value.copy(
+            phase = GatewayEngineController.Phase.FAILED,
+            message = SecretRedactor.redactDiagnostic("启动请求失败：" + (error.message ?: error.javaClass.simpleName)),
         )
     }
 
@@ -86,8 +111,10 @@ object GatewayRuntime {
     fun stoppedWithoutService() {
         mutableStopping.value = false; stopRequested = true
         generation += 1
-        mutableStatus.value = GatewayEngineController.Status(
-            GatewayEngineController.Phase.STOPPED, "网关已停止",
+        mutableStatus.value = mutableStatus.value.copy(
+            phase = GatewayEngineController.Phase.STOPPED, message = "网关已停止",
         )
     }
+
+    private const val MAX_OUTPUT_TAIL = 8192
 }
