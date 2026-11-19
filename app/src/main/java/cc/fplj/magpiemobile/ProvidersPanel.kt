@@ -11,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
@@ -38,6 +39,7 @@ private fun providerKeyFingerprint(value: String): String =
         .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
 
 /** Only nonsecret write-recovery flags are saveable. Password fields/drafts stay ephemeral. */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ProvidersPanel(
     enabled: Boolean,
