@@ -30,6 +30,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -95,9 +96,15 @@ class ProviderOperationControllerTest {
                     assertEquals(1, source.leases.size) // Capture happened synchronously.
                     ui.scheduler.runCurrent() // The request is now queued on the IO dispatcher.
                     source.changeOwner(OWNER_B)
-                    io.scheduler.runCurrent()
-                    ui.scheduler.runCurrent()
-                    withTimeout(5000) { job.join() }
+                    withTimeout(5000) {
+                        // The real IO cancellation watcher can enqueue cleanup after either pump.
+                        while (!job.isCompleted) {
+                            io.scheduler.runCurrent()
+                            ui.scheduler.runCurrent()
+                            yield()
+                        }
+                        job.join()
+                    }
 
                     assertTrue(job.isCancelled)
                     assertEquals(0, completed.get())
