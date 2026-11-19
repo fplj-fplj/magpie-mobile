@@ -6,7 +6,7 @@
 
 - **上游核心**：v0.1.3781（commit `b52c7111`）；
 - **思考过程**：聊天测试页独立显示可折叠的 `reasoning_content`；生成中实时预览，完成后自动收起。历史中可重新展开，但思考内容不会进入下一轮模型上下文。详见 [0.1.45 思考内容说明](docs/chat-reasoning-ui-0.1.45.md)；
-- **页面重排**：提供商添加、模型选择和连通测试参照 RikkaHub 页面结构重新组织；聊天区改为独立消息滚动与底部固定输入框，支持模型搜索、按提供商分组以及三项能力测试；
+- **页面重排**：提供商添加、模型选择和连通测试参照 RikkaHub 页面结构重新组织；聊天区改为独立消息滚动与底部固定输入框，支持模型搜索、按提供商分组以及三项能力测试。全屏编辑、模型多选与聊天键盘布局已通过实际 Android 回归，详见 [0.1.46 界面与验收记录](docs/rikkahub-pages-0.1.46.md)；
 - **流式空值修复**：推理模型在正文前返回的 `delta.content: null` 不再被拼成 `"null"`；流式与非流式正文均只接受 JSON 字符串。详见 [0.1.44 修复说明](docs/chat-null-delta-fix-0.1.44.md)；
 - **新技术路线**：官方完整 CLI 核心 + Android 宿主适配，APK 使用 `nogui,androidhost`，不再使用 `mobile` 构建标签；官方浏览器编辑与原生提供商的选择卡片仅在“模型提供商”和“更多”主页显示。原生提供商新增、详情、共享模型选择与连通测试按 RikkaHub 当前页面结构独立实现。详见 [路线与双编辑说明](docs/full-core-dual-editors.md)；
 - **屏幕阅读与启停**：全原生界面采用较厚笔画的霞鹜文楷屏幕阅读版，顶部品牌文字保留 Poppins；网关状态卡改为固定位置的单一开关。详见 [本轮界面说明](docs/ui-update-0.1.41.md)；
@@ -21,6 +21,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/rikkahub-pages-0.1.46.md](docs/rikkahub-pages-0.1.46.md) | RikkaHub 参考页面、全屏编辑、模型多选、聊天键盘与同提交构建验收 |
 | [docs/chat-reasoning-ui-0.1.45.md](docs/chat-reasoning-ui-0.1.45.md) | 思考过程折叠卡、独立持久化、上下文边界与聊天页布局 |
 | [docs/chat-null-delta-fix-0.1.44.md](docs/chat-null-delta-fix-0.1.44.md) | DeepSeek 推理流空正文导致界面出现大量 `null` 的根因、修复与回归 |
 | [docs/release-policy.md](docs/release-policy.md) | 普通构建、手动发布、Latest 标记与 Release 清理规则 |
@@ -57,7 +58,7 @@
 
 `Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`，才会把同一轮验证产物发布为 Latest Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
-当前可用版本：[`0.1.45-reasoning-ui` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.45-reasoning-ui-bbdcb460)，SHA-256 `6e140f4331f1567f5bc70977f91087b83396780d066a9afcb58a985287dc98a4`。[手动构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43704756174)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43703975532)均通过；JVM 569 项、Go、真实官方插件、race 与 Android API 35 模拟器运行结果均为 0 失败。旧中间 Release 已清理，历史证据保留在 Actions 与 Git 标签中。
+当前可用版本：[`0.1.46-rikkahub-pages` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.46-rikkahub-pages-d14cfedb)，SHA-256 `37af694146fd6269ed052c5ec36af166ccba7cc0560aac5a48348294ba977612`。[手动构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44569127591)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44566737319)均通过；JVM 590 项、Go、真实官方插件、race 与 Android API 35 模拟器运行结果均为 0 失败。本轮中间修复仅归档到 Actions，确认可用后才发布 Release；完整证据见 [0.1.46 验收记录](docs/rikkahub-pages-0.1.46.md)。
 
 官方插件完整通过基线仍可通过 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)追溯；对应历史 Release 条目已按清理策略移除，运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 
