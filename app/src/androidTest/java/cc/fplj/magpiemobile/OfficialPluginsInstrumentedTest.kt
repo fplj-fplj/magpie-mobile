@@ -299,6 +299,10 @@ class OfficialPluginsInstrumentedTest {
                     device.findObject(By.text("保存并连接")).click()
                     assertTrue(device.wait(Until.hasObject(By.text("连接成功")), 20_000))
                     device.findObject(By.text("返回插件")).click()
+                    await("plugin row after returning from API login") { device.hasObject(providerRow) }
+                    device.findObject(providerRow).click()
+                    assertTrue(device.wait(Until.hasObject(By.text("连接与工具")), 10_000))
+                    device.findObject(By.text("连接与工具")).click()
                     val delayedLogin = By.text("Test delayed OAuth").enabled(true)
                     assertTrue(device.wait(Until.hasObject(delayedLogin), 10_000))
                     device.findObject(delayedLogin).click()
