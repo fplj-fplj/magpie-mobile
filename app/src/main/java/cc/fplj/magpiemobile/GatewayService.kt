@@ -68,6 +68,7 @@ class GatewayService : Service() {
             GatewayActionPolicy.Operation.STOP -> {
                 // Stop immediately; no preference await or persistence retry may delay shutdown.
                 GatewayRuntime.requestStop()
+                NativeCoreSession.suspend(owner)
                 controller?.stop()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 try {

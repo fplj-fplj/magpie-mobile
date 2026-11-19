@@ -126,6 +126,7 @@ class MainActivity : ComponentActivity() {
                             try {
                                 // Invalidate callbacks from this run before destruction/late spawn cleanup.
                                 val ticket = GatewayRuntime.requestStop()
+                                NativeCoreSession.suspend(ticket)
                                 if (!stopService(Intent(this, GatewayService::class.java))) GatewayRuntime.cleanupCompleted(ticket)
                             } catch (e: Exception) { GatewayRuntime.requestFailed(e) }
                             // 停止后尽力记录停止意图；不阻塞停止，异常不影响已执行的停止

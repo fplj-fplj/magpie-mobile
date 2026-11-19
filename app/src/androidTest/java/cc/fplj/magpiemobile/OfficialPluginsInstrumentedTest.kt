@@ -648,11 +648,20 @@ class OfficialPluginsInstrumentedTest {
                         if (device.findObject(power)?.isChecked == true) true
                         else { device.findObject(By.text("网关"))?.click(); false }
                     }
-                    device.findObject(power).click()
-                    await("gateway switched off", 30_000) {
-                        !GatewayRuntime.stopping.value && GatewayRuntime.status.value.phase == GatewayEngineController.Phase.STOPPED &&
-                            device.findObject(power)?.isChecked == false
-                    }
+                    val stoppedOwner = requireNotNull(NativeCoreSession.providerSessionId())
+                    val stoppedLease = NativeCoreSession.gatewayRequest(stoppedOwner)
+                    try {
+                        stoppedLease.ensureCurrent()
+                        device.findObject(power).click()
+                        await("gateway switched off", 30_000) {
+                            !GatewayRuntime.stopping.value && GatewayRuntime.status.value.phase == GatewayEngineController.Phase.STOPPED &&
+                                device.findObject(power)?.isChecked == false
+                        }
+                        assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedLease.control.ensureActive() }
+                        assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedLease.ensureCurrent() }
+                        assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.gatewayRequest(stoppedOwner) }
+                        File(artifacts, "capability-session-cancellation.txt").writeText("PASS: actual core shutdown cancelled registered requests and rejected the stale owner\n")
+                    } finally { stoppedLease.close() }
                     assertTrue(device.takeScreenshot(File(artifacts, "gateway-off-after-toggle.png")))
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
                 } finally {

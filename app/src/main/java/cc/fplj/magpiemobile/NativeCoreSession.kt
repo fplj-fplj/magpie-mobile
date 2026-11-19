@@ -7,6 +7,7 @@ import cc.fplj.magpiemobile.core.GatewayEngineController
 import cc.fplj.magpiemobile.core.GatewayKeyProvisioner
 import cc.fplj.magpiemobile.core.ManagerCredential
 import java.io.File
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +27,7 @@ object NativeCoreSession {
     }
     private val lock = Any()
     private var binding: Binding? = null
+    private val requests = GatewayRequestLeases()
     private val mutableStatus = MutableStateFlow(Snapshot(Phase.DISCONNECTED, "网关未连接"))
     val status = mutableStatus.asStateFlow()
     // All key provisioning is serial, including cancelled/old Service runs.
@@ -34,6 +36,7 @@ object NativeCoreSession {
     }
 
     fun attach(owner: Long, adminKey: String) = synchronized(lock) {
+        requests.invalidate()
         binding = Binding(owner, ManagerCredential.fromKey(adminKey))
         mutableStatus.value = Snapshot(Phase.DISCONNECTED, "等待网关端口就绪，随后验证核心安全能力")
     }
@@ -42,6 +45,7 @@ object NativeCoreSession {
         val current = synchronized(lock) {
             val current = binding ?: return
             if (current.owner != owner || current.connecting) return
+            requests.invalidate()
             current.connecting = true
             current.config = null
             mutableStatus.value = Snapshot(Phase.CONNECTING, "正在鉴权管理会话并注册/核对本机客户端密钥…")
@@ -90,12 +94,14 @@ object NativeCoreSession {
     fun suspend(owner: Long) = synchronized(lock) {
         val current = binding ?: return
         if (current.owner != owner) return
+        requests.invalidate()
         current.config = null
         mutableStatus.value = Snapshot(Phase.DISCONNECTED, "网关暂未就绪，暂停客户端请求")
     }
 
     fun disconnect(owner: Long) = synchronized(lock) {
         if (binding?.owner != owner) return
+        requests.invalidate()
         binding = null
         mutableStatus.value = Snapshot(Phase.DISCONNECTED, "网关已断开，管理凭据已从会话释放")
     }
@@ -108,6 +114,20 @@ object NativeCoreSession {
 
     fun providerSessionId(): Long? = synchronized(lock) {
         binding?.takeIf { isRunningOwner(it) && it.config != null }?.owner
+    }
+
+    /** Owner, key and cancellation registration are captured atomically before dispatch to IO. */
+    internal fun gatewayRequest(owner: Long): GatewayRequestLease = synchronized(lock) {
+        val current = binding
+        val config = current?.config
+        if (current == null || current.owner != owner || config == null || !isRunningOwner(current)) {
+            throw CancellationException("Gateway session is no longer current")
+        }
+        requests.acquire(config) {
+            synchronized(lock) {
+                binding === current && current.config === config && isRunningOwner(current)
+            }
+        }
     }
 
     fun currentGatewayKey(): String? = synchronized(lock) {

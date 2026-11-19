@@ -30,7 +30,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,15 +51,7 @@ import androidx.compose.ui.window.DialogProperties
 import cc.fplj.magpiemobile.core.ProviderCapabilityCheck
 import cc.fplj.magpiemobile.core.ProviderCapabilityResult
 import cc.fplj.magpiemobile.core.ProviderCapabilityStatus
-import cc.fplj.magpiemobile.core.ProviderModelCapabilityClient
 import cc.fplj.magpiemobile.theme.UiSpacing
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.job
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * RikkaHub-style model testing entry and result dialog.
@@ -69,14 +63,17 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun ProviderConnectivityTestButton(
     enabled: Boolean,
+    owner: Long?,
     providerId: String?,
     providerName: String,
     testModels: List<String>,
     modifier: Modifier = Modifier,
 ) {
-    var visible by remember(providerId, providerName, testModels) { mutableStateOf(false) }
+    var visible by remember(enabled, owner, providerId, providerName, testModels) {
+        mutableStateOf(false)
+    }
     OutlinedButton(
-        enabled = enabled,
+        enabled = enabled && owner != null,
         onClick = { visible = true },
         modifier = modifier
             .testTag("provider-connectivity-entry")
@@ -84,30 +81,34 @@ internal fun ProviderConnectivityTestButton(
     ) {
         Text("连通测试")
     }
-    if (visible) {
-        ProviderConnectivityDialog(
-            providerId = providerId,
-            providerName = providerName,
-            models = testModels.distinct(),
-            onDismiss = { visible = false },
-        )
+    if (visible && enabled && owner != null) {
+        key(enabled, owner) {
+            ProviderConnectivityDialog(
+                owner = owner,
+                providerId = providerId,
+                providerName = providerName,
+                models = testModels.distinct(),
+                onDismiss = { visible = false },
+            )
+        }
     }
 }
 
 @Composable
 private fun ProviderConnectivityDialog(
+    owner: Long,
     providerId: String?,
     providerName: String,
     models: List<String>,
     onDismiss: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val runController = remember(scope) { ProviderConnectivityTestRunController(scope) }
     var selectedModel by remember(providerId, models) {
         mutableStateOf(models.firstOrNull().orEmpty())
     }
     var modelPickerOpen by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
-    var runJob by remember { mutableStateOf<Job?>(null) }
     var results by remember(providerId, models) {
         mutableStateOf(pendingCapabilityResults())
     }
@@ -117,6 +118,13 @@ private fun ProviderConnectivityDialog(
         mutableStateOf(emptySet<ProviderCapabilityCheck>())
     }
     var requestGeneration by remember { mutableIntStateOf(0) }
+
+    DisposableEffect(runController, owner) {
+        onDispose {
+            ++requestGeneration
+            runController.cancel()
+        }
+    }
 
     val canTest = !running && !providerId.isNullOrBlank() &&
         selectedModel.isNotBlank() && selectedModel in models
@@ -135,10 +143,17 @@ private fun ProviderConnectivityDialog(
         expandedChecks = emptySet()
     }
 
+    fun finishTest() {
+        val finished = finishProviderCapabilityRun(results, message, messageIsError)
+        results = finished.results
+        message = finished.message
+        messageIsError = finished.messageIsError
+        running = false
+    }
+
     fun close() {
         ++requestGeneration
-        runJob?.cancel()
-        runJob = null
+        runController.cancel()
         running = false
         onDismiss()
     }
@@ -148,8 +163,7 @@ private fun ProviderConnectivityDialog(
         val id = providerId ?: return
         val model = selectedModel
         if (!canTest || model !in models) return
-        val owner = NativeCoreSession.providerSessionId()
-        if (owner == null) {
+        if (owner != NativeCoreSession.providerSessionId()) {
             message = "网关尚未就绪，请回到网关页完成安全连接。"
             messageIsError = true
             return
@@ -157,70 +171,69 @@ private fun ProviderConnectivityDialog(
         val generation = ++requestGeneration
         running = true
         resetResults()
-        val job = scope.launch {
-            try {
-                val activeJob = coroutineContext.job
-                val capability = withContext(Dispatchers.IO) {
-                    val capabilityClient = ProviderModelCapabilityClient(
-                        NativeCoreSession.gatewayConfig(),
-                    )
-                    capabilityClient.run(
-                        providerId = id,
-                        savedModelId = model,
-                        onProgress = { next ->
-                            scope.launch {
-                                if (providerTestUpdateIsCurrent(
-                                        generation = generation,
-                                        currentGeneration = requestGeneration,
-                                        owner = owner,
-                                        currentOwner = NativeCoreSession.providerSessionId(),
-                                    )
-                                ) {
-                                    results = results + (next.check to next)
-                                }
-                            }
-                        },
-                        ensureActive = { activeJob.ensureActive() },
-                    )
-                }
-
-                if (providerTestUpdateIsCurrent(
-                        generation = generation,
-                        currentGeneration = requestGeneration,
-                        owner = owner,
-                        currentOwner = NativeCoreSession.providerSessionId(),
-                    )
-                ) {
-                    results = capability.results.associateBy { it.check }
-                    val passed = capability.results.all {
-                        it.status == ProviderCapabilityStatus.PASSED
+        try {
+            runController.start(
+                owner = owner,
+                providerId = id,
+                modelId = model,
+                onProgress = { next ->
+                    if (running && providerTestUpdateIsCurrent(
+                            generation = generation,
+                            currentGeneration = requestGeneration,
+                            owner = owner,
+                            currentOwner = NativeCoreSession.providerSessionId(),
+                        )
+                    ) {
+                        results = results + (next.check to next)
                     }
-                    val routeFailed = capability.route == null
-                    message = when {
-                        routeFailed -> "未能建立可验证的提供商模型路由，三项检查均未发送。"
-                        passed -> "三项模型能力检查已通过。"
-                        else -> "能力检查已完成，请查看未通过或不可用的项目。"
+                },
+                onSuccess = { capability ->
+                    if (providerTestUpdateIsCurrent(
+                            generation = generation,
+                            currentGeneration = requestGeneration,
+                            owner = owner,
+                            currentOwner = NativeCoreSession.providerSessionId(),
+                        )
+                    ) {
+                        results = capability.results.associateBy { it.check }
+                        val passed = capability.results.all {
+                            it.status == ProviderCapabilityStatus.PASSED
+                        }
+                        val routeFailed = capability.route == null
+                        message = when {
+                            routeFailed -> "未能建立可验证的提供商模型路由，三项检查均未发送。"
+                            passed -> "三项模型能力检查已通过。"
+                            else -> "能力检查已完成，请查看未通过或不可用的项目。"
+                        }
+                        messageIsError = !passed
+                    } else if (generation == requestGeneration) {
+                        message = "网关连接已变化，本次结果未采用；请重连后手动重试。"
+                        messageIsError = true
                     }
-                    messageIsError = !passed
-                } else if (generation == requestGeneration) {
-                    message = "网关连接已变化，本次结果未采用；请重连后手动重试。"
-                    messageIsError = true
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                if (generation == requestGeneration) {
-                    message = "测试未能安全完成；请检查网关状态后手动重试。"
-                    messageIsError = true
-                }
-            } finally {
-                if (generation == requestGeneration) {
-                    running = false
-                    runJob = null
-                }
-            }
+                },
+                onFailure = {
+                    if (providerTestUpdateIsCurrent(
+                            generation = generation,
+                            currentGeneration = requestGeneration,
+                            owner = owner,
+                            currentOwner = NativeCoreSession.providerSessionId(),
+                        )
+                    ) {
+                        message = "测试未能安全完成；请检查网关状态后手动重试。"
+                        messageIsError = true
+                    }
+                },
+                onFinished = {
+                    if (generation == requestGeneration) {
+                        finishTest()
+                    }
+                },
+            )
+        } catch (_: Exception) {
+            message = "网关连接已变化，请确认连接后手动重试。"
+            messageIsError = true
+            finishTest()
         }
-        runJob = job
     }
 
     Dialog(
@@ -600,6 +613,41 @@ private fun pendingCapabilityResult(check: ProviderCapabilityCheck) =
         check = check,
         status = ProviderCapabilityStatus.PENDING,
     )
+
+internal data class FinishedProviderCapabilityRun(
+    val results: Map<ProviderCapabilityCheck, ProviderCapabilityResult>,
+    val message: String,
+    val messageIsError: Boolean,
+)
+
+/** A canceled or failed run must leave every visible row in a terminal state. */
+internal fun finishProviderCapabilityRun(
+    results: Map<ProviderCapabilityCheck, ProviderCapabilityResult>,
+    message: String,
+    messageIsError: Boolean,
+): FinishedProviderCapabilityRun {
+    var interrupted = false
+    val finished = ProviderCapabilityCheck.entries.associateWith { check ->
+        val result = results[check] ?: pendingCapabilityResult(check)
+        when (result.status) {
+            ProviderCapabilityStatus.RUNNING -> {
+                interrupted = true
+                result.copy(status = ProviderCapabilityStatus.FAILED, safeMessage = "测试已终止")
+            }
+            ProviderCapabilityStatus.PENDING -> {
+                interrupted = true
+                result.copy(status = ProviderCapabilityStatus.UNAVAILABLE, safeMessage = "本项检查未发送")
+            }
+            else -> result
+        }
+    }
+    val explainInterruption = interrupted && message.isBlank()
+    return FinishedProviderCapabilityRun(
+        results = finished,
+        message = if (explainInterruption) "测试已终止，未完成的检查不会继续发送；请手动重试。" else message,
+        messageIsError = messageIsError || explainInterruption,
+    )
+}
 
 internal fun providerTestUpdateIsCurrent(
     generation: Int,

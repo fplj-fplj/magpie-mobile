@@ -166,7 +166,7 @@ class ProviderModelCapabilityClientTest {
     }
 
     @Test
-    fun cancellationAfterARequestDoesNotStartTheNextCheck() {
+    fun cancellationInRunningCallbackDoesNotSendThePendingCheck() {
         catalog(
             """{"id":"saved/vendor/model","owned_by":"saved","display_name":"Saved Model"}""",
         )
@@ -198,7 +198,7 @@ class ProviderModelCapabilityClientTest {
             )
         }
 
-        assertEquals(1, calls.get())
+        assertEquals(0, calls.get())
     }
 
     @Test
@@ -358,6 +358,42 @@ class ProviderModelCapabilityClientTest {
     }
 
     @Test
+    fun ordinaryUtf8ResponseAtExactlyTheByteLimitStillPasses() {
+        val prefix = "{\"choices\":[{\"message\":{\"content\":\"哈哈哈"
+        val suffix = "\"}}]}"
+        val padding = 256 * 1024 - (prefix + suffix).toByteArray(Charsets.UTF_8).size
+        val response = prefix + "x".repeat(padding) + suffix
+        assertEquals(256 * 1024, response.toByteArray(Charsets.UTF_8).size)
+        capabilityResponses(ordinary = { exchange -> respondJson(exchange, response) })
+
+        val report = client().run("saved", "vendor/model")
+
+        assertTrue(report.results.all { it.status == ProviderCapabilityStatus.PASSED })
+        assertEquals("哈哈哈" + "x".repeat(357), report.results.first().preview)
+        assertEquals(3, chatRequests.size)
+    }
+
+    @Test
+    fun oversizedToolResponseFailsWithoutPublishingPartialThinkingOrArguments() {
+        val secret = "untrusted-tool-overflow-secret"
+        capabilityResponses(tool = { exchange ->
+            respondJson(exchange,
+                """{"choices":[{"message":{"reasoning_content":"$secret${"x".repeat(256 * 1024)}","tool_calls":[{"function":{"name":"get_current_time","arguments":"{}"}}]}}]}""")
+        })
+
+        val report = client().run("saved", "vendor/model")
+        val tool = report.results.last()
+
+        assertEquals(listOf(ProviderCapabilityStatus.PASSED, ProviderCapabilityStatus.PASSED,
+            ProviderCapabilityStatus.FAILED), report.results.map { it.status })
+        assertEquals("响应超过测试安全上限", tool.safeMessage)
+        assertEquals("", tool.preview)
+        assertEquals("", tool.reasoning)
+        assertFalse(tool.toString().contains(secret))
+        assertEquals(3, chatRequests.size)
+    }
+
+    @Test
     fun oversizedUnterminatedStreamCommentFailsSafelyAndToolCheckStillRuns() {
         val secret = "fixture-comment-and-partial-secret"
         capabilityResponses(stream = {
@@ -388,6 +424,73 @@ class ProviderModelCapabilityClientTest {
         val report = client().run("saved", "vendor/model", progress::add)
 
         assertStreamResponseLimit(report, progress, secret)
+    }
+
+    @Test fun ordinary503WithImmediateRetryAfterDoesNotReplayItsPost() =
+        assertSinglePostResponse(ProviderCapabilityCheck.NON_STREAMING, 503)
+
+    @Test fun ordinary408WithImmediateRetryAfterDoesNotReplayItsPost() =
+        assertSinglePostResponse(ProviderCapabilityCheck.NON_STREAMING, 408)
+
+    @Test fun ordinary307DoesNotReplayOrForwardItsPost() =
+        assertSinglePostResponse(ProviderCapabilityCheck.NON_STREAMING, 307)
+
+    @Test fun tool503WithImmediateRetryAfterDoesNotReplayItsPost() =
+        assertSinglePostResponse(ProviderCapabilityCheck.TOOL_CALL, 503)
+
+    @Test fun tool408WithImmediateRetryAfterDoesNotReplayItsPost() =
+        assertSinglePostResponse(ProviderCapabilityCheck.TOOL_CALL, 408)
+
+    @Test fun tool307DoesNotReplayOrForwardItsPost() =
+        assertSinglePostResponse(ProviderCapabilityCheck.TOOL_CALL, 307)
+
+    private fun assertSinglePostResponse(check: ProviderCapabilityCheck, status: Int) {
+        val failedPosts = AtomicInteger()
+        val redirectedPosts = AtomicInteger()
+        val fail: (HttpExchange) -> Unit = { exchange ->
+            assertEquals("POST", exchange.requestMethod)
+            assertEquals("Bearer gateway-test-key", exchange.requestHeaders.getFirst("Authorization"))
+            failedPosts.incrementAndGet()
+            if (status == 503 || status == 408) exchange.responseHeaders.add("Retry-After", "0")
+            if (status == 307) {
+                exchange.responseHeaders.add("Location", "http://127.0.0.1:$port/redirected")
+            }
+            exchange.sendResponseHeaders(status, -1)
+            exchange.close()
+        }
+        server.createContext("/redirected") { exchange ->
+            redirectedPosts.incrementAndGet()
+            exchange.requestBody.readBytes()
+            exchange.sendResponseHeaders(200, -1)
+            exchange.close()
+        }
+        capabilityResponses(
+            ordinary = { exchange ->
+                if (check == ProviderCapabilityCheck.NON_STREAMING) fail(exchange)
+                else respondJson(exchange, """{"choices":[{"message":{"content":"plain ok"}}]}""")
+            },
+            tool = { exchange ->
+                if (check == ProviderCapabilityCheck.TOOL_CALL) fail(exchange)
+                else respondJson(exchange, VALID_TOOL_RESPONSE)
+            },
+        )
+
+        val report = client().run("saved", "vendor/model")
+
+        assertEquals(1, failedPosts.get())
+        assertEquals(0, redirectedPosts.get())
+        assertEquals(3, chatRequests.size)
+        val failed = report.results.single { it.check == check }
+        assertEquals(ProviderCapabilityStatus.FAILED, failed.status)
+        assertEquals(when (status) {
+            503 -> "上游服务不可用"
+            408 -> "上游响应超时"
+            else -> "请求失败"
+        }, failed.safeMessage)
+        assertEquals("", failed.preview)
+        assertEquals("", failed.reasoning)
+        assertTrue(report.results.filter { it.check != check }
+            .all { it.status == ProviderCapabilityStatus.PASSED })
     }
 
     private fun assertStreamResponseLimit(
@@ -435,6 +538,7 @@ class ProviderModelCapabilityClientTest {
             "data: {\"choices\":[{\"delta\":{\"content\":\"stream ok\"}}]}\n\n" +
                 "data: [DONE]\n\n"
         },
+        tool: (HttpExchange) -> Unit = { exchange -> respondJson(exchange, VALID_TOOL_RESPONSE) },
     ) {
         catalog("""{"id":"saved/vendor/model","owned_by":"saved","display_name":"Saved Model"}""")
         server.createContext("/v1/chat/completions") { exchange ->
@@ -442,10 +546,7 @@ class ProviderModelCapabilityClientTest {
             chatRequests += body
             when {
                 body.contains("\"stream\":true") -> respondSse(exchange, stream())
-                body.contains("\"tools\"") -> respondJson(
-                    exchange,
-                    """{"choices":[{"message":{"content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"get_current_time","arguments":"{}"}}]}}]}""",
-                )
+                body.contains("\"tools\"") -> tool(exchange)
                 else -> ordinary(exchange)
             }
         }
@@ -467,5 +568,9 @@ class ProviderModelCapabilityClientTest {
         exchange.responseHeaders.add("Content-Type", "text/event-stream; charset=utf-8")
         exchange.sendResponseHeaders(200, bytes.size.toLong())
         exchange.responseBody.use { it.write(bytes) }
+    }
+
+    private companion object {
+        const val VALID_TOOL_RESPONSE = """{"choices":[{"message":{"content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"get_current_time","arguments":"{}"}}]}}]}"""
     }
 }

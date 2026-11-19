@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.util.concurrent.CancellationException
 
 class NativeCoreSessionTest {
     private val key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -16,6 +17,7 @@ class NativeCoreSessionTest {
             assertEquals(null, NativeCoreSession.providerSessionId())
             assertThrows(IllegalStateException::class.java) { NativeCoreSession.providerClient() }
             assertThrows(IllegalStateException::class.java) { NativeCoreSession.gatewayConfig() }
+            assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(owner) }
         } finally { NativeCoreSession.disconnect(owner) }
     }
     @Test fun lateOldServiceDisconnectDoesNotDestroyNewBinding() {
@@ -25,8 +27,10 @@ class NativeCoreSessionTest {
         NativeCoreSession.attach(current, key.reversed())
         val before = NativeCoreSession.status.value
         NativeCoreSession.disconnect(old)
+        assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(old) }
         assertEquals(before, NativeCoreSession.status.value)
         NativeCoreSession.disconnect(current)
         assertEquals(NativeCoreSession.Phase.DISCONNECTED, NativeCoreSession.status.value.phase)
+        assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(current) }
     }
 }

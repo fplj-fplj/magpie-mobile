@@ -747,6 +747,7 @@ fun ProvidersPanel(
                     ) {
                         ProviderConnectivityTestButton(
                             enabled = enabled && !operationBusy && !busy && listHealthy && !recoveryRequired,
+                            owner = owner,
                             providerId = snapshot?.id,
                             providerName = name.ifBlank { "提供商" },
                             testModels = providers?.providers

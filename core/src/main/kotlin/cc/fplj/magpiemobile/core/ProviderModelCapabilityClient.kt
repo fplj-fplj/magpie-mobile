@@ -1,10 +1,8 @@
 package cc.fplj.magpiemobile.core
 
-import java.io.ByteArrayOutputStream
+import java.io.Closeable
 import java.io.IOException
-import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
-import java.net.URL
 import java.time.Duration
 import java.util.concurrent.CancellationException
 import kotlinx.serialization.json.Json
@@ -15,6 +13,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import okhttp3.Request
 
 /**
  * Runs RikkaHub-style model capability checks through the official Magpie gateway.
@@ -25,7 +24,17 @@ import kotlinx.serialization.json.put
  * entry has both exact identities. Provider keys are never accepted by this class; the gateway's
  * private app key applies the saved provider configuration on-device.
  */
-class ProviderModelCapabilityClient(private val config: GatewayConfig) {
+class ProviderModelCapabilityClient(
+    private val config: GatewayConfig,
+    private val requestControl: ChatRequestControl? = null,
+    private val maxDuration: Duration = Duration.ofMinutes(4),
+    private val requestDuration: Duration = Duration.ofSeconds(60),
+) {
+
+    init {
+        require(!maxDuration.isNegative && !maxDuration.isZero && maxDuration <= Duration.ofDays(1))
+        require(!requestDuration.isNegative && !requestDuration.isZero && requestDuration <= Duration.ofDays(1))
+    }
 
     private val json = Json { ignoreUnknownKeys = false }
 
@@ -33,8 +42,10 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
      * Run all three checks in a deterministic order. The callback receives a RUNNING row before
      * each request and its terminal row afterwards. It is invoked synchronously on the caller's
      * worker thread; Compose callers should marshal UI updates onto their main dispatcher.
-     * [ensureActive] is checked before every request and immediately after the previous request
-     * returns. A cancellation exception is propagated and never converted into a check failure.
+     * [ensureActive] and the run's shared [requestControl] are checked before and after every
+     * request and progress callback. A stopped run never becomes a check failure. Each catalog
+     * read / check has a separate deadline: a timed-out check may fail while later checks run,
+     * whereas cancellation or the overall deadline terminates the whole run.
      */
     fun run(
         providerId: String,
@@ -44,59 +55,115 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
     ): ProviderCapabilityReport {
         require(validProviderExistingId(providerId)) { "提供商标识格式无效" }
         val modelId = providerModelIds(listOf(savedModelId)).single()
-        ensureActive()
+        // A default control belongs to this invocation, not to this reusable client instance.
+        val runControl = requestControl ?: ChatRequestControl()
+        fun guard() {
+            ensureActive()
+            runControl.ensureActive()
+        }
+        guard()
+        val deadline = runControl.startDeadline(maxDuration)
+        try {
+            val route = try {
+                withPhase(runControl, ::guard) { phaseControl ->
+                    resolveRoute(providerId, modelId, phaseControl, ::guard)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: ModelsException) {
+                guard()
+                return unavailableReport(
+                    "无法读取实时模型目录，三项检查均未发送。",
+                    onProgress,
+                    ::guard,
+                )
+            } catch (_: Exception) {
+                guard()
+                return unavailableReport(
+                    "实时模型目录暂时不可用，三项检查均未发送。",
+                    onProgress,
+                    ::guard,
+                )
+            }
+            guard()
+            if (route is RouteLookup.Unavailable) {
+                return unavailableReport(route.reason, onProgress, ::guard)
+            }
+            val available = route as RouteLookup.Available
 
-        val route = try {
-            resolveRoute(providerId, modelId)
-        } catch (error: CancellationException) {
+            val results = ProviderCapabilityCheck.entries.map { check ->
+                guard()
+                onProgress(ProviderCapabilityResult(check, ProviderCapabilityStatus.RUNNING))
+                // A close / owner change can happen synchronously in the RUNNING callback.
+                guard()
+                val result = runOne(check, available.route, runControl, ::guard)
+                guard()
+                onProgress(result)
+                guard()
+                result
+            }
+            guard()
+            return ProviderCapabilityReport(available.route, results)
+        } finally {
+            deadline.close()
+        }
+    }
+
+    private fun <T> withPhase(
+        runControl: ChatRequestControl,
+        guard: () -> Unit,
+        operation: (ChatRequestControl) -> T,
+    ): T {
+        guard()
+        val phaseControl = ChatRequestControl()
+        val registration = runControl.register(phaseControl::cancel)
+        var deadline: Closeable? = null
+        try {
+            guard()
+            deadline = phaseControl.startDeadline(requestDuration)
+            val result = operation(phaseControl)
+            guard()
+            phaseControl.ensureActive()
+            return result
+        } catch (error: Exception) {
+            // The overall stop reason wins over a phase's asynchronously cancelled socket.
+            guard()
             throw error
-        } catch (_: ModelsException) {
-            return unavailableReport(
-                "无法读取实时模型目录，三项检查均未发送。",
-                onProgress,
-            )
-        } catch (_: Exception) {
-            return unavailableReport(
-                "实时模型目录暂时不可用，三项检查均未发送。",
-                onProgress,
-            )
+        } finally {
+            registration.close()
+            deadline?.close()
         }
-        if (route is RouteLookup.Unavailable) {
-            return unavailableReport(route.reason, onProgress)
-        }
-        val available = route as RouteLookup.Available
-
-        val results = ProviderCapabilityCheck.entries.map { check ->
-            ensureActive()
-            onProgress(ProviderCapabilityResult(check, ProviderCapabilityStatus.RUNNING))
-            val result = runOne(check, available.route)
-            ensureActive()
-            onProgress(result)
-            result
-        }
-        return ProviderCapabilityReport(available.route, results)
     }
 
     private fun runOne(
         check: ProviderCapabilityCheck,
         route: ProviderCapabilityRoute,
+        runControl: ChatRequestControl,
+        guard: () -> Unit,
     ): ProviderCapabilityResult {
         val started = System.nanoTime()
         return try {
-            val result = when (check) {
-                ProviderCapabilityCheck.NON_STREAMING -> ordinaryChat(route)
-                ProviderCapabilityCheck.STREAMING -> streamingChat(route)
-                ProviderCapabilityCheck.TOOL_CALL -> toolCall(route)
+            val result = withPhase(runControl, guard) { phaseControl ->
+                when (check) {
+                    ProviderCapabilityCheck.NON_STREAMING -> ordinaryChat(route, phaseControl, guard)
+                    ProviderCapabilityCheck.STREAMING -> streamingChat(route, phaseControl, guard)
+                    ProviderCapabilityCheck.TOOL_CALL -> toolCall(route, phaseControl, guard)
+                }
             }
             result.copy(latencyMs = elapsedMs(started))
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            guard()
             failedResult(check, error, elapsedMs(started))
         }
     }
 
-    private fun ordinaryChat(route: ProviderCapabilityRoute): ProviderCapabilityResult {
+    private fun ordinaryChat(
+        route: ProviderCapabilityRoute,
+        control: ChatRequestControl,
+        guard: () -> Unit,
+    ): ProviderCapabilityResult {
         val raw = postBoundedRequest(buildJsonObject {
             put("model", route.gatewayModelId)
             put("messages", buildJsonArray {
@@ -110,8 +177,10 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
             put("stream", false)
             put("max_tokens", 32)
             put("temperature", 0.0)
-        })
+        }, control, guard)
         val message = parseChatMessage(raw)
+        guard()
+        control.ensureActive()
         val preview = safeText(message.content, MAX_PREVIEW_CHARS)
         val reasoning = safeText(message.reasoning, MAX_REASONING_CHARS)
         if (preview.isEmpty() && reasoning.isEmpty()) {
@@ -126,23 +195,30 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
         )
     }
 
-    private fun streamingChat(route: ProviderCapabilityRoute): ProviderCapabilityResult {
+    private fun streamingChat(
+        route: ProviderCapabilityRoute,
+        control: ChatRequestControl,
+        guard: () -> Unit,
+    ): ProviderCapabilityResult {
         val content = StringBuilder()
         val reasoning = StringBuilder()
         var streamedCharacters = 0
         var exceeded = false
         try {
+            guard()
+            control.ensureActive()
             StreamingChatClient(config, limits = StreamingChatLimits(
                 maxLineBytes = 256 * 1024,
                 maxResponseBytes = 4L * 1024 * 1024,
                 maxContentChars = MAX_STREAM_CHARS,
                 maxReasoningChars = MAX_STREAM_CHARS,
                 maxCombinedChars = MAX_STREAM_CHARS,
-                maxDuration = Duration.ofSeconds(60),
-            )).streamWithReasoning(
+                maxDuration = requestDuration,
+            ), requestControl = control).streamWithReasoning(
                 model = route.gatewayModelId,
                 messages = TEST_MESSAGES,
                 onReasoning = { delta ->
+                    guard()
                     streamedCharacters += delta.length
                     if (streamedCharacters > MAX_STREAM_CHARS) {
                         exceeded = true
@@ -151,6 +227,7 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
                     reasoning.append(delta)
                 },
                 onDelta = { delta ->
+                    guard()
                     streamedCharacters += delta.length
                     if (streamedCharacters > MAX_STREAM_CHARS) {
                         exceeded = true
@@ -165,6 +242,8 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
             }
             throw error
         }
+        guard()
+        control.ensureActive()
         // The combined builders are already bounded by MAX_STREAM_CHARS. Trim and filter before
         // limiting the preview, so leading blank/control deltas cannot hide a later real answer.
         val preview = safeText(content.toString(), MAX_PREVIEW_CHARS)
@@ -181,10 +260,17 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
         )
     }
 
-    private fun toolCall(route: ProviderCapabilityRoute): ProviderCapabilityResult {
-        val raw = postBoundedToolRequest(route.gatewayModelId)
+    private fun toolCall(
+        route: ProviderCapabilityRoute,
+        control: ChatRequestControl,
+        guard: () -> Unit,
+    ): ProviderCapabilityResult {
+        val raw = postBoundedToolRequest(route.gatewayModelId, control, guard)
         val message = parseChatMessage(raw)
-        return when (val lookup = firstToolCall(message.objectValue)) {
+        val lookup = firstToolCall(message.objectValue)
+        guard()
+        control.ensureActive()
+        return when (lookup) {
             is ToolCallLookup.Valid -> ProviderCapabilityResult(
                 check = ProviderCapabilityCheck.TOOL_CALL,
                 status = ProviderCapabilityStatus.PASSED,
@@ -209,9 +295,18 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
         }
     }
 
-    private fun resolveRoute(providerId: String, savedModelId: String): RouteLookup {
+    private fun resolveRoute(
+        providerId: String,
+        savedModelId: String,
+        control: ChatRequestControl,
+        guard: () -> Unit,
+    ): RouteLookup {
         val prefix = "$providerId/"
-        val entries = ModelsClient(config).list()
+        guard()
+        control.ensureActive()
+        val entries = ModelsClient(config, requestControl = control, maxDuration = requestDuration).list()
+        guard()
+        control.ensureActive()
         val providerEntries = entries.filter { it.ownedBy == providerId }
         if (providerEntries.isEmpty()) {
             return RouteLookup.Unavailable(
@@ -221,6 +316,8 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
         val matches = providerEntries.filter { entry ->
             entry.id.startsWith(prefix) && entry.id.substring(prefix.length) == savedModelId
         }
+        guard()
+        control.ensureActive()
         return when (matches.size) {
             1 -> {
                 val entry = matches.single()
@@ -248,18 +345,27 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
     private fun unavailableReport(
         reason: String,
         onProgress: (ProviderCapabilityResult) -> Unit,
+        guard: () -> Unit,
     ): ProviderCapabilityReport {
         val results = ProviderCapabilityCheck.entries.map { check ->
+            guard()
             ProviderCapabilityResult(
                 check = check,
                 status = ProviderCapabilityStatus.UNAVAILABLE,
                 safeMessage = reason,
-            ).also(onProgress)
+            ).also {
+                onProgress(it)
+                guard()
+            }
         }
         return ProviderCapabilityReport(route = null, results = results)
     }
 
-    private fun postBoundedToolRequest(gatewayModelId: String): String {
+    private fun postBoundedToolRequest(
+        gatewayModelId: String,
+        control: ChatRequestControl,
+        guard: () -> Unit,
+    ): String {
         val body = buildJsonObject {
             put("model", gatewayModelId)
             put("messages", TEST_TOOL_MESSAGES_JSON)
@@ -281,57 +387,47 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
             put("max_tokens", 64)
             put("temperature", 0.0)
         }
-        return postBoundedRequest(body)
+        return postBoundedRequest(body, control, guard)
     }
 
-    private fun postBoundedRequest(body: JsonObject): String {
-        val conn = URL(config.chatCompletionsPath())
-            .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.connectTimeout = config.connectTimeout.toMillis().toInt()
-        conn.readTimeout = config.readTimeout.toMillis().toInt()
-        conn.doOutput = true
-        conn.instanceFollowRedirects = false
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.setRequestProperty("Accept", "application/json")
-        conn.setRequestProperty("Authorization", "Bearer " + config.gatewayKey)
+    private fun postBoundedRequest(
+        body: JsonObject,
+        control: ChatRequestControl,
+        guard: () -> Unit,
+    ): String {
+        guard()
+        control.ensureActive()
+        val request = Request.Builder()
+            .url(config.chatCompletionsPath())
+            .header("Accept", "application/json")
+            .header("Authorization", "Bearer " + config.gatewayKey)
+            .post(ChatHttpTransport.jsonBody(body.toString()))
+            .build()
         try {
-            val bytes = body.toString().toByteArray(Charsets.UTF_8)
-            conn.setFixedLengthStreamingMode(bytes.size)
-            conn.outputStream.use { it.write(bytes) }
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                throw CapabilityFailureException(CapabilityFailure.HTTP, code)
+            guard()
+            control.ensureActive()
+            val response = GatewayHttpReader(config).read(request, MAX_RESPONSE_BYTES, control)
+            guard()
+            control.ensureActive()
+            if (response.code !in 200..299) {
+                throw CapabilityFailureException(CapabilityFailure.HTTP, response.code)
             }
-            if (conn.contentLengthLong > MAX_RESPONSE_BYTES) {
-                throw CapabilityFailureException(CapabilityFailure.RESPONSE_LIMIT)
-            }
-            return readBoundedUtf8(conn)
+            return response.text
         } catch (error: CapabilityFailureException) {
             throw error
+        } catch (_: GatewayResponseLimitException) {
+            guard()
+            control.ensureActive()
+            throw CapabilityFailureException(CapabilityFailure.RESPONSE_LIMIT)
         } catch (_: SocketTimeoutException) {
+            guard()
+            control.ensureActive()
             throw CapabilityFailureException(CapabilityFailure.TIMEOUT)
         } catch (_: IOException) {
+            guard()
+            control.ensureActive()
             throw CapabilityFailureException(CapabilityFailure.IO)
-        } finally {
-            conn.disconnect()
         }
-    }
-
-    private fun readBoundedUtf8(conn: HttpURLConnection): String {
-        val output = ByteArrayOutputStream()
-        val buffer = ByteArray(8 * 1024)
-        conn.inputStream.use { input ->
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                if (output.size() + count > MAX_RESPONSE_BYTES) {
-                    throw CapabilityFailureException(CapabilityFailure.RESPONSE_LIMIT)
-                }
-                output.write(buffer, 0, count)
-            }
-        }
-        return output.toString(Charsets.UTF_8.name())
     }
 
     private fun parseChatMessage(raw: String): ParsedChatMessage {

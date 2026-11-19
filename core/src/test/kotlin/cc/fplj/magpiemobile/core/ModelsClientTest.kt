@@ -4,7 +4,15 @@ import com.sun.net.httpserver.HttpServer
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.io.IOException
 import java.net.InetSocketAddress
+import java.time.Duration
+import java.util.concurrent.CancellationException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
@@ -80,5 +88,147 @@ class ModelsClientTest {
         server.createContext("/v1/models") { ex -> ex.sendResponseHeaders(401, -1) }
         val e = assertFailsWith<ModelsException> { ModelsClient(config()).list() }
         assertEquals(401, e.httpCode)
+    }
+
+    @Test fun nullAndMissingMetadataStayUnknownAndBlankIdsAreSkipped() {
+        server.createContext("/v1/models") { exchange ->
+            val body = """{"data":[{"id":"m","display_name":null,"owned_by":null,"context_window":null},{"id":""},{"id":null},{}]}""".toByteArray()
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        assertEquals(listOf(ModelEntry("m", null, null, null)), ModelsClient(config()).list())
+    }
+
+    @Test fun malformedCatalogShapesExposeOnlyFixedSafeFailure() {
+        val marker = "synthetic-untrusted-catalog-marker"
+        val bodies = listOf(
+            "{broken $marker",
+            "\"$marker\"",
+            """{"data":["$marker"]}""",
+            """{"data":[{"id":{"value":"$marker"}}]}""",
+            """{"data":[{"id":"m","display_name":["$marker"]}]}""",
+            """{"data":[{"id":"m","owned_by":{"value":"$marker"}}]}""",
+            """{"data":[{"id":"m","context_window":{"value":"$marker"}}]}""",
+        )
+        val selected = AtomicReference(bodies.first())
+        server.createContext("/v1/models") { exchange ->
+            val bytes = selected.get().toByteArray(Charsets.UTF_8)
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+        for (body in bodies) {
+            selected.set(body)
+            val failure = assertFailsWith<ModelsException> { ModelsClient(config()).list() }
+            assertEquals(200, failure.httpCode)
+            assertEquals("models: invalid model catalog", failure.message)
+            assertNull(failure.cause)
+            assertTrue(!failure.stackTraceToString().contains(marker))
+        }
+    }
+
+    @Test fun defaultFourMiBCatalogRetainsKnownMetadataAndUtf8() {
+        val maxBytes = 4 * 1024 * 1024
+        val prefix = """{"data":[{"id":"m","display_name":"你好🙂","owned_by":"fixture","context_window":"128000"}],"padding":""""
+        val suffix = "\"}"
+        val body = prefix + "x".repeat(maxBytes - (prefix + suffix).toByteArray(Charsets.UTF_8).size) + suffix
+        val bytes = body.toByteArray(Charsets.UTF_8)
+        assertEquals(maxBytes, bytes.size)
+        server.createContext("/v1/models") { exchange ->
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+        assertEquals(listOf(ModelEntry("m", "你好🙂", "fixture", 128000L)), ModelsClient(config()).list())
+    }
+
+    @Test fun oversizedCatalogFailsWithoutReturningItsValidLeadingRows() {
+        val body = """{"data":[{"id":"must-not-be-returned"}],"padding":"""" + "x".repeat(64) + "\"}"
+        server.createContext("/v1/models") { exchange ->
+            exchange.sendResponseHeaders(200, 0)
+            try { exchange.responseBody.write(body.toByteArray(Charsets.UTF_8)) }
+            catch (_: IOException) { /* The bounded reader cancels immediately. */ }
+            finally { exchange.close() }
+        }
+        assertFailsWith<GatewayResponseLimitException> { ModelsClient(config(), maxResponseBytes = 48).list() }
+    }
+
+    @Test fun callerCancellationInterruptsSilentHeadersAndKeepsItsException() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        val control = ChatRequestControl()
+        server.createContext("/v1/models") { exchange ->
+            entered.countDown()
+            try { release.await(10, TimeUnit.SECONDS) } finally { exchange.close() }
+        }
+        val result = executor.submit<CancellationException> {
+            assertFailsWith<CancellationException> {
+                ModelsClient(config().copy(readTimeout = Duration.ofSeconds(10)), requestControl = control).list()
+            }
+        }
+        try {
+            assertTrue(entered.await(3, TimeUnit.SECONDS))
+            control.cancel()
+            assertEquals("Chat request cancelled", result.get(3, TimeUnit.SECONDS).message)
+            assertEquals(1L, release.count)
+        } finally {
+            control.cancel()
+            release.countDown()
+            result.cancel(true)
+            executor.shutdownNow()
+        }
+    }
+
+    @Test fun ongoingCatalogBytesCannotExtendTotalDeadline() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        val control = ChatRequestControl()
+        val requests = AtomicInteger()
+        val dripped = AtomicInteger()
+        server.createContext("/v1/models") { exchange ->
+            requests.incrementAndGet()
+            exchange.sendResponseHeaders(200, 0)
+            try {
+                exchange.responseBody.write("{\"data\":[{\"id\":\"".toByteArray())
+                exchange.responseBody.flush()
+                entered.countDown()
+                while (!release.await(20, TimeUnit.MILLISECONDS)) {
+                    exchange.responseBody.write('x'.code)
+                    exchange.responseBody.flush()
+                    dripped.incrementAndGet()
+                }
+            } catch (_: IOException) { /* The deadline interrupts the active response. */ }
+            finally { exchange.close() }
+        }
+        val client = ModelsClient(config().copy(readTimeout = Duration.ofSeconds(10)), requestControl = control,
+            maxDuration = Duration.ofSeconds(2))
+        val result = executor.submit<StreamingChatException> {
+            assertFailsWith<StreamingChatException> { client.list() }
+        }
+        try {
+            assertTrue(entered.await(3, TimeUnit.SECONDS))
+            val failure = result.get(4, TimeUnit.SECONDS)
+            assertEquals(StreamingChatFailure.DEADLINE_EXCEEDED, failure.failure)
+            assertNull(failure.cause)
+            assertTrue(dripped.get() > 0)
+            assertEquals(1, requests.get())
+            assertEquals(1L, release.count)
+        } finally {
+            control.cancel()
+            release.countDown()
+            result.cancel(true)
+            executor.shutdownNow()
+        }
+    }
+
+    @Test fun invalidPublicBudgetsAreRejectedBeforeNetwork() {
+        val requests = AtomicInteger()
+        server.createContext("/v1/models") { requests.incrementAndGet(); it.close() }
+        assertFailsWith<IllegalArgumentException> { ModelsClient(config(), maxResponseBytes = 0) }
+        assertFailsWith<IllegalArgumentException> { ModelsClient(config(), maxResponseBytes = -1) }
+        for (duration in listOf(Duration.ZERO, Duration.ofNanos(-1), Duration.ofDays(2))) {
+            assertFailsWith<IllegalArgumentException> { ModelsClient(config(), maxDuration = duration) }
+        }
+        assertEquals(0, requests.get())
     }
 }
