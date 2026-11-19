@@ -5,7 +5,7 @@
 ## 当前源码版本：0.1.51-provider-reconnect（重连列表与保存核对）
 
 - **上游核心**：v0.1.3781（commit `b52c7111`）；
-- **本轮修复**：提供商页面按完整连接轮次刷新，同一服务重连也不复用旧缓存或旧请求；新轮次仍等待旧写入真正退出。未知保存核对成功后清除旧编辑／新建状态，提示从列表重新打开，普通刷新保留草稿。保持现有界面与字体；完整 Actions 与签名候选待验收。详见 [0.1.51 修复与验收记录](docs/bugfixes-0.1.51.md)。
+- **本轮修复**：提供商页面按完整连接轮次刷新，同一服务重连也不复用旧缓存或旧请求；新轮次仍等待旧写入真正退出。未知保存核对成功后清除旧编辑／新建状态，提示从列表重新打开，普通刷新保留草稿。保持现有界面与字体；新增 24 项 JVM 回归，总计 828 项，完整 Actions、签名候选与正式发布均通过。详见 [0.1.51 修复与验收记录](docs/bugfixes-0.1.51.md)。
 - **提供商保存与网关恢复**：提供商操作绑定发起会话并主动取消真实连接，未知保存使用写入屏障与新 GET 核对，BACKOFF 恢复保持最新请求和串行密钥核对。0.1.50 的 804 项 JVM 回归、完整 Actions、签名候选和正式发布均通过。详见 [0.1.50 验收记录](docs/bugfixes-0.1.50.md)。
 - **联通测试取消**：目录、普通、流式和工具检查在关闭或会话变化时主动取消，各项与整轮分别计时；目录限制为 4 MiB／六十秒，底层 Socket 绕过系统 HTTP／SOCKS 代理。0.1.49 的 747 项 JVM 回归及完整 Actions 均通过。详见 [0.1.49 验收记录](docs/bugfixes-0.1.49.md)。
 - **聊天接收与收尾**：流式正文／思考内存预算、跨降级整轮时限、静默连接取消与待定轮次收尾、纯思考普通降级及禁止自动重发已于 0.1.48 完成验证。详见 [0.1.48 修复与验收记录](docs/bugfixes-0.1.48.md)。
@@ -67,7 +67,7 @@
 
 `Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`，才会把同一轮验证产物发布为 Latest Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
-当前可用版本：[`0.1.50-provider-session` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.50-provider-session-e0e1ddd5)，SHA-256 `2255f957b6a572a83dacd9d88333a45d4b4e8bae037b46e38c1375debba03d92`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44608204296)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44605806283)均通过；JVM 804 项、Go、真实官方／社区插件、race 与 Android API 35 模拟器运行结果均为 0 失败。本轮中间候选仅归档到 Actions，完整验证通过后才发布 Release；完整证据与后续巡查范围见 [0.1.50 验收记录](docs/bugfixes-0.1.50.md)。
+当前可用版本：[`0.1.51-provider-reconnect` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.51-provider-reconnect-a24174f5)，SHA-256 `0e209554d48a33a7d6cba87ddffd946040a293aece71737f7b1e0a412a92a46c`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44613300312)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44611302886)均通过；JVM 828 项、Go、真实官方／社区插件、race 与 Android API 35 模拟器运行结果均为 0 失败。本轮中间候选仅归档到 Actions，完整验证通过后才发布 Release；完整证据与后续巡查范围见 [0.1.51 验收记录](docs/bugfixes-0.1.51.md)。
 
 官方插件完整通过基线仍可通过 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)追溯；对应历史 Release 条目已按清理策略移除，运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 
