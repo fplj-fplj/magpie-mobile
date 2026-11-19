@@ -156,7 +156,7 @@ class ProviderCapabilityCancellationTest {
                 val report = result.get(5, TimeUnit.SECONDS)
 
                 assertTrue(gateway.silentPeerClosed.await(2, TimeUnit.SECONDS))
-                assertEquals(Phase.entries, gateway.requests)
+                assertEquals(Phase.entries.toList(), gateway.requests)
                 assertEquals(
                     ProviderCapabilityCheck.entries.map {
                         if (it.ordinal == phase.ordinal - 1) ProviderCapabilityStatus.FAILED
