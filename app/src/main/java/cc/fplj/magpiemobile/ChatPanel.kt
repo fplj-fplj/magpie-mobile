@@ -58,6 +58,7 @@ fun ChatPanel(
     modelGroups: List<ModelPickerGroup>,
     selectedModel: String,
     onSelectModel: (String) -> Unit,
+    onSend: (String, ProviderSessionKey?) -> Unit,
     canConnect: Boolean,
     catalogSession: ProviderSessionKey?,
     providerBusy: Boolean,
@@ -315,7 +316,7 @@ fun ChatPanel(
                             .semantics { testTagsAsResourceId = true },
                         contentPadding = PaddingValues(0.dp),
                         shape = MaterialTheme.shapes.medium,
-                        onClick = { viewModel.send(selectedModel, expectedSession = catalogSession) },
+                        onClick = { onSend(selectedModel, catalogSession) },
                     ) {
                         AppIcon(
                             AppSymbol.SEND,

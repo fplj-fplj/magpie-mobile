@@ -241,6 +241,80 @@ class AppShellViewModelTest {
         assertEquals(2, captured.size)
     }
 
+    @Test fun confirmedModelGateRejectsAnUnfinishedSameKeyRefreshAndAFailedRead() = runTest(dispatcher) {
+        val key = ProviderSessionKey(1, 1)
+        val refresh = CompletableDeferred<List<ModelEntry>>()
+        var captures = 0
+        val vm = createVm(repo(FakeStore(stored()), dispatcher), { key }) { expected ->
+            val number = ++captures
+            TestCatalogConnection(expected, {
+                when (number) {
+                    1 -> entries
+                    2 -> refresh.await()
+                    else -> entries.take(1)
+                }
+            })
+        }
+        assertFalse(vm.isConfirmedModel("p/model-a", key))
+        assertFalse(vm.isConfirmedModel("p/model-a", null))
+        assertEquals(0, captures)
+        vm.connectionChanged()
+        assertTrue(vm.isConfirmedModel("p/model-a", key))
+        assertFalse(vm.isConfirmedModel("p/missing", key))
+        assertFalse(vm.isConfirmedModel("p/model-a", null))
+        assertEquals(1, captures)
+
+        vm.refreshModels()
+        assertTrue(vm.state.value.loadingModels)
+        assertNull(vm.state.value.catalogSession)
+        assertEquals(entries, vm.state.value.models)
+        assertFalse(vm.isConfirmedModel("p/model-a", key))
+        assertFalse(vm.isConfirmedModel("p/model-b", key))
+        assertEquals(2, captures)
+        refresh.completeExceptionally(IllegalStateException("Read failed"))
+        dispatcher.scheduler.runCurrent()
+        assertFalse(vm.state.value.loadingModels)
+        assertFalse(vm.state.value.catalogValid)
+        assertFalse(vm.isConfirmedModel("p/model-a", key))
+        assertEquals("p/model-b", vm.state.value.selectedModel)
+        assertEquals("p/model-b", vm.state.value.preferences.value.modelId)
+        assertEquals(2, captures)
+
+        vm.refreshModels()
+        assertTrue(vm.isConfirmedModel("p/model-a", key))
+        assertFalse(vm.isConfirmedModel("p/model-b", key))
+        assertEquals(3, captures)
+    }
+
+    @Test fun confirmedModelGateRejectsAnOldExpectedEpochAfterTheNewCatalogSucceeds() = runTest(dispatcher) {
+        val previous = ProviderSessionKey(1, 1)
+        var key = previous
+        var captures = 0
+        val vm = createVm(repo(FakeStore(stored()), dispatcher), { key }) { expected ->
+            captures++
+            TestCatalogConnection(expected, { entries }, { key == expected })
+        }
+        vm.connectionChanged()
+        assertTrue(vm.isConfirmedModel("p/model-a", previous))
+        key = ProviderSessionKey(1, 2)
+        assertFalse(vm.isConfirmedModel("p/model-a", previous))
+        assertFalse(vm.isConfirmedModel("p/model-a", key))
+        assertFalse(vm.state.value.catalogValid)
+        assertEquals(1, captures)
+
+        vm.connectionChanged()
+        assertTrue(vm.state.value.catalogValid)
+        assertEquals(key, vm.state.value.catalogSession)
+        assertFalse(vm.isConfirmedModel("p/model-a", previous))
+        assertFalse(vm.isConfirmedModel("p/model-a", ProviderSessionKey(2, 2)))
+        assertFalse(vm.isConfirmedModel("p/model-a", null))
+        assertFalse(vm.isConfirmedModel("p/missing", key))
+        assertTrue(vm.isConfirmedModel("p/model-a", key))
+        assertEquals("p/model-b", vm.state.value.selectedModel)
+        assertEquals("p/model-b", vm.state.value.preferences.value.modelId)
+        assertEquals(2, captures)
+    }
+
     @Test fun lateOldEpochSuccessCannotApplyModelsOrClearTheNewLoadingFlag() = runTest(dispatcher) {
         assertOldCompletionIgnored(fail = false)
     }

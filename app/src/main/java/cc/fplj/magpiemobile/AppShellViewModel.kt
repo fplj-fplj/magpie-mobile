@@ -84,6 +84,13 @@ class AppShellViewModel internal constructor(
         save { preferences.setTheme(theme) }
     }
 
+    /** Validate the caller's captured catalog without acquiring or replacing its connection. */
+    fun isConfirmedModel(id: String, expectedSession: ProviderSessionKey?): Boolean {
+        if (expectedSession == null || !hasCurrentCatalog()) return false
+        val snapshot = mutable.value
+        return snapshot.catalogSession == expectedSession && snapshot.models.any { it.id == id }
+    }
+
     fun selectModel(id: String) {
         val snapshot = mutable.value
         if (!hasCurrentCatalog() || snapshot.models.none { it.id == id }) return

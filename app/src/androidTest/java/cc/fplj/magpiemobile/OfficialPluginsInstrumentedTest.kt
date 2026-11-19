@@ -920,6 +920,13 @@ class OfficialPluginsInstrumentedTest {
             }.id
             instrumentation.runOnMainSync { shell.selectModel(model); chat.newConversation() }
             await("isolated reconnect conversation") { !chat.state.value.busy && chat.state.value.messages.isEmpty() }
+            instrumentation.runOnMainSync {
+                shell.refreshModels()
+                assertFalse("a stale callback must be rejected before recomposition", shell.isConfirmedModel(model, before))
+            }
+            await("same-key catalog refresh confirmed") {
+                shell.state.value.catalogValid && shell.state.value.catalogSession == before
+            }
             val conversation = requireNotNull(chat.state.value.selected).id
             val repo = ChatRepository.open(context)
             instrumentation.runOnMainSync {
@@ -963,6 +970,10 @@ class OfficialPluginsInstrumentedTest {
                 shell.state.value.catalogValid && shell.state.value.catalogSession == after
             }
             assertEquals(model, shell.state.value.selectedModel)
+            instrumentation.runOnMainSync {
+                assertFalse("old model sheet callback must not select in a new epoch", shell.isConfirmedModel(model, before))
+                assertTrue(shell.isConfirmedModel(model, after))
+            }
             assertEquals(0, upstream.requests.count { it.contains(retry) })
             instrumentation.runOnMainSync { chat.send(model, expectedSession = shell.state.value.catalogSession) }
             await("explicit retry saved exactly once") { !chat.state.value.sending && chat.state.value.draft.isEmpty() }

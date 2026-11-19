@@ -241,7 +241,15 @@ fun Dashboard(
                         viewModel = chatViewModel,
                         modelGroups = groups,
                         selectedModel = shell.selectedModel,
-                        onSelectModel = appShell::selectModel,
+                        onSelectModel = { id ->
+                            if (appShell.isConfirmedModel(id, catalogSession)) appShell.selectModel(id)
+                        },
+                        onSend = { model, expected ->
+                            if (appShell.state.value.selectedModel == model &&
+                                appShell.isConfirmedModel(model, expected)) {
+                                chatViewModel.send(model, expectedSession = expected)
+                            }
+                        },
                         canConnect = catalogSession != null,
                         catalogSession = catalogSession,
                         providerBusy = providerBusy,
