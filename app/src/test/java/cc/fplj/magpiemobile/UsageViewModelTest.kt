@@ -1,8 +1,10 @@
 package cc.fplj.magpiemobile
 
 import cc.fplj.magpiemobile.core.UsageRecord
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -12,6 +14,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -122,6 +125,122 @@ class UsageViewModelTest {
         assertFalse(cleared.loading)
         assertTrue(cleared.requests.isEmpty())
         assertEquals("", cleared.error)
+    }
+
+    @Test
+    fun clearRejectsLateRequestSuccessEvenIfReaderIgnoresCancellation() = runTest(testDispatcher) {
+        val response = CompletableDeferred<List<UsageRecord>>()
+        val vm = UsageViewModel(requestsReader = { withContext(NonCancellable) { response.await() } })
+        vm.refresh()
+        assertTrue(vm.state.value.loading)
+
+        vm.clear()
+        response.complete(listOf(sample1))
+        advanceUntilIdle()
+
+        assertEquals(UsageUiState(), vm.state.value)
+    }
+
+    @Test
+    fun clearRejectsLateRequestFailure() = runTest(testDispatcher) {
+        val response = CompletableDeferred<Unit>()
+        val vm = UsageViewModel(requestsReader = {
+            withContext(NonCancellable) { response.await() }
+            error("old connection failed")
+        })
+        vm.refresh()
+        vm.clear()
+        response.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(UsageUiState(), vm.state.value)
+    }
+
+    @Test
+    fun newestRefreshWinsWhenEarlierReaderFinishesLast() = runTest(testDispatcher) {
+        val older = CompletableDeferred<List<UsageRecord>>()
+        val newer = CompletableDeferred<List<UsageRecord>>()
+        var reads = 0
+        val vm = UsageViewModel(requestsReader = {
+            val response = if (++reads == 1) older else newer
+            withContext(NonCancellable) { response.await() }
+        })
+        vm.refresh()
+        vm.refresh()
+        newer.complete(listOf(sample2))
+        advanceUntilIdle()
+        assertEquals(listOf(sample2), vm.state.value.requests)
+
+        older.complete(listOf(sample1))
+        advanceUntilIdle()
+        assertEquals(listOf(sample2), vm.state.value.requests)
+        assertFalse(vm.state.value.loading)
+    }
+
+    @Test
+    fun clearCancelsOldInsightsBeforeTheyCanMixWithReconnectedSession() = runTest(testDispatcher) {
+        val older = CompletableDeferred<String>()
+        var reads = 0
+        val vm = UsageViewModel(
+            insightsReader = {
+                if (++reads == 1) withContext(NonCancellable) { older.await() } else "new-session"
+            },
+            summaryReader = { "new-summary" },
+            speedsReader = { emptyMap() },
+            catalogReader = { emptyList() },
+            ioDispatcher = testDispatcher,
+        )
+        vm.loadInsights()
+        assertTrue(vm.state.value.insightsLoading)
+        vm.clear()
+        vm.loadInsights()
+        advanceUntilIdle()
+        assertEquals("new-session", vm.state.value.heatmapJson)
+
+        older.complete("old-session")
+        advanceUntilIdle()
+        assertEquals("new-session", vm.state.value.heatmapJson)
+        assertEquals("new-summary", vm.state.value.summaryJson)
+        assertEquals(4, reads) // Old session never proceeds to quotas or history.
+        assertFalse(vm.state.value.insightsLoading)
+        assertEquals("", vm.state.value.insightsError)
+    }
+
+    @Test
+    fun reattachingSameCoreRetainsLoadedDataAndPendingInsightsAcrossActivityRecreation() = runTest(testDispatcher) {
+        val heatmap = CompletableDeferred<String>()
+        var reads = 0
+        val vm = UsageViewModel(
+            requestsReader = { listOf(sample1) },
+            insightsReader = { if (++reads == 1) heatmap.await() else "quota-data" },
+            summaryReader = { "summary" },
+            speedsReader = { emptyMap() },
+            catalogReader = { emptyList() },
+            ioDispatcher = testDispatcher,
+        )
+        vm.attach(1L)
+        vm.refresh()
+        vm.loadInsights()
+        val pending = vm.state.value
+        assertTrue(pending.insightsLoading)
+        assertEquals(listOf(sample1), pending.requests)
+
+        vm.attach(1L) // Dashboard LaunchedEffect runs again after Activity recreation.
+        assertEquals(pending, vm.state.value)
+        heatmap.complete("heatmap")
+        advanceUntilIdle()
+        val loaded = vm.state.value
+        assertEquals("heatmap", loaded.heatmapJson)
+        assertEquals("summary", loaded.summaryJson)
+        assertFalse(loaded.insightsLoading)
+        vm.attach(1L)
+        assertEquals(loaded, vm.state.value)
+
+        vm.attach(2L) // Direct owner changes also invalidate the old session.
+        assertEquals(UsageUiState(), vm.state.value)
+        vm.refresh()
+        vm.attach(null)
+        assertEquals(UsageUiState(), vm.state.value)
     }
 
     @Test

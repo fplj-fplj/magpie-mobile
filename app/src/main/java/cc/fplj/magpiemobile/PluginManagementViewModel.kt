@@ -119,13 +119,22 @@ internal class PluginManagementViewModel(
     private var signInId = ""
     var onChanged: () -> Unit = {}
 
+    init {
+        // Older versions could retain a spec before the HTTP client rejected URL credentials.
+        // Discard that recovery marker instead of restoring it into the public operation state.
+        savedState.get<String>("plugin.spec")?.takeIf { it.isNotEmpty() }?.let { spec ->
+            if (runCatching { PluginManagementClient.validateSpec(spec) }.isFailure) clearPending()
+        }
+    }
+
     fun attach(session: Long?) {
         if (owner == session) return
         owner = session
         generation++
         marketGeneration++
+        refreshQueued = false
         clearLogin()
-        mutable.update { it.copy(snapshot = PluginSnapshot(), providers = emptyList(), loading = false, busy = false, error = "",
+        mutable.update { it.copy(snapshot = PluginSnapshot(), providers = emptyList(), market = PluginMarketSnapshot(), loading = false, busy = false, error = "",
             pending = savedState["plugin.pending"] ?: false, pendingSpec = savedState["plugin.spec"] ?: "") }
         if (session != null) refresh()
     }
@@ -134,12 +143,13 @@ internal class PluginManagementViewModel(
         val session = owner ?: return
         if (mutable.value.busy) { refreshQueued = true; return }
         val revision = ++generation
+        marketGeneration++
         mutable.update { it.copy(loading = true, error = "") }
         viewModelScope.launch {
             try {
                 val plugins = readPlugins()
                 if (owner != session || revision != generation) return@launch
-                mutable.update { it.copy(snapshot = plugins, providers = emptyList()) }
+                mutable.update { it.copy(snapshot = plugins, providers = emptyList(), market = it.market.withInstalled(plugins)) }
                 val providers = readProviders()
                 if (owner != session || revision != generation) return@launch
                 val pending = mutable.value.pending
@@ -176,18 +186,27 @@ internal class PluginManagementViewModel(
     fun edit(edit: PluginEdit): Boolean {
         val session = owner ?: return false
         if (mutable.value.busy || mutable.value.pending || mutable.value.authBusy) return false
+        val savedSpec = if (edit != PluginEdit.UpdateAll && edit != PluginEdit.RestoreGatewayAccess) {
+            try {
+                PluginManagementClient.validateSpec(edit.spec)
+            } catch (_: IllegalArgumentException) {
+                mutable.update { it.copy(error = "请检查插件地址或参数格式；插件地址不能包含 URL 凭据") }
+                return false
+            }
+        } else ""
         val revision = ++generation
+        marketGeneration++
         pendingEdit = edit
         prior = mutable.value.snapshot
         savedState["plugin.pending"] = true
-        savedState["plugin.spec"] = edit.spec
+        savedState["plugin.spec"] = savedSpec
         savedState["plugin.started"] = clock()
         when (edit) {
             is PluginEdit.Add -> savedState["plugin.operation"] = "add"
             is PluginEdit.Remove -> savedState["plugin.operation"] = "remove"
             else -> savedState.remove<String>("plugin.operation")
         }
-        mutable.update { it.copy(busy = true, pendingSpec = edit.spec, error = "", notice = "") }
+        mutable.update { it.copy(busy = true, loading = false, pendingSpec = savedSpec, error = "", notice = "") }
         viewModelScope.launch {
             var known = false
             try {
@@ -198,7 +217,7 @@ internal class PluginManagementViewModel(
                 reconcileImports(result)
                 if (owner != session || revision != generation) return@launch
                 clearPending()
-                mutable.update { it.copy(snapshot = result, notice = "核心配置已更新") }
+                mutable.update { it.copy(snapshot = result, market = it.market.withInstalled(result), notice = "核心配置已更新") }
                 onChanged()
                 val providers = readProviders()
                 if (revision == generation) mutable.update { it.copy(providers = providers) }
@@ -384,6 +403,11 @@ internal class PluginManagementViewModel(
         is IllegalArgumentException -> "请检查插件地址或参数格式"
         else -> "插件操作失败，请重新读取核心状态"
     }
+
+    private fun PluginMarketSnapshot.withInstalled(snapshot: PluginSnapshot): PluginMarketSnapshot = copy(
+        installed = snapshot.entries,
+        matchedSpecs = snapshot.entries.filter { entry -> listings.any { entry.matchesListing(it) } }.map { it.spec },
+    )
 
     companion object {
         private const val UNKNOWN_WAIT = 6L * 60 * 1000

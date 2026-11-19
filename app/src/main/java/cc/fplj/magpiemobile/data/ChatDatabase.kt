@@ -137,6 +137,12 @@ interface ChatDao {
 
     @Query("DELETE FROM conversation WHERE id = :id AND legacy = 0")
     fun deleteConversationRow(id: String): Int
+
+    @Query("DELETE FROM message WHERE conversationId = :conversationId")
+    fun deleteConversationMessages(conversationId: String): Int
+
+    @Query("DELETE FROM operation WHERE conversationId = :conversationId")
+    fun deleteConversationOperations(conversationId: String): Int
 }
 
 @Database(

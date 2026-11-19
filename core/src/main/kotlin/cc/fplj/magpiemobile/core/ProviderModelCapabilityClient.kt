@@ -96,19 +96,32 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
     }
 
     private fun ordinaryChat(route: ProviderCapabilityRoute): ProviderCapabilityResult {
-        val raw = ChatClient(config).complete(
-            model = route.gatewayModelId,
-            messages = TEST_MESSAGES,
-            maxTokens = 32,
-            temperature = 0.0,
-        )
+        val raw = postBoundedRequest(buildJsonObject {
+            put("model", route.gatewayModelId)
+            put("messages", buildJsonArray {
+                TEST_MESSAGES.forEach { message ->
+                    add(buildJsonObject {
+                        put("role", message.role)
+                        put("content", message.content)
+                    })
+                }
+            })
+            put("stream", false)
+            put("max_tokens", 32)
+            put("temperature", 0.0)
+        })
         val message = parseChatMessage(raw)
+        val preview = safeText(message.content, MAX_PREVIEW_CHARS)
+        val reasoning = safeText(message.reasoning, MAX_REASONING_CHARS)
+        if (preview.isEmpty() && reasoning.isEmpty()) {
+            throw CapabilityFailureException(CapabilityFailure.INVALID_RESPONSE)
+        }
         return ProviderCapabilityResult(
             check = ProviderCapabilityCheck.NON_STREAMING,
             status = ProviderCapabilityStatus.PASSED,
             safeMessage = "非流式请求已通过",
-            preview = safeText(message.content, MAX_PREVIEW_CHARS),
-            reasoning = safeText(message.reasoning, MAX_REASONING_CHARS),
+            preview = preview,
+            reasoning = reasoning,
         )
     }
 
@@ -127,7 +140,7 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
                         exceeded = true
                         throw StreamingLimitReached()
                     }
-                    if (reasoning.length < MAX_REASONING_CHARS) reasoning.append(delta)
+                    reasoning.append(delta)
                 },
                 onDelta = { delta ->
                     streamedCharacters += delta.length
@@ -135,7 +148,7 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
                         exceeded = true
                         throw StreamingLimitReached()
                     }
-                    if (content.length < MAX_PREVIEW_CHARS) content.append(delta)
+                    content.append(delta)
                 },
             )
         } catch (error: StreamingChatException) {
@@ -144,12 +157,19 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
             }
             throw error
         }
+        // The combined builders are already bounded by MAX_STREAM_CHARS. Trim and filter before
+        // limiting the preview, so leading blank/control deltas cannot hide a later real answer.
+        val preview = safeText(content.toString(), MAX_PREVIEW_CHARS)
+        val reasoningPreview = safeText(reasoning.toString(), MAX_REASONING_CHARS)
+        if (preview.isEmpty() && reasoningPreview.isEmpty()) {
+            throw CapabilityFailureException(CapabilityFailure.INVALID_RESPONSE)
+        }
         return ProviderCapabilityResult(
             check = ProviderCapabilityCheck.STREAMING,
             status = ProviderCapabilityStatus.PASSED,
             safeMessage = "流式响应已完整收到 [DONE]",
-            preview = safeText(content.toString(), MAX_PREVIEW_CHARS),
-            reasoning = safeText(reasoning.toString(), MAX_REASONING_CHARS),
+            preview = preview,
+            reasoning = reasoningPreview,
         )
     }
 
@@ -234,7 +254,7 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
     private fun postBoundedToolRequest(gatewayModelId: String): String {
         val body = buildJsonObject {
             put("model", gatewayModelId)
-            put("messages", TEST_MESSAGES_JSON)
+            put("messages", TEST_TOOL_MESSAGES_JSON)
             put("tools", buildJsonArray {
                 add(buildJsonObject {
                     put("type", "function")
@@ -252,8 +272,11 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
             put("stream", false)
             put("max_tokens", 64)
             put("temperature", 0.0)
-        }.toString()
+        }
+        return postBoundedRequest(body)
+    }
 
+    private fun postBoundedRequest(body: JsonObject): String {
         val conn = URL(config.chatCompletionsPath())
             .openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
         conn.requestMethod = "POST"
@@ -265,7 +288,7 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
         conn.setRequestProperty("Accept", "application/json")
         conn.setRequestProperty("Authorization", "Bearer " + config.gatewayKey)
         try {
-            val bytes = body.toByteArray(Charsets.UTF_8)
+            val bytes = body.toString().toByteArray(Charsets.UTF_8)
             conn.setFixedLengthStreamingMode(bytes.size)
             conn.outputStream.use { it.write(bytes) }
             val code = conn.responseCode
@@ -454,7 +477,7 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
             ChatClient.Message("system", "You are a helpful assistant"),
             ChatClient.Message("user", "hello"),
         )
-        val TEST_MESSAGES_JSON = buildJsonArray {
+        val TEST_TOOL_MESSAGES_JSON = buildJsonArray {
             add(buildJsonObject {
                 put("role", "system")
                 put("content", "You are a helpful assistant")

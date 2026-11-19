@@ -202,9 +202,9 @@ fun ProvidersPanel(
         delay(1000) // settle URL/credential changes; old requests cannot apply to this generation
         var request: ProviderModelDiscoveryRequest? = null
         try {
-            val requestedBaseUrl = runCatching { ProviderBaseUrl.normalize(baseUrl) }.getOrNull()
+            val requestedCanonicalBaseUrl = runCatching { ProviderBaseUrl.normalize(baseUrl) }.getOrNull()
                 ?: return@LaunchedEffect
-            if (requestedBaseUrl != normalized) return@LaunchedEffect
+            if (requestedCanonicalBaseUrl != normalized) return@LaunchedEffect
             val requestedKeyFingerprint = providerKeyFingerprint(key)
             val requestedLocalHttp = localHttp
             val requestedProviderId = snapshot?.id
@@ -215,7 +215,7 @@ fun ProvidersPanel(
             val requestStillCurrent = ProviderCatalogSyncPolicy.requestIsCurrent(
                 requestedSequence = sequence,
                 currentSequence = catalogSequence,
-                requestedBaseUrl = requestedBaseUrl,
+                requestedCanonicalBaseUrl = requestedCanonicalBaseUrl,
                 currentBaseUrl = baseUrl,
                 requestedKeyFingerprint = requestedKeyFingerprint,
                 currentKeyFingerprint = providerKeyFingerprint(key),
@@ -230,7 +230,7 @@ fun ProvidersPanel(
             )
             if (requestStillCurrent) {
                 ProviderCatalogSyncPolicy.adoptedBaseUrl(
-                    requestedBaseUrl = requestedBaseUrl,
+                    requestedCanonicalBaseUrl = requestedCanonicalBaseUrl,
                     currentBaseUrl = baseUrl,
                     returnedBaseUrl = catalog.baseUrl,
                     requestStillCurrent = true,
@@ -295,7 +295,7 @@ fun ProvidersPanel(
             try {
                 val edit = withContext(Dispatchers.IO) { NativeCoreSession.providerClient().editable(provider.id) }
                 if (current(session, sequence)) {
-                    val shownBase = runCatching { ProviderBaseUrl.normalize(edit.chatUrl) }.getOrDefault(edit.chatUrl)
+                    val shownBase = runCatching { ProviderBaseUrl.storedBaseFormValue(edit.chatUrl) }.getOrDefault(edit.chatUrl)
                     snapshot = edit; id = edit.id; name = edit.name; baseUrl = shownBase; key = ""; serverPin = edit.serverPin
                     nameTouched = true; idTouched = true; localHttp = edit.chatUrl.startsWith("http://")
                     manual = false; editorTab = 0; showKey = false

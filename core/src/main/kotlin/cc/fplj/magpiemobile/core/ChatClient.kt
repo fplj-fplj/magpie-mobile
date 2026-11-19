@@ -5,6 +5,8 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -51,10 +53,20 @@ class ChatClient(private val config: GatewayConfig) {
             conn.setFixedLengthStreamingMode(bytes.size)
             conn.outputStream.use { it.write(bytes) }
             val code = conn.responseCode
-            // 错误响应可能没有 body（如 429 空 body）：errorStream 可能为 null，不能直接读
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.bufferedReader()?.readText().orEmpty()
+            // Status is sufficient: a slow or unbounded error body must not hide HTTP 429/503.
             if (code !in 200..299) throw ChatException("chat -> HTTP " + code, code)
+            if (conn.contentLengthLong > MAX_RESPONSE_BYTES) throw responseLimitExceeded()
+            val text = conn.inputStream.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = input.read(buffer, 0, minOf(buffer.size, MAX_RESPONSE_BYTES + 1 - output.size()))
+                    if (count == -1) break
+                    if (output.size() + count > MAX_RESPONSE_BYTES) throw responseLimitExceeded()
+                    output.write(buffer, 0, count)
+                }
+                output.toString(Charsets.UTF_8.name())
+            }
             // 宽松返回原始 JSON：choices 形状上游未钉死（plan.md §4.2），由上层按需取字段
             return text
         } finally {
@@ -64,6 +76,14 @@ class ChatClient(private val config: GatewayConfig) {
 
     @Serializable
     data class Message(val role: String, val content: String)
+
+    private fun responseLimitExceeded() = IOException("Chat response exceeds the 4 MiB size limit")
+
+    companion object {
+        // Ordinary chat may contain long answers and reasoning; this is larger than capability
+        // probes, but caps memory for both Content-Length and chunked/unknown-length responses.
+        internal const val MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+    }
 }
 
 class ChatException(message: String, val httpCode: Int) : RuntimeException(message)

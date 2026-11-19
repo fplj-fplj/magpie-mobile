@@ -412,14 +412,7 @@ class PluginManagementClient(
         )
     }
 
-    private fun requireSpec(spec: String): String {
-        val value = spec.trim()
-        require(value.isNotEmpty() && value.length <= 4096 && value.none { it.isISOControl() }) { "插件 spec 无效" }
-        // A git+https/http URL carrying user:token credentials would be kept verbatim in
-        // plugins.json, SavedState and logs; private repository tokens belong to the web editor.
-        require(!specUrlCredentials.containsMatchIn(value)) { "插件 spec 不得携带 URL 凭据；请用网页编辑器配置私有访问令牌" }
-        return value
-    }
+    private fun requireSpec(spec: String): String = validateSpec(spec)
 
     private fun requirePathSegment(value: String, message: String) {
         require(validGatewayId(value) && value.none { it == '/' || it == '\\' }) { message }
@@ -472,6 +465,16 @@ class PluginManagementClient(
 
     companion object {
         private val specUrlCredentials = Regex("[a-zA-Z][a-zA-Z0-9+.-]*://[^/?#\\s]*@")
+
+        /** Validate before retaining a spec in saved state as well as before sending it to the core. */
+        fun validateSpec(spec: String): String {
+            val value = spec.trim()
+            require(value.isNotEmpty() && value.length <= 4096 && value.none { it.isISOControl() }) { "插件 spec 无效" }
+            // URL userinfo is a credential, and must never reach plugins.json or saved state.
+            require(!specUrlCredentials.containsMatchIn(value)) { "插件 spec 不得携带 URL 凭据；请用网页编辑器配置私有访问令牌" }
+            return value
+        }
+
         internal val READ_TIMEOUT: Duration = Duration.ofSeconds(90)
         internal val WRITE_TIMEOUT: Duration = Duration.ofMinutes(6)
         private const val MAX_WRITE_BODY_BYTES = 64 * 1024

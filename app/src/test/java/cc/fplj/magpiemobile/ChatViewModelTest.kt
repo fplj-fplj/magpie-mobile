@@ -184,6 +184,49 @@ class ChatViewModelTest {
         }
     }
 
+    @Test fun deletingSelectedConversationRestoresFallbackDraftAndClearsOnlyItsFailedPreview() {
+        Probe(success = false, reasoning = "unfinished reasoning").use { probe ->
+            val vm = vm { ChatConnection(probe.config) { true } }
+            val first = checkNotNull(vm.state.value.selected).id
+            vm.editDraft("first conversation draft")
+            vm.newConversation(); settled(vm)
+            val second = checkNotNull(vm.state.value.selected).id
+            vm.editDraft("second conversation draft")
+            vm.send("provider/model")
+            assertTrue(probe.started.await(10, TimeUnit.SECONDS))
+            probe.release.countDown()
+            val failed = settled(vm)
+            assertEquals("answer", failed.partial)
+            assertEquals("unfinished reasoning", failed.partialReasoning)
+
+            // Deleting an unrelated row must preserve the selected conversation's draft and preview.
+            val unrelated = runBlocking(Dispatchers.IO) { repo.createConversation() }
+            vm.deleteConversation(unrelated)
+            val retained = settled(vm)
+            assertEquals(second, retained.selected?.id)
+            assertEquals("second conversation draft", retained.draft)
+            assertEquals("answer", retained.partial)
+            assertEquals("unfinished reasoning", retained.partialReasoning)
+
+            vm.deleteConversation(second)
+            val restored = settled(vm)
+            assertEquals(first, restored.selected?.id)
+            assertEquals("first conversation draft", restored.draft)
+            assertEquals("", restored.partial)
+            assertEquals("", restored.partialReasoning)
+            assertEquals("", restored.notice)
+            assertNull(runBlocking(Dispatchers.IO) { repo.conversation(second) })
+
+            // Removing the final conversation creates an empty fallback without inheriting its draft.
+            vm.deleteConversation(first)
+            val fresh = settled(vm)
+            assertNotEquals(first, fresh.selected?.id)
+            assertEquals("", fresh.draft)
+            assertTrue(fresh.messages.isEmpty())
+            assertEquals(1, probe.requests.get())
+        }
+    }
+
     @Test fun successfulReasoningIsShownInHistoryButExcludedFromNextContext() {
         Probe(reasoning = "先理解问题，再组织答案。").use { probe ->
             val vm = vm { ChatConnection(probe.config) { true } }

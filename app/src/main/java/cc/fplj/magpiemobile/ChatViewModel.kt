@@ -139,6 +139,12 @@ class ChatViewModel internal constructor(
                 drafts.remove(id)
                 // Deleted selection falls back to the newest live conversation automatically.
                 loadLatest(if (snapshot.selected?.id == id) null else snapshot.selected?.id)
+                if (snapshot.selected?.id == id) {
+                    mutable.update {
+                        it.copy(draft = drafts[it.selected?.id].orEmpty(), partial = "",
+                            partialReasoning = "", notice = "")
+                    }
+                }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { mutable.update { it.copy(notice = "会话删除失败；若该会话正在发送，请稍后重试。") } }
             finally { mutable.update { it.copy(busy = false) } }

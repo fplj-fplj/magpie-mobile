@@ -139,10 +139,11 @@ fun Dashboard(
     }
     LaunchedEffect(clientReady, owner) {
         appShell.connectionChanged()
+        usageViewModel.attach(owner)
         if (clientReady) {
             keysViewModel.refresh()
             usageViewModel.refresh(5)
-        } else usageViewModel.clear()
+        }
     }
     BackHandler(enabled = section != null || shell.page != AppPage.GATEWAY) { back() }
 

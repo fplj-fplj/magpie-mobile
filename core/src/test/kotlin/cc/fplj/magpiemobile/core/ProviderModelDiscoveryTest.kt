@@ -50,6 +50,28 @@ class ProviderModelDiscoveryTest {
         assertEquals("https://api.example", ProviderBaseUrl.normalize("https://api.example/responses/"))
         assertEquals("https://api.example/chat/completions", request(url = "https://api.example/chat/completions").chatUrl)
     }
+    @Test fun reopenedSavedRootKeepsItsExplicitEndpointForDiscovery() {
+        for (saved in listOf("https://api.example", "https://api.example/")) {
+            val formValue = ProviderBaseUrl.storedBaseFormValue(saved)
+            assertEquals("https://api.example/chat/completions", formValue)
+            assertEquals("https://api.example", ProviderBaseUrl.normalize(formValue))
+            val discovery = request(url = formValue)
+            assertEquals("https://api.example", discovery.baseUrl)
+            assertEquals("https://api.example/chat/completions", discovery.chatUrl)
+        }
+        // A newly typed bare origin still receives the usual /v1 default.
+        assertEquals("https://api.example/v1", request(url = "https://api.example").baseUrl)
+    }
+    @Test fun reopenedSavedPrefixesAndLegacyFullEndpointsKeepExistingBehavior() {
+        for ((saved, expected) in listOf(
+            "https://api.example/v1/" to "https://api.example/v1",
+            "https://api.example/custom/v2" to "https://api.example/custom/v2",
+            "https://api.example/v1/chat/completions" to "https://api.example/v1",
+            "https://api.example/chat/completions" to "https://api.example/chat/completions",
+        )) {
+            assertEquals(expected, ProviderBaseUrl.storedBaseFormValue(saved))
+        }
+    }
     @Test fun normalizeRejectsCredentialsQueryControlsTraversalAndNonHttpSchemes() {
         for (input in listOf("https://secret@api.example", "https://api.example?key=secret", "https://api.example#secret",
             "https://api.example/\n", "https://api.example/v1/../admin", "https://api.example/%76%31",

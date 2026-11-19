@@ -31,6 +31,20 @@ object ProviderBaseUrl {
         return try { providerChatUrl(base, true) } catch (_: Exception) { throw invalidBaseUrl() }
     }
 
+    /** A saved root is explicit, unlike a new bare-origin input that defaults to /v1. Represent
+     * it by its full endpoint in the editable form so later discovery/save preserves that root.
+     * Other inputs keep the existing normalization, including legacy pasted endpoint repair.
+     */
+    fun storedBaseFormValue(input: String): String {
+        val candidate = inputUri(input)
+        val base = if (candidate.rawPath.orEmpty().trimEnd('/').isEmpty()) {
+            candidate.toString().trimEnd('/')
+        } else {
+            normalize(input)
+        }
+        return if (URI(base).rawPath.orEmpty().isEmpty()) base + "/chat/completions" else base
+    }
+
     /** Empty means no suggestion yet. Callers keep their own id/name-dirty flags, so a user's
      * manual edits are never overwritten by subsequent URL/debounce results.
      */

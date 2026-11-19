@@ -82,10 +82,13 @@ class ChatRepository(val database: ChatDatabase) {
 
     /**
      * Delete one non-legacy conversation with all messages/operations in a single transaction.
-     * A RUNNING turn blocks deletion via FK RESTRICT; the exception surfaces as failure, never a partial delete.
+     * Reject a RUNNING turn before removing children; FK RESTRICT requires messages before operations.
      */
     fun deleteConversation(id: String) = transaction {
         requireWritableConversation(id)
+        check(dao.runningOperation(id) == null) { "A chat turn is still running" }
+        dao.deleteConversationMessages(id)
+        dao.deleteConversationOperations(id)
         check(dao.deleteConversationRow(id) == 1) { "Chat conversation not found" }
     }
 

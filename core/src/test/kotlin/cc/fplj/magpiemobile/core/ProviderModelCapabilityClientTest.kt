@@ -6,6 +6,7 @@ import java.net.InetSocketAddress
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -239,6 +240,155 @@ class ProviderModelCapabilityClientTest {
         assertTrue(tool.safeMessage.contains("格式或参数无效"))
         assertFalse(tool.toString().contains("gateway-test-key"))
         assertFalse(tool.preview.contains("gateway-test-key"))
+    }
+
+    @Test
+    fun emptyOrNonStringOrdinaryMessagesFailWithoutBreakingOtherChecks() {
+        val message = AtomicReference("{}")
+        capabilityResponses(ordinary = { exchange ->
+            respondJson(exchange, """{"choices":[{"message":${message.get()}}]}""")
+        })
+
+        for (invalid in listOf(
+            """{"role":"assistant"}""",
+            """{"content":null,"reasoning_content":null}""",
+            """{"content":42,"reasoning_content":false,"reasoning":{}}""",
+            """{"content":[],"reasoning_content":[]}""",
+            """{"content":"\u0000\u0007 \n\t","reasoning_content":" \n\t"}""",
+        )) {
+            message.set(invalid)
+            val report = client().run("saved", "vendor/model")
+
+            assertEquals(ProviderCapabilityStatus.FAILED, report.results[0].status)
+            assertEquals("上游返回了无法验证的响应", report.results[0].safeMessage)
+            assertEquals("", report.results[0].preview)
+            assertEquals("", report.results[0].reasoning)
+            assertTrue(report.results.drop(1).all { it.status == ProviderCapabilityStatus.PASSED })
+        }
+    }
+
+    @Test
+    fun emptySseAndNullDeltasDoNotPassJustBecauseDoneArrived() {
+        val stream = AtomicReference("data: [DONE]\n\n")
+        capabilityResponses(stream = { stream.get() })
+
+        for (invalid in listOf(
+            "data: [DONE]\n\n",
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
+                "data: [DONE]\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":null,\"reasoning_content\":null}}]}\n\n" +
+                "data: [DONE]\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\\u0000 \\n\\t\",\"reasoning_content\":\" \\n\"}}]}\n\n" +
+                "data: [DONE]\n\n",
+        )) {
+            stream.set(invalid)
+            val report = client().run("saved", "vendor/model")
+
+            assertEquals(ProviderCapabilityStatus.PASSED, report.results[0].status)
+            assertEquals(ProviderCapabilityStatus.FAILED, report.results[1].status)
+            assertEquals("上游返回了无法验证的响应", report.results[1].safeMessage)
+            assertEquals(ProviderCapabilityStatus.PASSED, report.results[2].status)
+        }
+    }
+
+    @Test
+    fun reasoningOnlyResponsesAreValidAndKeepTheirThinkingDetails() {
+        capabilityResponses(
+            ordinary = { exchange ->
+                respondJson(
+                    exchange,
+                    """{"choices":[{"message":{"content":null,"reasoning_content":null,"reasoning":"  plain thought  "}}]}""",
+                )
+            },
+            stream = {
+                "data: {\"choices\":[{\"delta\":{\"content\":null,\"reasoning_content\":\"  stream thought  \"}}]}\n\n" +
+                    "data: [DONE]\n\n"
+            },
+        )
+
+        val report = client().run("saved", "vendor/model")
+
+        assertTrue(report.results.all { it.status == ProviderCapabilityStatus.PASSED })
+        assertEquals("", report.results[0].preview)
+        assertEquals("plain thought", report.results[0].reasoning)
+        assertEquals("", report.results[1].preview)
+        assertEquals("stream thought", report.results[1].reasoning)
+    }
+
+    @Test
+    fun leadingWhitespaceBeyondPreviewLimitDoesNotHideRealStreamContent() {
+        capabilityResponses(stream = {
+            "data: {\"choices\":[{\"delta\":{\"content\":\"${" ".repeat(400)}\",\"reasoning_content\":\"${" ".repeat(2_100)}\"}}]}\n\n" +
+                "data: {\"choices\":[{\"delta\":{\"content\":\"stream ok\",\"reasoning_content\":\"stream thought\"}}]}\n\n" +
+                "data: [DONE]\n\n"
+        })
+
+        val report = client().run("saved", "vendor/model")
+
+        assertEquals(ProviderCapabilityStatus.PASSED, report.results[1].status)
+        assertEquals("stream ok", report.results[1].preview)
+        assertEquals("stream thought", report.results[1].reasoning)
+    }
+
+    @Test
+    fun oversizedDeclaredOrdinaryResponseFailsAndOtherChecksStillRun() {
+        capabilityResponses(ordinary = { exchange ->
+            respondJson(exchange, """{"choices":[{"message":{"content":"${"x".repeat(256 * 1024)}"}}]}""")
+        })
+
+        assertOrdinaryResponseLimit(client().run("saved", "vendor/model"))
+    }
+
+    @Test
+    fun oversizedChunkedOrdinaryResponseFailsWithoutTrustingContentLength() {
+        capabilityResponses(ordinary = { exchange ->
+            exchange.responseHeaders.add("Content-Type", "application/json")
+            exchange.sendResponseHeaders(200, 0) // chunked, no declared length
+            exchange.responseBody.use { output ->
+                runCatching {
+                    output.write("{\"choices\":[{\"message\":{\"content\":\"".toByteArray(Charsets.UTF_8))
+                    val chunk = "x".repeat(8 * 1024).toByteArray(Charsets.UTF_8)
+                    repeat(34) { output.write(chunk) }
+                    output.write("\"}}]}".toByteArray(Charsets.UTF_8))
+                } // the bounded reader may disconnect before the fixture finishes writing
+            }
+        })
+
+        assertOrdinaryResponseLimit(client().run("saved", "vendor/model"))
+    }
+
+    private fun assertOrdinaryResponseLimit(report: ProviderCapabilityReport) {
+        assertEquals(ProviderCapabilityStatus.FAILED, report.results[0].status)
+        assertEquals("响应超过测试安全上限", report.results[0].safeMessage)
+        assertTrue(report.results.drop(1).all { it.status == ProviderCapabilityStatus.PASSED })
+        assertEquals(3, chatRequests.size)
+        assertTrue(chatRequests[0].contains("\"content\":\"hello\""))
+        assertTrue(chatRequests[0].contains("\"max_tokens\":32"))
+        assertFalse(chatRequests[0].contains("\"tools\""))
+    }
+
+    private fun capabilityResponses(
+        ordinary: (HttpExchange) -> Unit = { exchange ->
+            respondJson(exchange, """{"choices":[{"message":{"content":"plain ok"}}]}""")
+        },
+        stream: () -> String = {
+            "data: {\"choices\":[{\"delta\":{\"content\":\"stream ok\"}}]}\n\n" +
+                "data: [DONE]\n\n"
+        },
+    ) {
+        catalog("""{"id":"saved/vendor/model","owned_by":"saved","display_name":"Saved Model"}""")
+        server.createContext("/v1/chat/completions") { exchange ->
+            val body = exchange.requestBody.bufferedReader().readText()
+            chatRequests += body
+            when {
+                body.contains("\"stream\":true") -> respondSse(exchange, stream())
+                body.contains("\"tools\"") -> respondJson(
+                    exchange,
+                    """{"choices":[{"message":{"content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"get_current_time","arguments":"{}"}}]}}]}""",
+                )
+                else -> ordinary(exchange)
+            }
+        }
     }
 
     private fun respondJson(

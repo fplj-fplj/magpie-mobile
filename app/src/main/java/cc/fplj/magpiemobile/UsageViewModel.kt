@@ -7,7 +7,9 @@ import cc.fplj.magpiemobile.core.ModelSpeed
 import cc.fplj.magpiemobile.core.UsageInsightEndpoint
 import cc.fplj.magpiemobile.core.UsageRecord
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -50,49 +52,77 @@ class UsageViewModel(
     },
     private val catalogReader: suspend () -> List<CatalogModel> = {
         withContext(Dispatchers.IO) { NativeCoreSession.managementClient().catalogModels() }
-    }
+    },
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
 
     private val mutable = MutableStateFlow(UsageUiState())
     val state = mutable.asStateFlow()
+    private var requestGeneration = 0L
+    private var insightsGeneration = 0L
+    private var requestsJob: Job? = null
+    private var insightsJob: Job? = null
+    private var owner: Long? = null
+
+    /** Keep data across Activity recreation, but invalidate reads when the core session changes. */
+    fun attach(session: Long?) {
+        if (owner == session) return
+        owner = session
+        clear()
+    }
 
     fun refresh(limit: Int = 5) {
         val boundedLimit = limit.coerceIn(1, 50)
+        val generation = ++requestGeneration
+        requestsJob?.cancel()
         mutable.update { it.copy(loading = true, error = "") }
-        viewModelScope.launch {
+        requestsJob = viewModelScope.launch {
             try {
                 val list = requestsReader(boundedLimit)
-                mutable.update { it.copy(loading = false, requests = list) }
+                if (generation == requestGeneration) {
+                    mutable.update { it.copy(loading = false, requests = list) }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                mutable.update { it.copy(loading = false, error = e.message ?: "读取近期请求失败") }
+                if (generation == requestGeneration) {
+                    mutable.update { it.copy(loading = false, error = e.message ?: "读取近期请求失败") }
+                }
             }
         }
     }
 
     fun clear() {
+        ++requestGeneration
+        ++insightsGeneration
+        requestsJob?.cancel()
+        insightsJob?.cancel()
         mutable.update { UsageUiState() }
     }
 
     /** 拉取用量洞察（热力图 + 额度配额 + 额度历史）；只读端点，失败不阻塞主状态。 */
     fun loadInsights() {
         if (mutable.value.insightsLoading) return
+        val generation = ++insightsGeneration
         mutable.update { it.copy(insightsLoading = true, insightsError = "") }
-        viewModelScope.launch {
+        insightsJob = viewModelScope.launch {
             try {
-                val heatmap = withContext(Dispatchers.IO) { insightsReader(UsageInsightEndpoint.HEATMAP) }
-                val quotas = withContext(Dispatchers.IO) { insightsReader(UsageInsightEndpoint.QUOTAS) }
-                val history = withContext(Dispatchers.IO) { insightsReader(UsageInsightEndpoint.QUOTAS_HISTORY) }
-                val summary = withContext(Dispatchers.IO) { summaryReader("today") }
+                val heatmap = withContext(ioDispatcher) { insightsReader(UsageInsightEndpoint.HEATMAP) }
+                val quotas = withContext(ioDispatcher) { insightsReader(UsageInsightEndpoint.QUOTAS) }
+                val history = withContext(ioDispatcher) { insightsReader(UsageInsightEndpoint.QUOTAS_HISTORY) }
+                val summary = withContext(ioDispatcher) { summaryReader("today") }
                 // 速度与目录为独立弹性数据：单点失败只清空自身，不影响主洞察。
                 val speeds = try { speedsReader() } catch (e: CancellationException) { throw e } catch (e: Exception) { emptyMap() }
                 val catalog = try { catalogReader() } catch (e: CancellationException) { throw e } catch (e: Exception) { emptyList() }
-                mutable.update { it.copy(insightsLoading = false, heatmapJson = heatmap, quotasJson = quotas, historyJson = history, summaryJson = summary, speeds = speeds, catalog = catalog) }
+                if (generation == insightsGeneration) {
+                    mutable.update { it.copy(insightsLoading = false, heatmapJson = heatmap, quotasJson = quotas, historyJson = history, summaryJson = summary, speeds = speeds, catalog = catalog) }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                mutable.update { it.copy(insightsLoading = false, insightsError = e.message ?: "读取用量洞察失败") }
+                if (generation == insightsGeneration) {
+                    mutable.update { it.copy(insightsLoading = false, insightsError = e.message ?: "读取用量洞察失败") }
+                }
             }
         }
     }

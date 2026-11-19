@@ -1,6 +1,7 @@
 package cc.fplj.magpiemobile
 
 import cc.fplj.magpiemobile.core.ProviderBaseUrl
+import cc.fplj.magpiemobile.core.ProviderModelDiscoveryRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -61,7 +62,7 @@ class ProviderEditorPolicyTest {
             currentBaseUrl = "https://API.EXAMPLE/v1",
         ))
         assertTrue(requestIsCurrent(
-            requestedBaseUrl = "https://api.example/chat/completions",
+            requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/chat/completions"),
             currentBaseUrl = "https://api.example/chat/completions/",
         ))
     }
@@ -77,7 +78,7 @@ class ProviderEditorPolicyTest {
     }
     @Test fun currentCatalogFallbackAdoptsCanonicalV1BaseOnce() {
         val adopted = ProviderCatalogSyncPolicy.adoptedBaseUrl(
-            requestedBaseUrl = "https://api.example/chat/completions",
+            requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/chat/completions"),
             currentBaseUrl = "https://api.example/chat/completions",
             returnedBaseUrl = "https://api.example/v1",
             requestStillCurrent = true,
@@ -86,14 +87,14 @@ class ProviderEditorPolicyTest {
 
         assertEquals("https://api.example/v1", adopted)
         assertNull(ProviderCatalogSyncPolicy.adoptedBaseUrl(
-            requestedBaseUrl = "https://api.example/v1",
+            requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/v1"),
             currentBaseUrl = "https://api.example/v1",
             returnedBaseUrl = "https://api.example/v1",
             requestStillCurrent = true,
             alreadyAdopted = false,
         ))
         assertNull(ProviderCatalogSyncPolicy.adoptedBaseUrl(
-            requestedBaseUrl = "https://api.example/chat/completions",
+            requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/chat/completions"),
             currentBaseUrl = "https://api.example/chat/completions",
             returnedBaseUrl = "https://api.example/v1",
             requestStillCurrent = true,
@@ -102,7 +103,7 @@ class ProviderEditorPolicyTest {
     }
     @Test fun rootCatalogBaseUsesEndpointFormThatStillNormalizesToRoot() {
         val adopted = ProviderCatalogSyncPolicy.adoptedBaseUrl(
-            requestedBaseUrl = "https://api.example/v1",
+            requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/v1"),
             currentBaseUrl = "https://api.example/v1",
             returnedBaseUrl = "https://api.example",
             requestStillCurrent = true,
@@ -112,30 +113,123 @@ class ProviderEditorPolicyTest {
         assertEquals("https://api.example/chat/completions", adopted)
         assertEquals("https://api.example", ProviderBaseUrl.normalize(adopted!!))
     }
+    @Test fun reopenedRootDiscoveryUsesCanonicalRequestBaseAndAppliesReturnedModels() {
+        val root = "https://api.example"
+        val form = ProviderBaseUrl.storedBaseFormValue(root)
+        val request = ProviderModelDiscoveryRequest(form)
+        val selection = ProviderEditorPolicy(false, listOf("saved-model"))
+
+        val current = requestIsCurrent(
+            requestedCanonicalBaseUrl = request.baseUrl,
+            currentBaseUrl = form,
+        )
+        assertEquals(root, request.baseUrl)
+        assertTrue(current)
+        if (current) selection.applyCatalog(listOf("saved-model", "discovered-model"))
+
+        assertEquals(listOf("saved-model", "discovered-model"), selection.visibleIds())
+        assertEquals(listOf("saved-model"), selection.selectedIds())
+        assertNull(selection.editedModels())
+        assertNull(ProviderCatalogSyncPolicy.adoptedBaseUrl(
+            requestedCanonicalBaseUrl = request.baseUrl,
+            currentBaseUrl = form,
+            returnedBaseUrl = root,
+            requestStillCurrent = current,
+            alreadyAdopted = false,
+        ))
+        // A bare origin entered while this request was in flight now means /v1, not root.
+        assertFalse(requestIsCurrent(
+            requestedCanonicalBaseUrl = request.baseUrl,
+            currentBaseUrl = root,
+        ))
+    }
+    @Test fun rootDiscoveryFallbackAdoptsV1AndFollowupCatalogUsesTheNewRoute() {
+        val form = ProviderBaseUrl.storedBaseFormValue("https://api.example")
+        val request = ProviderModelDiscoveryRequest(form)
+        val current = requestIsCurrent(
+            requestedCanonicalBaseUrl = request.baseUrl,
+            currentBaseUrl = form,
+        )
+
+        assertTrue(current)
+        val adopted = ProviderCatalogSyncPolicy.adoptedBaseUrl(
+            requestedCanonicalBaseUrl = request.baseUrl,
+            currentBaseUrl = form,
+            returnedBaseUrl = "https://api.example/v1",
+            requestStillCurrent = current,
+            alreadyAdopted = false,
+        )
+        assertEquals("https://api.example/v1", adopted)
+        val followup = ProviderModelDiscoveryRequest(adopted!!)
+        assertTrue(requestIsCurrent(
+            requestedCanonicalBaseUrl = followup.baseUrl,
+            currentBaseUrl = adopted,
+        ))
+        assertFalse(requestIsCurrent(
+            requestedCanonicalBaseUrl = request.baseUrl,
+            currentBaseUrl = adopted,
+        ))
+        assertNull(ProviderCatalogSyncPolicy.adoptedBaseUrl(
+            requestedCanonicalBaseUrl = followup.baseUrl,
+            currentBaseUrl = adopted,
+            returnedBaseUrl = "https://api.example",
+            requestStillCurrent = true,
+            alreadyAdopted = true,
+        ))
+    }
+    @Test fun v1FallbackToRootKeepsReversibleFormForTheFollowupCatalog() {
+        val form = "https://api.example/v1"
+        val request = ProviderModelDiscoveryRequest(form)
+        val adopted = ProviderCatalogSyncPolicy.adoptedBaseUrl(
+            requestedCanonicalBaseUrl = request.baseUrl,
+            currentBaseUrl = form,
+            returnedBaseUrl = "https://api.example",
+            requestStillCurrent = requestIsCurrent(
+                requestedCanonicalBaseUrl = request.baseUrl,
+                currentBaseUrl = form,
+            ),
+            alreadyAdopted = false,
+        )
+
+        assertEquals("https://api.example/chat/completions", adopted)
+        val followup = ProviderModelDiscoveryRequest(adopted!!)
+        assertEquals("https://api.example", followup.baseUrl)
+        assertTrue(requestIsCurrent(
+            requestedCanonicalBaseUrl = followup.baseUrl,
+            currentBaseUrl = adopted,
+        ))
+        assertNull(ProviderCatalogSyncPolicy.adoptedBaseUrl(
+            requestedCanonicalBaseUrl = followup.baseUrl,
+            currentBaseUrl = adopted,
+            returnedBaseUrl = "https://api.example/v1",
+            requestStillCurrent = true,
+            alreadyAdopted = true,
+        ))
+    }
     @Test fun staleChangedOrUnrelatedCatalogBaseIsNeverAdopted() {
         assertNull(ProviderCatalogSyncPolicy.adoptedBaseUrl(
-            requestedBaseUrl = "https://api.example/v1",
+            requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/v1"),
             currentBaseUrl = "https://api.example/v1",
             returnedBaseUrl = "https://api.example",
             requestStillCurrent = false,
             alreadyAdopted = false,
         ))
         assertNull(ProviderCatalogSyncPolicy.adoptedBaseUrl(
-            requestedBaseUrl = "https://api.example/v1",
+            requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/v1"),
             currentBaseUrl = "https://api.example/v2",
             returnedBaseUrl = "https://api.example",
             requestStillCurrent = true,
             alreadyAdopted = false,
         ))
         assertNull(ProviderCatalogSyncPolicy.adoptedBaseUrl(
-            requestedBaseUrl = "https://api.example/v1",
+            requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/v1"),
             currentBaseUrl = "https://api.example/v1",
             returnedBaseUrl = "https://api.example/arbitrary",
             requestStillCurrent = true,
             alreadyAdopted = false,
         ))
         assertNull(ProviderCatalogSyncPolicy.adoptedBaseUrl(
-            requestedBaseUrl = "https://api.example/v1",
+            requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/v1"),
             currentBaseUrl = "https://api.example/v1",
             returnedBaseUrl = "https://other.example",
             requestStillCurrent = true,
@@ -146,6 +240,7 @@ class ProviderEditorPolicyTest {
     private fun requestIsCurrent(
         requestedBaseUrl: String = "https://api.example/v1",
         currentBaseUrl: String = requestedBaseUrl,
+        requestedCanonicalBaseUrl: String = ProviderBaseUrl.normalize(requestedBaseUrl),
         requestedKeyFingerprint: String = "same-key",
         currentKeyFingerprint: String = requestedKeyFingerprint,
         requestedLocalHttp: Boolean = false,
@@ -161,7 +256,7 @@ class ProviderEditorPolicyTest {
     ): Boolean = ProviderCatalogSyncPolicy.requestIsCurrent(
         requestedSequence = requestedSequence,
         currentSequence = currentSequence,
-        requestedBaseUrl = requestedBaseUrl,
+        requestedCanonicalBaseUrl = requestedCanonicalBaseUrl,
         currentBaseUrl = currentBaseUrl,
         requestedKeyFingerprint = requestedKeyFingerprint,
         currentKeyFingerprint = currentKeyFingerprint,

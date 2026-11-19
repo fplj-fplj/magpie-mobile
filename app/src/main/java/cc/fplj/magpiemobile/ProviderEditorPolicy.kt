@@ -43,13 +43,15 @@ class ProviderEditorPolicy(
  * A sequence mismatch catches normal recomposition races. The remaining comparisons close the
  * smaller gap where form state changes before LaunchedEffect has restarted. Name and ID are not
  * inputs to discovery and are intentionally absent: catalog responses may only update models and
- * one guarded Base URL adoption.
+ * one guarded Base URL adoption. The requested base is already canonical (from the discovery
+ * request); only the current form value is normalized. Normalizing an explicit canonical root
+ * again would incorrectly turn it into /v1.
  */
 internal object ProviderCatalogSyncPolicy {
     fun requestIsCurrent(
         requestedSequence: Long,
         currentSequence: Long,
-        requestedBaseUrl: String,
+        requestedCanonicalBaseUrl: String,
         currentBaseUrl: String,
         requestedKeyFingerprint: String,
         currentKeyFingerprint: String,
@@ -68,9 +70,8 @@ internal object ProviderCatalogSyncPolicy {
             requestedProviderId != currentProviderId ||
             requestedRevision != currentRevision
         ) return false
-        val requested = normalizeCatalogBase(requestedBaseUrl) ?: return false
         val current = normalizeCatalogBase(currentBaseUrl) ?: return false
-        return requested == current
+        return requestedCanonicalBaseUrl == current
     }
 
     /**
@@ -80,16 +81,15 @@ internal object ProviderCatalogSyncPolicy {
      * ProviderBaseUrl.normalize intentionally turns a bare origin into /v1.
      */
     fun adoptedBaseUrl(
-        requestedBaseUrl: String,
+        requestedCanonicalBaseUrl: String,
         currentBaseUrl: String,
         returnedBaseUrl: String,
         requestStillCurrent: Boolean,
         alreadyAdopted: Boolean,
     ): String? {
         if (!requestStillCurrent || alreadyAdopted) return null
-        val requested = normalizeCatalogBase(requestedBaseUrl) ?: return null
         val current = normalizeCatalogBase(currentBaseUrl) ?: return null
-        if (requested != current) return null
+        if (requestedCanonicalBaseUrl != current) return null
 
         val returned = returnedBaseUrl.trim().trimEnd('/')
         if (returned.isEmpty() || returned == current) return null

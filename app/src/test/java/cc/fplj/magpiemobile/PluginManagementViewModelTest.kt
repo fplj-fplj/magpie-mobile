@@ -31,6 +31,41 @@ class PluginManagementViewModelTest {
         write.complete(PluginSnapshot(entries = listOf(ManagedPlugin("registered"))))
     }
 
+    @Test fun credentialBearingSpecsAreRejectedBeforeSavedStateOrWritesForEveryOperation() = runTest(dispatcher) {
+        val spec = "git+https://fixture-user:fixture-password@example.invalid/plugin.git"
+        val saved = SavedStateHandle()
+        var writes = 0
+        val vm = PluginManagementViewModel(savedState = saved, readPlugins = { PluginSnapshot() }, readProviders = { emptyList() },
+            performEdit = { writes++; PluginSnapshot() })
+        vm.attach(1)
+        val edits = listOf<PluginEdit>(
+            PluginEdit.Add(spec), PluginEdit.Remove(spec), PluginEdit.Upgrade(spec), PluginEdit.Off(spec, true),
+            PluginEdit.Options(spec, kotlinx.serialization.json.JsonObject(emptyMap())), PluginEdit.Prefer(spec, "fixture"),
+        )
+        for (edit in edits) {
+            assertFalse(vm.edit(edit))
+            assertTrue(saved.keys().isEmpty())
+            assertEquals("", vm.state.value.pendingSpec)
+            assertFalse(vm.state.value.error.contains("fixture-password"))
+        }
+        assertEquals(0, writes)
+    }
+
+    @Test fun invalidRecoverySpecsFromAnOlderVersionAreDiscardedOnRestore() = runTest(dispatcher) {
+        val saved = SavedStateHandle(mapOf(
+            "plugin.pending" to true,
+            "plugin.spec" to "https://fixture-user:fixture-password@example.invalid/plugin.git",
+            "plugin.operation" to "add",
+            "plugin.started" to 1000L,
+        ))
+        val vm = PluginManagementViewModel(savedState = saved, readPlugins = { PluginSnapshot() }, readProviders = { emptyList() })
+        assertFalse(vm.state.value.pending)
+        assertEquals("", vm.state.value.pendingSpec)
+        assertEquals("", saved.get<String>("plugin.spec"))
+        assertFalse(saved.get<Boolean>("plugin.pending")!!)
+        assertFalse(saved.keys().contains("plugin.operation"))
+    }
+
     @Test fun unknownInstallIsNotRepeatedOrClearedByAnUnchangedRead() = runTest(dispatcher) {
         val write = CompletableDeferred<PluginSnapshot>()
         var snapshot = PluginSnapshot()
@@ -142,6 +177,95 @@ class PluginManagementViewModelTest {
         vm.attach(2)
         old.complete(PluginSnapshot(entries = listOf(ManagedPlugin("obsolete"))))
         assertEquals(listOf("current"), vm.state.value.snapshot.entries.map { it.spec })
+    }
+
+    @Test fun marketInstalledBadgesFollowSuccessfulInstallAndRemoval() = runTest(dispatcher) {
+        val listing = PluginMarketListing(packageId = "@fixture/tools-example")
+        val vm = PluginManagementViewModel(readPlugins = { PluginSnapshot() }, readProviders = { emptyList() },
+            readMarket = { PluginMarketSnapshot(listings = listOf(listing)) }, performEdit = { edit ->
+                if (edit is PluginEdit.Add) PluginSnapshot(entries = listOf(ManagedPlugin(edit.spec))) else PluginSnapshot()
+            })
+        vm.attach(1)
+        vm.market("")
+        assertFalse(vm.state.value.market.isInstalled(listing))
+
+        assertTrue(vm.edit(PluginEdit.Add(listing.packageId)))
+        assertTrue(vm.state.value.market.isInstalled(listing))
+        assertEquals(listOf(listing.packageId), vm.state.value.market.matchedSpecs)
+        assertEquals(listOf(listing), vm.state.value.market.listings)
+
+        assertTrue(vm.edit(PluginEdit.Remove(listing.packageId)))
+        assertFalse(vm.state.value.market.isInstalled(listing))
+        assertTrue(vm.state.value.market.matchedSpecs.isEmpty())
+    }
+
+    @Test fun refreshReconcilesMarketBadgesAndIgnoresEarlierMarketResponse() = runTest(dispatcher) {
+        val listing = PluginMarketListing(packageId = "@fixture/tools-example")
+        var snapshot = PluginSnapshot()
+        var searches = 0
+        val old = CompletableDeferred<PluginMarketSnapshot>()
+        val vm = PluginManagementViewModel(readPlugins = { snapshot }, readProviders = { emptyList() }, readMarket = {
+            if (++searches == 1) PluginMarketSnapshot(listings = listOf(listing)) else old.await()
+        })
+        vm.attach(1)
+        vm.market("")
+        vm.market("old-query")
+        assertTrue(vm.state.value.loading)
+
+        snapshot = PluginSnapshot(entries = listOf(ManagedPlugin(listing.packageId)))
+        vm.refresh()
+        assertTrue(vm.state.value.market.isInstalled(listing))
+        assertFalse(vm.state.value.loading)
+        old.complete(PluginMarketSnapshot(query = "old-query", listings = listOf(listing)))
+        assertTrue(vm.state.value.market.isInstalled(listing))
+        assertEquals("", vm.state.value.market.query)
+        assertEquals(listOf(listing.packageId), vm.state.value.market.matchedSpecs)
+
+        snapshot = PluginSnapshot()
+        vm.refresh()
+        assertFalse(vm.state.value.market.isInstalled(listing))
+        assertTrue(vm.state.value.market.matchedSpecs.isEmpty())
+    }
+
+    @Test fun earlierMarketResponseCannotUndoSuccessfulEditOrKeepLoading() = runTest(dispatcher) {
+        val listing = PluginMarketListing(packageId = "@fixture/tools-example")
+        var searches = 0
+        val old = CompletableDeferred<PluginMarketSnapshot>()
+        val vm = PluginManagementViewModel(readPlugins = { PluginSnapshot() }, readProviders = { emptyList() },
+            readMarket = { if (++searches == 1) PluginMarketSnapshot(listings = listOf(listing)) else old.await() },
+            performEdit = { PluginSnapshot(entries = listOf(ManagedPlugin(listing.packageId))) })
+        vm.attach(1)
+        vm.market("")
+        vm.market("old-query")
+        assertTrue(vm.state.value.loading)
+        assertTrue(vm.edit(PluginEdit.Add(listing.packageId)))
+        assertFalse(vm.state.value.loading)
+        assertTrue(vm.state.value.market.isInstalled(listing))
+        old.complete(PluginMarketSnapshot(query = "old-query", listings = listOf(listing)))
+        assertTrue(vm.state.value.market.isInstalled(listing))
+        assertEquals("", vm.state.value.market.query)
+    }
+
+    @Test fun switchingCoreClearsOldMarketEvenWhenNewCoreReadFails() = runTest(dispatcher) {
+        val listing = PluginMarketListing(packageId = "@fixture/tools-example")
+        var readable = true
+        var searches = 0
+        val old = CompletableDeferred<PluginMarketSnapshot>()
+        val result = PluginMarketSnapshot(listings = listOf(listing), installed = listOf(ManagedPlugin(listing.packageId)))
+        val vm = PluginManagementViewModel(readPlugins = {
+            if (!readable) throw PluginReadException()
+            PluginSnapshot()
+        }, readProviders = { emptyList() }, readMarket = { if (++searches == 1) result else old.await() })
+        vm.attach(1)
+        vm.market("")
+        assertTrue(vm.state.value.market.isInstalled(listing))
+        vm.market("old-query")
+        readable = false
+        vm.attach(2)
+        old.complete(result)
+        assertTrue(vm.state.value.market.listings.isEmpty())
+        assertTrue(vm.state.value.market.installed.isEmpty())
+        assertFalse(vm.state.value.loading)
     }
 
     @Test fun loginAnswersAndOAuthLinkNeverEnterSavedOrPublicState() = runTest(dispatcher) {

@@ -37,6 +37,25 @@ class ProviderCreateDraftTest {
         assertFalse(body["chat"].toString().contains("/chat/completions"))
     }
 
+    @Test fun renamingReopenedSavedRootNeverAddsAV1Route() {
+        for (saved in listOf("https://api.example", "http://127.0.0.1:4567", "http://[::1]:4567")) {
+            val old = ProviderEditSnapshot(
+                "custom-api", "a".repeat(64), "Custom API", saved,
+                listOf("vendor/raw-model"), false, ProviderKeyMetadata(true, false, true),
+            )
+            val body = ProviderEditDraft(
+                old,
+                name = "Renamed",
+                chatUrl = ProviderBaseUrl.storedBaseFormValue(old.chatUrl),
+                allowLoopbackHttp = saved.startsWith("http://"),
+            ).requestBody()
+
+            assertEquals(setOf("id", "revision", "name"), body.keys)
+            assertEquals(JsonPrimitive("Renamed"), body["name"])
+            assertFalse(body.containsKey("chat"))
+        }
+    }
+
     @Test fun creationIsExactlyCreateOnlySevenFieldsWithNewTrueAndRawModelIds() {
         val body = create().requestBody()
         assertEquals(setOf("new", "id", "name", "chat", "key", "models", "noModels"), body.keys)

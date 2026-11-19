@@ -219,6 +219,61 @@ class ChatRepositoryTest {
         assertTrue(repository.messages(other).isEmpty())
     }
 
+    @Test fun deletingConversationRemovesTerminalHistoryAndOnlyItsOwnRows(): Unit = io {
+        val id = repository.createConversation()
+        val other = repository.createConversation()
+        succeeded(id, "delete this question", "delete this answer")
+        succeeded(other, "keep this question", "keep this answer")
+        val turns = repository.turnStore(id)
+        val failed = turns.begin(record("user", "failed question"))
+        turns.fail(failed, record("error", "HTTP 429"))
+        val interrupted = turns.begin(record("user", "interrupted question"))
+        database.chatDao().finishOperation(interrupted, id, "INTERRUPTED", 2)
+        assertEquals(4, operationCount())
+
+        repository.deleteConversation(id)
+
+        assertNull(repository.conversation(id))
+        assertTrue(repository.messages(id).isEmpty())
+        assertNull(database.chatDao().operation(failed))
+        assertNull(database.chatDao().operation(interrupted))
+        assertEquals(1, operationCount())
+        assertEquals(listOf("keep this question", "keep this answer"), repository.context(other).map { it.content })
+    }
+
+    @Test fun deletingRunningConversationIsRejectedBeforeAnyChildRowsAreRemoved(): Unit = io {
+        val id = repository.createConversation()
+        succeeded(id)
+        val turns = repository.turnStore(id)
+        val running = turns.begin(record("user", "in flight"))
+        val messages = repository.messages(id)
+
+        assertThrows(IllegalStateException::class.java) { repository.deleteConversation(id) }
+
+        assertNotNull(repository.conversation(id))
+        assertEquals(messages, repository.messages(id))
+        assertEquals("RUNNING", database.chatDao().operation(running)?.state)
+        turns.complete(running, record("assistant", "finished"))
+        repository.deleteConversation(id)
+        assertNull(repository.conversation(id))
+        assertEquals(0, operationCount())
+    }
+
+    @Test fun deletingParentFailureRollsBackMessageAndOperationRemoval(): Unit = io {
+        val id = repository.createConversation()
+        succeeded(id)
+        val messages = repository.messages(id)
+        val sql = database.openHelper.writableDatabase
+        sql.execSQL("CREATE TRIGGER abort_conversation_delete BEFORE DELETE ON conversation BEGIN SELECT RAISE(ABORT, 'injected'); END")
+
+        assertThrows(Exception::class.java) { repository.deleteConversation(id) }
+
+        assertNotNull(repository.conversation(id))
+        assertEquals(messages, repository.messages(id))
+        assertEquals(1, operationCount())
+        assertEquals(listOf("question", "answer"), repository.context(id).map { it.content })
+    }
+
     @Test fun failedTurnHasOnlyFixedErrorAndNeverEntersContext(): Unit = io {
         val id = repository.createConversation()
         succeeded(id)
@@ -496,6 +551,8 @@ class ChatRepositoryTest {
         assertTrue(repository.messages(archive.id).all { it.state == "LEGACY" })
         assertTrue(repository.context(archive.id).isEmpty())
         assertThrows(IllegalStateException::class.java) { repository.turnStore(archive.id).begin(record("user", "forbidden")) }
+        assertThrows(IllegalStateException::class.java) { repository.deleteConversation(archive.id) }
+        assertEquals(4, repository.messages(archive.id).size)
         assertEquals(0, operationCount())
         assertArrayEquals(before, file.readBytes())
         assertNotNull(database.chatDao().metadata(ChatRepository.LEGACY_MARKER))
