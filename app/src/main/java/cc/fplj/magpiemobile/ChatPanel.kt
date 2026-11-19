@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -114,7 +113,8 @@ fun ChatPanel(
     Card(
         modifier = modifier
             .fillMaxSize()
-            .testTag("chat-panel"),
+            .testTag("chat-panel")
+            .semantics { testTagsAsResourceId = true },
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ),
@@ -123,7 +123,6 @@ fun ChatPanel(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .imePadding()
                 .padding(if (compactChrome) 8.dp else UiSpacing.card),
             verticalArrangement = Arrangement.spacedBy(
                 if (compactChrome) 6.dp else UiSpacing.small,

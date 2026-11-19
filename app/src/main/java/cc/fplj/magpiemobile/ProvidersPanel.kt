@@ -22,8 +22,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import cc.fplj.magpiemobile.core.*
 import cc.fplj.magpiemobile.theme.UiSpacing
 import java.security.MessageDigest
@@ -419,10 +417,13 @@ fun ProvidersPanel(
             newProvider(template.id, template.name, template.baseUrl)
         },
     )
-    if (open) Dialog(onDismissRequest = { if (!busy) close() },
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        FullScreenDialogSystemBars()
-        Surface(Modifier.fillMaxSize()) {
+    if (open) FullScreenDialog(onDismissRequest = { if (!busy) close() }) {
+        Surface(
+            Modifier
+                .fillMaxSize()
+                .testTag("provider-editor-surface")
+                .semantics { testTagsAsResourceId = true },
+        ) {
             Column(
                 Modifier.fillMaxSize()
                     .windowInsetsPadding(
@@ -724,7 +725,9 @@ fun ProvidersPanel(
                             WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)
                                 .union(WindowInsets.ime.only(WindowInsetsSides.Bottom)),
                         )
-                        .padding(vertical = 12.dp),
+                        .padding(vertical = 12.dp)
+                        .testTag("provider-editor-footer")
+                        .semantics { testTagsAsResourceId = true },
                     verticalArrangement = Arrangement.spacedBy(UiSpacing.small),
                 ) {
                     Text(
@@ -767,7 +770,10 @@ fun ProvidersPanel(
                                     submit()
                                 }
                             },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("provider-save")
+                                .semantics { testTagsAsResourceId = true },
                         ) {
                             Text(if (busy) "保存中…" else "保存连接")
                         }

@@ -23,8 +23,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import cc.fplj.magpiemobile.core.*
 import cc.fplj.magpiemobile.theme.UiSpacing
 import kotlinx.coroutines.Dispatchers
@@ -230,8 +228,7 @@ private fun PluginDetailDialog(
     var options by remember(plugin.spec) { mutableStateOf(Json { prettyPrint = true }.encodeToString(kotlinx.serialization.json.JsonObject.serializer(),
         plugin.options.takeIf { it.isNotEmpty() } ?: plugin.optionsExample)) }
     var optionsError by remember(plugin.spec) { mutableStateOf("") }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        FullScreenDialogSystemBars()
+    FullScreenDialog(onDismissRequest = close) {
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = UiSpacing.medium)) {
                 Row(Modifier.fillMaxWidth().padding(vertical = UiSpacing.small), verticalAlignment = Alignment.CenterVertically) {
@@ -340,8 +337,7 @@ private fun PluginLoginDialog(viewModel: PluginManagementViewModel, state: Offic
     var answer by remember(provider.pid, state.authMethod, state.prompt?.key) { mutableStateOf("") }
     var apiKey by remember(provider.pid, state.authMethod) { mutableStateOf("") }
     var callback by remember(state.signIn?.id) { mutableStateOf("") }
-    Dialog(onDismissRequest = viewModel::cancelLogin, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        FullScreenDialogSystemBars()
+    FullScreenDialog(onDismissRequest = viewModel::cancelLogin) {
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(UiSpacing.card), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

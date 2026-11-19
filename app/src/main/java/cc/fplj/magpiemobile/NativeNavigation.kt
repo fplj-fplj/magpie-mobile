@@ -34,6 +34,7 @@ import cc.fplj.magpiemobile.core.GatewayEngineController
 import cc.fplj.magpiemobile.preferences.AppPage
 import cc.fplj.magpiemobile.theme.UiSpacing
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Dashboard(
     layout: EnginePaths.Layout,
@@ -46,6 +47,7 @@ fun Dashboard(
 ) {
     val context = LocalContext.current
     val compactHeight = LocalConfiguration.current.screenHeightDp < 480
+    val imeVisible = WindowInsets.isImeVisible
     val scope = rememberCoroutineScope()
     val shell by appShell.state.collectAsStateWithLifecycle()
     val gateway by GatewayRuntime.status.collectAsStateWithLifecycle()
@@ -145,6 +147,7 @@ fun Dashboard(
     BackHandler(enabled = section != null || shell.page != AppPage.GATEWAY) { back() }
 
     Scaffold(
+        modifier = Modifier.fillMaxSize().imePadding(),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             Surface(color = MaterialTheme.colorScheme.background) {
@@ -190,38 +193,40 @@ fun Dashboard(
             }
         },
         bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp) {
-                AppPage.entries.forEach { page ->
-                    NavigationBarItem(
-                        selected = shell.page == page,
-                        enabled = !providerBusy,
-                        onClick = {
-                            if (!providerBusy) {
-                                if (shell.page == page) {
-                                    if (page == AppPage.GATEWAY) gatewaySectionName = null
-                                    if (page == AppPage.MORE) moreSectionName = null
+            if (!imeVisible) {
+                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp) {
+                    AppPage.entries.forEach { page ->
+                        NavigationBarItem(
+                            selected = shell.page == page,
+                            enabled = !providerBusy,
+                            onClick = {
+                                if (!providerBusy) {
+                                    if (shell.page == page) {
+                                        if (page == AppPage.GATEWAY) gatewaySectionName = null
+                                        if (page == AppPage.MORE) moreSectionName = null
+                                    }
+                                    appShell.selectPage(page)
                                 }
-                                appShell.selectPage(page)
-                            }
-                        },
-                        icon = { AppIcon(when (page) {
-                            AppPage.GATEWAY -> AppSymbol.GATEWAY
-                            AppPage.PROVIDERS -> AppSymbol.PROVIDERS
-                            AppPage.CHAT -> AppSymbol.CHAT
-                            AppPage.MORE -> AppSymbol.MORE
-                        }) },
-                        label = { Text(pageTitle(page)) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                        ),
-                    )
+                            },
+                            icon = { AppIcon(when (page) {
+                                AppPage.GATEWAY -> AppSymbol.GATEWAY
+                                AppPage.PROVIDERS -> AppSymbol.PROVIDERS
+                                AppPage.CHAT -> AppSymbol.CHAT
+                                AppPage.MORE -> AppSymbol.MORE
+                            }) },
+                            label = { Text(pageTitle(page)) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                            ),
+                        )
+                    }
                 }
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding), contentAlignment = Alignment.TopCenter) {
             pageStates.SaveableStateProvider(shell.page.name + "/" + (section?.name ?: "HOME")) {
                 if (chatPage) {
                     val groups = remember(shell.models) { modelPickerGroupsFromCatalog(shell.models) }

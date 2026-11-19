@@ -4,6 +4,9 @@ import android.content.Intent
 import android.graphics.Rect
 import android.os.SystemClock
 import android.provider.DocumentsContract
+import android.view.accessibility.AccessibilityNodeInfo
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -423,6 +426,20 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue(device.takeScreenshot(File(artifacts, "provider-add-templates.png")))
                     device.findObject(By.text("自定义 OpenAI 兼容")).click()
                     device.waitForIdle()
+                    val editorSurface = By.res("provider-editor-surface")
+                    await("provider editor fills the physical display") {
+                        uiBounds("provider-editor-surface") != null
+                    }
+                    val editorBounds = requireNotNull(uiBounds("provider-editor-surface"))
+                    File(artifacts, "provider-editor-window-bounds.txt").writeText(
+                        "display=${device.displayWidth}x${device.displayHeight}\nsurface=$editorBounds\n",
+                    )
+                    assertEquals(
+                        "Provider editor does not fill the physical display: " +
+                            "display=${device.displayWidth}x${device.displayHeight} surface=$editorBounds",
+                        Rect(0, 0, device.displayWidth, device.displayHeight),
+                        editorBounds,
+                    )
                     assertTrue(device.takeScreenshot(File(artifacts, "provider-add-config.png")))
                     await("provider advanced tab visible") { device.hasObject(By.text("高级")) }
                     await("provider connectivity test visible") {
@@ -437,13 +454,25 @@ class OfficialPluginsInstrumentedTest {
                     await("provider save button visible") { device.hasObject(By.text("保存连接")) }
                     device.waitForIdle()
                     assertTrue(device.takeScreenshot(File(artifacts, "provider-editor-advanced.png")))
-                    val save = device.findObject(By.text("保存连接"))
+                    val footerBounds = requireNotNull(uiBounds("provider-editor-footer"))
+                    val saveBounds = requireNotNull(uiBounds("provider-save"))
                     File(artifacts, "provider-save-bounds.txt").writeText(
-                        "displayHeight=${device.displayHeight}\nvisibleBounds=${save.visibleBounds}\n",
+                        "display=${device.displayWidth}x${device.displayHeight}\n" +
+                            "footerBounds=$footerBounds\nsaveBounds=$saveBounds\n",
                     )
                     assertTrue(
-                        "Provider save button is clipped by the system navigation area: ${save.visibleBounds}",
-                        save.visibleBounds.bottom <= device.displayHeight - 24,
+                        "Provider footer exceeds the physical display: footer=$footerBounds",
+                        footerBounds.left >= 0 && footerBounds.top >= 0 &&
+                            footerBounds.right <= device.displayWidth &&
+                            footerBounds.bottom <= device.displayHeight,
+                    )
+                    assertTrue(
+                        "Provider footer does not contain the save button: footer=$footerBounds save=$saveBounds",
+                        footerBounds.contains(saveBounds),
+                    )
+                    assertTrue(
+                        "Provider save button is clipped by the system navigation area: save=$saveBounds",
+                        saveBounds.bottom <= device.displayHeight - 24,
                     )
                     device.pressBack()
                     await("provider editor closed") { !device.hasObject(By.text("保存连接")) }
@@ -475,15 +504,128 @@ class OfficialPluginsInstrumentedTest {
                     try {
                         device.executeShellCommand("settings put secure show_ime_with_hard_keyboard 1")
                         device.findObject(By.res("chat-draft")).click()
-                        await("chat keyboard visible") {
-                            var visible = false
+                        val requiredStablePolls = 3
+                        val pollEvidence = mutableListOf<String>()
+                        var previousFrame: ChatImeFrame? = null
+                        var lastFrame: ChatImeFrame? = null
+                        var stablePolls = 0
+                        var pollCount = 0
+                        val startedAt = SystemClock.elapsedRealtime()
+                        val deadline = startedAt + 30_000
+                        while (SystemClock.elapsedRealtime() < deadline) {
+                            pollCount++
+                            val panel = chatPanelBounds()
+                            val selector = uiBounds("chat-model-selector")
+                            val send = uiBounds("chat-send")
+                            var displayWidth = 0
+                            var displayHeight = 0
+                            var density = 0f
+                            var densityDpi = 0
+                            var scaledDensity = 0f
+                            var imeVisible = false
+                            var ime = Rect()
+                            var systemBars = Rect()
                             scenario.onActivity { activity ->
-                                visible = androidx.core.view.ViewCompat.getRootWindowInsets(activity.window.decorView)
-                                    ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+                                val metrics = activity.resources.displayMetrics
+                                displayWidth = metrics.widthPixels
+                                displayHeight = metrics.heightPixels
+                                density = metrics.density
+                                densityDpi = metrics.densityDpi
+                                scaledDensity = metrics.scaledDensity
+                                val insets = ViewCompat.getRootWindowInsets(activity.window.decorView)
+                                imeVisible = insets?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                                insets?.getInsets(WindowInsetsCompat.Type.ime())?.let {
+                                    ime = Rect(it.left, it.top, it.right, it.bottom)
+                                }
+                                insets?.getInsets(WindowInsetsCompat.Type.systemBars())?.let {
+                                    systemBars = Rect(it.left, it.top, it.right, it.bottom)
+                                }
                             }
-                            visible
+                            val frame = ChatImeFrame(
+                                panel = panel,
+                                selector = selector,
+                                send = send,
+                                displayWidth = displayWidth,
+                                displayHeight = displayHeight,
+                                density = density,
+                                densityDpi = densityDpi,
+                                scaledDensity = scaledDensity,
+                                imeVisible = imeVisible,
+                                ime = ime,
+                                systemBars = systemBars,
+                            )
+                            lastFrame = frame
+                            if (frame.isStableCandidate() && previousFrame?.sameStableGeometry(frame) == true) {
+                                stablePolls++
+                            } else {
+                                stablePolls = 0
+                            }
+                            pollEvidence += frame.toPollEvidence(
+                                poll = pollCount,
+                                elapsedMs = SystemClock.elapsedRealtime() - startedAt,
+                                stablePolls = stablePolls,
+                            )
+                            if (stablePolls >= requiredStablePolls) break
+                            previousFrame = frame
+                            SystemClock.sleep(200)
                         }
-                        await("send control visible with keyboard") { device.hasObject(By.res("chat-send")) }
+                        val evidenceFile = File(artifacts, "chat-composer-keyboard-layout.txt")
+                        evidenceFile.writeText(buildString {
+                            appendLine("requiredStablePolls=$requiredStablePolls")
+                            appendLine("stablePolls=$stablePolls")
+                            appendLine("pollCount=$pollCount")
+                            appendLine("finalFrame=${lastFrame?.toEvidenceValue().orEmpty()}")
+                            appendLine()
+                            appendLine("POLLS")
+                            appendLine(pollEvidence.joinToString("\n"))
+                        })
+                        val frame = lastFrame
+                            ?: throw AssertionError("No chat IME frame captured; see $evidenceFile")
+                        assertEquals(
+                            "Chat composer did not reach a stable keyboard frame; see $evidenceFile\n${frame.toEvidenceValue()}",
+                            requiredStablePolls,
+                            stablePolls,
+                        )
+                        assertTrue(
+                            "Chat IME did not become visible; see $evidenceFile\n${frame.toEvidenceValue()}",
+                            frame.imeVisible && frame.ime.bottom > 0,
+                        )
+                        val panel = requireNotNull(frame.panel) {
+                            "Chat panel bounds missing; see $evidenceFile"
+                        }
+                        val selector = requireNotNull(frame.selector) {
+                            "Chat model selector bounds missing; see $evidenceFile"
+                        }
+                        val send = requireNotNull(frame.send) {
+                            "Chat send bounds missing; see $evidenceFile"
+                        }
+                        assertFalse("Chat panel bounds are empty: $panel", panel.isEmpty)
+                        assertFalse("Chat model selector bounds are empty: $selector", selector.isEmpty)
+                        assertFalse("Chat send bounds are empty: $send", send.isEmpty)
+                        assertTrue("Chat panel does not contain the model selector: panel=$panel selector=$selector", panel.contains(selector))
+                        assertTrue("Chat panel does not contain the send button: panel=$panel send=$send", panel.contains(send))
+                        assertTrue(
+                            "Chat panel is panned outside the display or IME safe area; see $evidenceFile\n${frame.toEvidenceValue()}",
+                            panel.isFullyWithin(frame.displayWidth, frame.displayHeight) &&
+                                panel.bottom <= frame.imeTop,
+                        )
+                        assertTrue(
+                            "Chat model selector is outside the display or IME safe area; see $evidenceFile\n${frame.toEvidenceValue()}",
+                            selector.isFullyWithin(frame.displayWidth, frame.displayHeight) &&
+                                selector.bottom <= frame.imeTop,
+                        )
+                        assertTrue(
+                            "Chat send button is outside the display or IME safe area; see $evidenceFile\n${frame.toEvidenceValue()}",
+                            send.isFullyWithin(frame.displayWidth, frame.displayHeight) &&
+                                send.bottom <= frame.imeTop,
+                        )
+                        val keyboardGapPx = frame.imeTop - send.bottom
+                        val maxKeyboardGapPx = (56f * frame.density).toInt()
+                        assertTrue(
+                            "Chat composer leaves ${keyboardGapPx}px (${keyboardGapPx / frame.density}dp) above the IME; " +
+                                "expected at most ${maxKeyboardGapPx}px (56dp); see $evidenceFile\n${frame.toEvidenceValue()}",
+                            keyboardGapPx in 0..maxKeyboardGapPx,
+                        )
                         assertTrue(device.takeScreenshot(File(artifacts, "chat-composer-keyboard.png")))
                         device.pressBack()
                     } finally {
@@ -565,6 +707,44 @@ class OfficialPluginsInstrumentedTest {
         }
     }
 
+    private fun uiBounds(resourceId: String): Rect? {
+        val root = runCatching { instrumentation.uiAutomation.rootInActiveWindow }.getOrNull() ?: return null
+        return try {
+            val node = findVisibleAccessibilityNode(root, resourceId) ?: return null
+            try {
+                node.screenBounds()
+            } finally {
+                node.recycle()
+            }
+        } finally {
+            root.recycle()
+        }
+    }
+
+    private fun chatPanelBounds(): Rect? = uiBounds("chat-panel")
+
+    private fun findVisibleAccessibilityNode(root: AccessibilityNodeInfo, resourceId: String): AccessibilityNodeInfo? {
+        val display = Rect(0, 0, device.displayWidth, device.displayHeight)
+        if (root.viewIdResourceName == resourceId) {
+            val bounds = root.screenBounds()
+            if (root.isVisibleToUser && !bounds.isEmpty && Rect.intersects(bounds, display)) {
+                return AccessibilityNodeInfo.obtain(root)
+            }
+        }
+        for (index in 0 until root.childCount) {
+            val child = root.getChild(index) ?: continue
+            try {
+                findVisibleAccessibilityNode(child, resourceId)?.let { return it }
+            } finally {
+                child.recycle()
+            }
+        }
+        return null
+    }
+
+    private fun AccessibilityNodeInfo.screenBounds(): Rect =
+        Rect().also { getBoundsInScreen(it) }
+
     private fun fixture(root: File, name: String, code: String, manifest: String, entry: String = "index.mjs"): File = File(root, name).apply {
         mkdirs()
         File(this, "package.json").writeText("{\"name\":\"android-test-$name\",\"version\":\"1.0.0\",\"type\":\"module\",$manifest}")
@@ -610,6 +790,51 @@ class OfficialPluginsInstrumentedTest {
         }
         throw AssertionError("Timed out: $description (${failure?.javaClass?.simpleName ?: "no exception"})")
     }
+
+    private data class ChatImeFrame(
+        val panel: Rect?,
+        val selector: Rect?,
+        val send: Rect?,
+        val displayWidth: Int,
+        val displayHeight: Int,
+        val density: Float,
+        val densityDpi: Int,
+        val scaledDensity: Float,
+        val imeVisible: Boolean,
+        val ime: Rect,
+        val systemBars: Rect,
+    ) {
+        val imeTop: Int get() = displayHeight - ime.bottom
+
+        fun isStableCandidate(): Boolean =
+            panel != null && selector != null && send != null &&
+                displayWidth > 0 && displayHeight > 0 && density > 0f &&
+                imeVisible && ime.bottom > 0
+
+        fun sameStableGeometry(other: ChatImeFrame): Boolean =
+            panel == other.panel &&
+                selector == other.selector &&
+                send == other.send &&
+                displayWidth == other.displayWidth &&
+                displayHeight == other.displayHeight &&
+                density == other.density &&
+                densityDpi == other.densityDpi &&
+                scaledDensity == other.scaledDensity &&
+                imeVisible == other.imeVisible &&
+                ime == other.ime &&
+                systemBars == other.systemBars
+
+        fun toPollEvidence(poll: Int, elapsedMs: Long, stablePolls: Int): String =
+            "poll=$poll elapsedMs=$elapsedMs stablePolls=$stablePolls ${toEvidenceValue()}"
+
+        fun toEvidenceValue(): String =
+            "display=${displayWidth}x$displayHeight density=$density densityDpi=$densityDpi " +
+                "scaledDensity=$scaledDensity imeVisible=$imeVisible imeInsets=$ime " +
+                "systemBarsInsets=$systemBars imeTop=$imeTop panel=$panel selector=$selector send=$send"
+    }
+
+    private fun Rect.isFullyWithin(displayWidth: Int, displayHeight: Int): Boolean =
+        left >= 0 && top >= 0 && right <= displayWidth && bottom <= displayHeight
 
     private fun http(url: String, key: String, body: String? = null, cookie: String? = null): Pair<Int, String> {
         val connection = URL(url).openConnection(Proxy.NO_PROXY) as HttpURLConnection

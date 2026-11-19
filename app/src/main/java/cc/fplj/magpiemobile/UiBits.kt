@@ -1,9 +1,20 @@
 package cc.fplj.magpiemobile
 
+import android.content.Context
+import android.graphics.drawable.ColorDrawable
+import android.os.Build
+import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
+import androidx.activity.ComponentDialog
+import androidx.activity.OnBackPressedCallback
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -14,10 +25,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCompositionContext
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.AbstractComposeView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.dialog
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -29,6 +46,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import cc.fplj.magpiemobile.theme.UiSpacing
+import androidx.lifecycle.findViewTreeLifecycleOwner
+import androidx.lifecycle.findViewTreeViewModelStoreOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
+import androidx.savedstate.findViewTreeSavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 
 /**
  * 原生适配技能的 Card / Empty State / 导航图标：暖色面板、细边框、统一间距。
@@ -83,17 +106,173 @@ internal fun EmptyState(title: String, description: String) {
 
 /** Full-screen dialogs draw edge to edge; keep system bar icons readable in either theme. */
 @Composable
+internal fun FullScreenDialog(
+    onDismissRequest: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val context = LocalContext.current
+    val sourceView = LocalView.current
+    val parentComposition = rememberCompositionContext()
+    val latestDismiss = rememberUpdatedState(onDismissRequest)
+    val latestContent = rememberUpdatedState(content)
+    val lifecycleOwner = sourceView.findViewTreeLifecycleOwner()
+    val viewModelStoreOwner = sourceView.findViewTreeViewModelStoreOwner()
+    val savedStateRegistryOwner = sourceView.findViewTreeSavedStateRegistryOwner()
+
+    val dialog = remember(
+        context,
+        sourceView,
+        parentComposition,
+        lifecycleOwner,
+        viewModelStoreOwner,
+        savedStateRegistryOwner,
+    ) {
+        MagpieFullScreenDialog(
+            context = context,
+            onDismissRequest = { latestDismiss.value() },
+        ).also { dialog ->
+            val composeHost = FullScreenDialogComposeView(
+                context = dialog.context,
+                window = checkNotNull(dialog.window),
+            ).apply {
+                id = View.generateViewId()
+                setViewTreeLifecycleOwner(lifecycleOwner)
+                setViewTreeViewModelStoreOwner(viewModelStoreOwner)
+                setViewTreeSavedStateRegistryOwner(savedStateRegistryOwner)
+                setParentCompositionContext(parentComposition)
+                setDialogContent {
+                    FullScreenDialogSystemBars()
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .semantics { this.dialog() },
+                    ) {
+                        latestContent.value()
+                    }
+                }
+            }
+            dialog.composeHost = composeHost
+            dialog.setContentView(composeHost)
+            dialog.setCanceledOnTouchOutside(false)
+            dialog.window?.let { window ->
+                window.setBackgroundDrawable(
+                    ColorDrawable(android.graphics.Color.TRANSPARENT),
+                )
+                window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                window.setDimAmount(0f)
+                window.setGravity(Gravity.TOP or Gravity.START)
+                window.setLayout(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                window.addFlags(
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS,
+                )
+                WindowCompat.setDecorFitsSystemWindows(window, false)
+            }
+        }
+    }
+
+    DisposableEffect(dialog) {
+        if (!dialog.isShowing) dialog.show()
+        onDispose {
+            dialog.dismiss()
+            dialog.disposeComposition()
+        }
+    }
+}
+
+private class MagpieFullScreenDialog(
+    context: Context,
+    private val onDismissRequest: () -> Unit,
+) : ComponentDialog(context, R.style.MagpieFullScreenDialog) {
+    lateinit var composeHost: FullScreenDialogComposeView
+
+    init {
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    onDismissRequest()
+                }
+            },
+        )
+    }
+
+    override fun cancel() {
+        onDismissRequest()
+    }
+
+    fun disposeComposition() {
+        if (::composeHost.isInitialized) composeHost.disposeComposition()
+    }
+}
+
+private class FullScreenDialogComposeView(
+    context: Context,
+    override val window: Window,
+) : AbstractComposeView(context), DialogWindowProvider {
+    private var dialogContent: @Composable () -> Unit = {}
+
+    fun setDialogContent(content: @Composable () -> Unit) {
+        dialogContent = content
+    }
+
+    @Composable
+    override fun Content() {
+        dialogContent()
+    }
+}
+
+/** Keep a non-floating full-screen dialog aligned to the physical display instead of the app content frame. */
+@Composable
 internal fun FullScreenDialogSystemBars() {
     val view = LocalView.current
     val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
     SideEffect {
-        val window = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
+        val window = view.findDialogWindow() ?: return@SideEffect
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        window.isStatusBarContrastEnforced = false
+        window.isNavigationBarContrastEnforced = false
+        window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        window.setDimAmount(0f)
+        window.decorView.fitsSystemWindows = false
+        window.decorView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = window.decorView.systemUiVisibility or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        window.attributes = window.attributes.apply {
+            width = ViewGroup.LayoutParams.MATCH_PARENT
+            height = ViewGroup.LayoutParams.MATCH_PARENT
+            gravity = Gravity.TOP or Gravity.START
+            flags = flags or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        }
         window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         WindowCompat.getInsetsController(window, view).apply {
             isAppearanceLightStatusBars = light
             isAppearanceLightNavigationBars = light
         }
     }
+}
+
+private fun View.findDialogWindow(): Window? {
+    var current: View? = this
+    while (current != null) {
+        if (current is DialogWindowProvider) return current.window
+        current = current.parent as? View
+    }
+    return null
 }
 
 /** 单色线框图标以 Icon 的主题 tint 着色，无额外图标依赖。 */
