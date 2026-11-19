@@ -4,12 +4,11 @@ import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import cc.fplj.magpiemobile.core.GatewayConfig
 import cc.fplj.magpiemobile.core.ChatTurnStore
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.CancellationException
+import cc.fplj.magpiemobile.core.GatewayConfig
 import cc.fplj.magpiemobile.core.SessionRecord
 import cc.fplj.magpiemobile.data.ChatDatabase
 import cc.fplj.magpiemobile.data.ChatRepository
@@ -17,14 +16,23 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.time.Duration
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -63,16 +71,22 @@ class ChatViewModelTest {
         withTimeout(10000) { vm.state.first { !it.busy && !it.sending } }
     }
 
-    private fun vm(connection: () -> ChatConnection? = { null }): ChatViewModel {
+    private fun vm(
+        dispatcher: CoroutineDispatcher = Dispatchers.IO,
+        turnStore: (ChatRepository, String) -> ChatTurnStore = { repository, id -> repository.turnStore(id) },
+        acquire: (ProviderSessionKey) -> GatewayRequestLease = { throw CancellationException("Offline fixture") },
+    ): ChatViewModel {
         val store = ViewModelStore().also(stores::add)
         val factory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 @Suppress("UNCHECKED_CAST")
-                return ChatViewModel(app, { repo }, connection) as T
+                return ChatViewModel(app, { repo }, acquire, dispatcher, turnStore) as T
             }
         }
         return ViewModelProvider(store, factory)[ChatViewModel::class.java].also { settled(it) }
     }
+
+    private fun lease(config: GatewayConfig): GatewayRequestLease = GatewayRequestLeases().acquire(config) { true }
 
     @Test fun renameConversationUpdatesTitleAndLegacyStaysReadOnly() {
         val vm = vm()
@@ -116,7 +130,7 @@ class ChatViewModelTest {
         vm.editDraft("draft two")
         vm.selectConversation(first); settled(vm)
         assertEquals("draft one", vm.state.value.draft)
-        vm.send("provider/model")
+        vm.send("provider/model", SESSION_A)
         assertFalse(vm.state.value.sending)
         assertEquals("draft one", vm.state.value.draft)
     }
@@ -142,17 +156,17 @@ class ChatViewModelTest {
 
     @Test fun retainedViewModelDoesNotDuplicateSendAndRefreshIsReadOnly() {
         Probe().use { probe ->
-            val vm = vm { ChatConnection(probe.config) { true } }
+            val vm = vm { lease(probe.config) }
             val store = stores.last()
             vm.editDraft("one paid turn")
-            vm.send("provider/model")
+            vm.send("provider/model", SESSION_A)
             assertTrue(probe.started.await(10, TimeUnit.SECONDS))
             assertTrue(vm.state.value.sending)
             val retained = ViewModelProvider(store, object : ViewModelProvider.Factory {
                 override fun <T : ViewModel> create(modelClass: Class<T>): T = error("Must retain ViewModel")
             })[ChatViewModel::class.java]
             assertSame(vm, retained)
-            retained.send("provider/model")
+            retained.send("provider/model", SESSION_A)
             retained.refresh()
             retained.newConversation()
             assertEquals(1, probe.requests.get())
@@ -168,9 +182,9 @@ class ChatViewModelTest {
 
     @Test fun failedStreamKeepsDraftAndDoesNotReplayOnRefreshOrRecreation() {
         Probe(success = false, reasoning = "尚未完成的思考").use { probe ->
-            val vm = vm { ChatConnection(probe.config) { true } }
+            val vm = vm { lease(probe.config) }
             vm.editDraft("retry only by user")
-            vm.send("provider/model")
+            vm.send("provider/model", SESSION_A)
             assertTrue(probe.started.await(10, TimeUnit.SECONDS))
             probe.release.countDown(); settled(vm)
             assertEquals("retry only by user", vm.state.value.draft)
@@ -179,7 +193,7 @@ class ChatViewModelTest {
             assertEquals("answer", vm.state.value.partial)
             assertEquals(1, probe.requests.get())
             vm.refresh(); settled(vm)
-            val reopened = vm { ChatConnection(probe.config) { true } }
+            val reopened = vm { lease(probe.config) }
             assertFalse(reopened.state.value.sending)
             assertEquals(1, probe.requests.get())
             assertTrue(runBlocking(Dispatchers.IO) { repo.context(vm.state.value.selected!!.id) }.isEmpty())
@@ -188,13 +202,13 @@ class ChatViewModelTest {
 
     @Test fun deletingSelectedConversationRestoresFallbackDraftAndClearsOnlyItsFailedPreview() {
         Probe(success = false, reasoning = "unfinished reasoning").use { probe ->
-            val vm = vm { ChatConnection(probe.config) { true } }
+            val vm = vm { lease(probe.config) }
             val first = checkNotNull(vm.state.value.selected).id
             vm.editDraft("first conversation draft")
             vm.newConversation(); settled(vm)
             val second = checkNotNull(vm.state.value.selected).id
             vm.editDraft("second conversation draft")
-            vm.send("provider/model")
+            vm.send("provider/model", SESSION_A)
             assertTrue(probe.started.await(10, TimeUnit.SECONDS))
             probe.release.countDown()
             val failed = settled(vm)
@@ -231,9 +245,9 @@ class ChatViewModelTest {
 
     @Test fun successfulReasoningIsShownInHistoryButExcludedFromNextContext() {
         Probe(reasoning = "先理解问题，再组织答案。").use { probe ->
-            val vm = vm { ChatConnection(probe.config) { true } }
+            val vm = vm { lease(probe.config) }
             vm.editDraft("哈哈哈")
-            vm.send("provider/model")
+            vm.send("provider/model", SESSION_A)
             assertTrue(probe.started.await(10, TimeUnit.SECONDS))
             probe.release.countDown()
             val completed = settled(vm)
@@ -266,11 +280,11 @@ class ChatViewModelTest {
     @Test fun clearingViewModelStoreCancelsSilentHeadersAndSilentBodyAndFinalizesRoomTurn() {
         for (sendHeaders in listOf(false, true)) {
             SilentProbe(sendHeaders).use { probe ->
-                val vm = vm { ChatConnection(probe.config) { true } }
+                val vm = vm { lease(probe.config) }
                 vm.newConversation(); settled(vm)
                 val id = checkNotNull(vm.state.value.selected).id
                 vm.editDraft("one turn with no callbacks")
-                vm.send("provider/model")
+                vm.send("provider/model", SESSION_A)
                 assertTrue(probe.started.await(5, TimeUnit.SECONDS))
                 assertTrue(vm.state.value.sending)
                 assertEquals("", vm.state.value.partial)
@@ -294,7 +308,7 @@ class ChatViewModelTest {
                     assertTrue(repo.context(id).isEmpty())
                 }
                 // Reopening reads the finalized failure; it must not replay the cancelled turn.
-                val reopened = vm { ChatConnection(probe.config) { true } }
+                val reopened = vm { lease(probe.config) }
                 assertEquals(id, reopened.state.value.selected?.id)
                 assertFalse(reopened.state.value.sending)
                 assertTrue(reopened.state.value.messages.none { it.role == "assistant" })
@@ -355,6 +369,482 @@ class ChatViewModelTest {
         assertEquals(listOf("commit this turn", "committed answer"), repo.context(id).map { it.content })
     }
 
+    @Test fun missingExpectedCatalogSessionDoesNotAcquireOrBegin() {
+        Probe().use { probe ->
+            val source = LeaseSource(probe.config)
+            val vm = vm(acquire = source::acquire)
+            val id = checkNotNull(vm.state.value.selected).id
+            vm.editDraft("draft without a catalog identity")
+            vm.send("provider/model", null)
+            assertFalse(vm.state.value.sending)
+            assertEquals("draft without a catalog identity", vm.state.value.draft)
+            assertEquals(0, source.captures.get())
+            assertEquals(0, probe.requests.get())
+            assertTrue(runBlocking(Dispatchers.IO) { repo.messages(id) }.isEmpty())
+        }
+    }
+
+    @Test fun staleCatalogClickCannotAcquireCurrentEpochOrReplacementOwner() {
+        for (replacement in listOf(SESSION_A_NEXT, SESSION_B)) {
+            Probe().use { probe ->
+                val source = LeaseSource(probe.config)
+                val vm = vm(acquire = source::acquire)
+                val id = checkNotNull(vm.state.value.selected).id
+                vm.editDraft("old catalog click")
+                source.change(replacement)
+                vm.send("provider/model", SESSION_A)
+                assertFalse(vm.state.value.sending)
+                assertEquals("old catalog click", vm.state.value.draft)
+                assertTrue(vm.state.value.notice.contains("未自动重发"))
+                assertEquals(0, source.captures.get())
+                assertEquals(0, probe.requests.get())
+                assertTrue(runBlocking(Dispatchers.IO) { repo.messages(id) }.isEmpty())
+            }
+        }
+    }
+
+    @Test fun queuedSendCannotCrossAnEpochOrOwnerBeforeMainOrIoStarts() {
+        for (holdMain in listOf(false, true)) {
+            for (replacement in listOf(SESSION_A_NEXT, SESSION_B)) {
+                Probe().use { probe ->
+                    val source = LeaseSource(probe.config)
+                    val io = GatedDispatcher()
+                    val vm = vm(dispatcher = io, acquire = source::acquire)
+                    val id = checkNotNull(vm.state.value.selected).id
+                    vm.editDraft("fixed queued draft")
+                    val main = if (holdMain) StandardTestDispatcher().also { Dispatchers.setMain(it) } else null
+                    io.hold = true
+                    try {
+                        vm.send("provider/model", SESSION_A)
+                        // The lease is captured even if the Main launch has not run yet.
+                        assertEquals(1, source.captures.get())
+                        assertTrue(vm.state.value.sending)
+                        assertEquals(if (holdMain) 0 else 1, io.queued)
+                        // Same config and secret; guard must reject by full identity even without a signal.
+                        source.change(replacement, invalidate = false)
+                        main?.scheduler?.runCurrent()
+                        if (main != null) Dispatchers.setMain(UnconfinedTestDispatcher())
+                        io.release()
+                        val after = settled(vm)
+                        assertEquals("fixed queued draft", after.draft)
+                        assertTrue(after.notice.contains("未自动重发"))
+                        assertEquals(0, probe.requests.get())
+                        assertTrue(runBlocking(Dispatchers.IO) { repo.messages(id) }.isEmpty())
+                        assertEquals(1, source.captures.get())
+                        assertEquals(1, source.closes.get())
+                        assertThrows(CancellationException::class.java) { source.controls.single().ensureActive() }
+                    } finally {
+                        Dispatchers.setMain(UnconfinedTestDispatcher())
+                        io.release()
+                        main?.scheduler?.runCurrent()
+                    }
+                }
+            }
+        }
+    }
+
+    @Test fun disposingBeforeLaunchOrBeforeIoReleasesCapturedLeaseExactlyOnce() {
+        for (holdMain in listOf(false, true)) {
+            Probe().use { probe ->
+                val source = LeaseSource(probe.config)
+                val io = GatedDispatcher()
+                val vm = vm(dispatcher = io, acquire = source::acquire)
+                val id = checkNotNull(vm.state.value.selected).id
+                vm.editDraft("dispose queued draft")
+                val main = if (holdMain) StandardTestDispatcher().also { Dispatchers.setMain(it) } else null
+                io.hold = true
+                try {
+                    vm.send("provider/model", SESSION_A)
+                    assertEquals(1, source.captures.get())
+                    stores.last().clear()
+                    main?.scheduler?.runCurrent()
+                    if (main != null) Dispatchers.setMain(UnconfinedTestDispatcher())
+                    io.release()
+                    val after = settled(vm)
+                    assertEquals("dispose queued draft", after.draft)
+                    assertEquals(0, probe.requests.get())
+                    assertEquals(1, source.closes.get())
+                    assertTrue(runBlocking(Dispatchers.IO) { repo.messages(id) }.isEmpty())
+                    assertThrows(CancellationException::class.java) { source.controls.single().ensureActive() }
+                } finally {
+                    Dispatchers.setMain(UnconfinedTestDispatcher())
+                    io.release()
+                    main?.scheduler?.runCurrent()
+                }
+            }
+        }
+    }
+
+    @Test fun sendingOnAnAlreadyDisposedScopeReleasesSynchronousCaptureWithoutRoomOrHttp() {
+        Probe().use { probe ->
+            val source = LeaseSource(probe.config)
+            val vm = vm(acquire = source::acquire)
+            val id = checkNotNull(vm.state.value.selected).id
+            vm.editDraft("scope already gone")
+            stores.last().clear()
+            vm.send("provider/model", SESSION_A)
+            assertFalse(vm.state.value.sending)
+            assertEquals("scope already gone", vm.state.value.draft)
+            assertEquals(1, source.captures.get())
+            assertEquals(1, source.closes.get())
+            assertEquals(0, probe.requests.get())
+            assertTrue(runBlocking(Dispatchers.IO) { repo.messages(id) }.isEmpty())
+        }
+    }
+
+    @Test fun sessionChangeAfterContextBeforeBeginCreatesNoTurnOrRequest() {
+        Probe().use { probe ->
+            val source = LeaseSource(probe.config)
+            val vm = vm(turnStore = { repository, id ->
+                // Factory is called after context has been read, immediately before guarded begin.
+                source.change(SESSION_A_NEXT, invalidate = false)
+                repository.turnStore(id)
+            }, acquire = source::acquire)
+            val id = checkNotNull(vm.state.value.selected).id
+            vm.editDraft("expired before begin")
+            vm.send("provider/model", SESSION_A)
+            val after = settled(vm)
+            assertEquals("expired before begin", after.draft)
+            assertEquals(0, probe.requests.get())
+            assertTrue(runBlocking(Dispatchers.IO) { repo.messages(id) }.isEmpty())
+            assertEquals(1, source.closes.get())
+        }
+    }
+
+    @Test fun invalidationAfterBeginClosesKnownTurnAndOnlyNewExplicitSendUsesNewSession() {
+        Probe().use { probe ->
+            val source = LeaseSource(probe.config)
+            val invalidateOnce = AtomicBoolean(true)
+            val vm = vm(turnStore = { repository, id ->
+                val real = repository.turnStore(id)
+                object : ChatTurnStore by real {
+                    override fun begin(user: SessionRecord): String = real.begin(user).also {
+                        if (invalidateOnce.compareAndSet(true, false)) source.change(SESSION_A_NEXT, invalidate = false)
+                    }
+                }
+            }, acquire = source::acquire)
+            val id = checkNotNull(vm.state.value.selected).id
+            vm.editDraft("manual retry after known failure")
+            vm.send("provider/model", SESSION_A)
+            settled(vm)
+            assertEquals(0, probe.requests.get())
+            assertEquals("manual retry after known failure", vm.state.value.draft)
+            runBlocking(Dispatchers.IO) {
+                assertNull(db.chatDao().runningOperation(id))
+                val failed = repo.messages(id)
+                assertEquals(listOf("user", "error"), failed.map { it.role })
+                assertTrue(failed.all { it.state == "FAILED" })
+                assertEquals("Chat failed; partial characters=0", failed.last().text)
+                assertTrue(repo.context(id).isEmpty())
+            }
+            vm.refresh(); settled(vm)
+            assertEquals(0, probe.requests.get())
+            vm.send("provider/model", SESSION_A_NEXT)
+            assertTrue(probe.started.await(5, TimeUnit.SECONDS))
+            probe.release.countDown()
+            val completed = settled(vm)
+            assertEquals("", completed.draft)
+            assertEquals(listOf("FAILED", "FAILED", "SUCCEEDED", "SUCCEEDED"), completed.messages.map { it.state })
+            assertEquals(1, probe.requests.get())
+            assertEquals(2, source.captures.get())
+            assertEquals(2, source.closes.get())
+        }
+    }
+
+    @Test fun epochAndOwnerInvalidationCloseRealSilentHeaderAndBodySocketsWithoutReplay() {
+        for (replacement in listOf(SESSION_A_NEXT, SESSION_B)) {
+            for (sendHeaders in listOf(false, true)) {
+                SilentProbe(sendHeaders).use { probe ->
+                    val source = LeaseSource(probe.config)
+                    val vm = vm(acquire = source::acquire)
+                    vm.newConversation(); settled(vm)
+                    val id = checkNotNull(vm.state.value.selected).id
+                    vm.editDraft("retain this silent request draft")
+                    vm.send("provider/model", SESSION_A)
+                    assertTrue(probe.started.await(5, TimeUnit.SECONDS))
+                    assertTrue(vm.state.value.sending)
+                    source.change(replacement)
+                    assertTrue("Native invalidation must close blocked HTTP", probe.peerClosed.await(5, TimeUnit.SECONDS))
+                    val after = settled(vm)
+                    assertEquals("retain this silent request draft", after.draft)
+                    assertTrue(after.notice.contains("未自动重发"))
+                    assertEquals(1, source.closes.get())
+                    runBlocking(Dispatchers.IO) {
+                        assertNull(db.chatDao().runningOperation(id))
+                        val failed = repo.messages(id)
+                        assertEquals(listOf("user", "error"), failed.map { it.role })
+                        assertTrue(failed.all { it.state == "FAILED" })
+                        assertTrue(repo.context(id).isEmpty())
+                    }
+                    vm.refresh(); settled(vm)
+                    assertEquals(1, probe.requests.get())
+                    assertEquals(1, source.captures.get())
+                }
+            }
+        }
+    }
+
+    @Test fun invalidationPreservesFailedPreviewButNeverSavesPartialReasoningOrReplays() {
+        Probe(reasoning = "visible unfinished reasoning", pauseAfterPreview = true).use { probe ->
+            val source = LeaseSource(probe.config)
+            val vm = vm(acquire = source::acquire)
+            val id = checkNotNull(vm.state.value.selected).id
+            vm.editDraft("preview must remain only a preview")
+            vm.send("provider/model", SESSION_A)
+            assertTrue(probe.started.await(5, TimeUnit.SECONDS))
+            probe.release.countDown()
+            runBlocking { withTimeout(5000) {
+                vm.state.first { it.partial == "answer" && it.partialReasoning == "visible unfinished reasoning" }
+            } }
+            source.change(SESSION_A_NEXT)
+            assertTrue(probe.peerClosed.await(5, TimeUnit.SECONDS))
+            val failed = settled(vm)
+            assertEquals("preview must remain only a preview", failed.draft)
+            assertEquals("answer", failed.partial)
+            assertEquals("visible unfinished reasoning", failed.partialReasoning)
+            runBlocking(Dispatchers.IO) {
+                val messages = repo.messages(id)
+                assertEquals(listOf("user", "error"), messages.map { it.role })
+                assertTrue(messages.all { it.state == "FAILED" && it.reasoning.isEmpty() })
+                assertTrue(repo.context(id).isEmpty())
+            }
+            vm.refresh(); settled(vm)
+            assertEquals("answer", vm.state.value.partial)
+            assertEquals(1, source.captures.get())
+            assertEquals(1, probe.requests.get())
+            assertEquals(1, source.closes.get())
+        }
+    }
+
+    @Test fun permittedFallbackUsesOriginalLeaseAndInvalidationClosesItsSilentSocket() {
+        for (replacement in listOf(SESSION_A_NEXT, SESSION_B)) {
+            for (sendHeaders in listOf(false, true)) {
+                FallbackProbe(sendHeaders).use { probe ->
+                    val source = LeaseSource(probe.config)
+                    val vm = vm(acquire = source::acquire)
+                    vm.newConversation(); settled(vm)
+                    val id = checkNotNull(vm.state.value.selected).id
+                    vm.editDraft("one stream and one permitted fallback")
+                    vm.send("provider/model", SESSION_A)
+                    assertTrue(probe.fallbackStarted.await(5, TimeUnit.SECONDS))
+                    assertEquals(listOf(true, false), probe.streaming.toList())
+                    assertTrue(vm.state.value.sending)
+                    source.change(replacement)
+                    assertTrue("The fallback must share the registered cancellation signal",
+                        probe.peerClosed.await(5, TimeUnit.SECONDS))
+                    val failed = settled(vm)
+                    assertEquals("one stream and one permitted fallback", failed.draft)
+                    assertTrue(failed.notice.contains("未自动重发"))
+                    assertEquals(1, source.captures.get())
+                    assertEquals(1, source.closes.get())
+                    assertEquals(2, probe.requests.get())
+                    runBlocking(Dispatchers.IO) {
+                        assertNull(db.chatDao().runningOperation(id))
+                        assertEquals(listOf("user", "error"), repo.messages(id).map { it.role })
+                        assertTrue(repo.context(id).isEmpty())
+                    }
+                    vm.refresh(); settled(vm)
+                    assertEquals(2, probe.requests.get())
+                    assertEquals(1, source.captures.get())
+                }
+            }
+        }
+    }
+
+    @Test fun completeGuardRejectsStaleLeaseButCanFinalizeFailedRoomTurn() = runBlocking(Dispatchers.IO) {
+        val source = LeaseSource(GatewayConfig(gatewayBaseUrl = "http://127.0.0.1:1", gatewayKey = "synthetic"))
+        val lease = source.acquire(SESSION_A)
+        val id = repo.createConversation()
+        val real = repo.turnStore(id)
+        val entries = AtomicInteger()
+        val committed = AtomicBoolean()
+        val observed = object : ChatTurnStore by real {
+            override fun complete(turnId: String, assistant: SessionRecord) {
+                entries.incrementAndGet()
+                real.complete(turnId, assistant)
+            }
+        }
+        val guarded = cancellableTurnStore(observed, Job(), lease::ensureCurrent, { committed.set(true) })
+        val turn = guarded.begin(SessionRecord(1, "user", "chat:p/m", "reject before storage"))
+        source.change(SESSION_A_NEXT, invalidate = false)
+        assertThrows(CancellationException::class.java) {
+            guarded.complete(turn, SessionRecord(2, "assistant", "chat:p/m", "must not commit"))
+        }
+        assertFalse(committed.get())
+        assertEquals(0, entries.get())
+        guarded.fail(turn, SessionRecord(3, "error", "chat:p/m", "Chat failed; partial characters=0"))
+        assertEquals("FAILED", db.chatDao().operation(turn)?.state)
+        assertTrue(repo.context(id).isEmpty())
+        lease.close()
+    }
+
+    @Test fun invalidationInsideSuccessfulCompleteKeepsAuthoritativeRoomOutcomeAndClearsDraft() {
+        assertCommittedDraftOutcome(cancelSendJob = false)
+    }
+
+    @Test fun promptCancellationReturningFromCommittedIoClearsDraftWhileViewModelRemainsUsable() {
+        assertCommittedDraftOutcome(cancelSendJob = true)
+    }
+
+    private fun assertCommittedDraftOutcome(cancelSendJob: Boolean) {
+        Probe(reasoning = "saved reasoning").use { probe ->
+            val source = LeaseSource(probe.config)
+            val owner = AtomicReference<ChatViewModel>()
+            val enteredComplete = CountDownLatch(1)
+            val finishComplete = CountDownLatch(1)
+            val vm = vm(turnStore = { repository, id ->
+                val real = repository.turnStore(id)
+                object : ChatTurnStore by real {
+                    override fun complete(turnId: String, assistant: SessionRecord) {
+                        // The guarded storage entry has already been accepted. Complete must win.
+                        if (cancelSendJob) {
+                            owner.get().viewModelScope.coroutineContext[Job]!!.children.single().cancel()
+                        }
+                        enteredComplete.countDown()
+                        check(finishComplete.await(10, TimeUnit.SECONDS))
+                        real.complete(turnId, assistant)
+                    }
+                }
+            }, acquire = source::acquire)
+            owner.set(vm)
+            val id = checkNotNull(vm.state.value.selected).id
+            try {
+                vm.editDraft("success must not remain a retransmittable draft")
+                vm.send("provider/model", SESSION_A)
+                assertTrue(probe.started.await(5, TimeUnit.SECONDS))
+                probe.release.countDown()
+                assertTrue(enteredComplete.await(5, TimeUnit.SECONDS))
+                if (!cancelSendJob) source.change(SESSION_A_NEXT)
+                // Invalidating or cancelling cannot enable another send before this worker exits.
+                assertTrue(vm.state.value.sending)
+                vm.send("provider/model", SESSION_A_NEXT)
+                assertEquals(1, source.captures.get())
+                assertEquals(0, source.closes.get())
+                finishComplete.countDown()
+                val after = settled(vm)
+                assertEquals("", after.draft)
+                assertEquals("", after.partial)
+                assertEquals("", after.partialReasoning)
+                assertEquals("本轮已保存。", after.notice)
+                runBlocking(Dispatchers.IO) {
+                    val messages = repo.messages(id)
+                    assertEquals(listOf("user", "assistant"), messages.map { it.role })
+                    assertTrue(messages.all { it.state == "SUCCEEDED" })
+                    assertEquals("saved reasoning", messages.last().reasoning)
+                    assertNull(db.chatDao().runningOperation(id))
+                }
+                assertEquals(1, probe.requests.get())
+                assertEquals(1, source.closes.get())
+                // Scope itself was retained; history/selection refresh cannot restore the committed draft.
+                vm.newConversation(); settled(vm)
+                vm.selectConversation(id)
+                assertEquals("", settled(vm).draft)
+                assertEquals(1, probe.requests.get())
+            } finally { finishComplete.countDown() }
+        }
+    }
+
+    private class LeaseSource(private val config: GatewayConfig) {
+        private val registry = GatewayRequestLeases()
+        private val current = AtomicReference(SESSION_A)
+        val captures = AtomicInteger()
+        val closes = AtomicInteger()
+        val controls = CopyOnWriteArrayList<cc.fplj.magpiemobile.core.ChatRequestControl>()
+
+        fun acquire(key: ProviderSessionKey): GatewayRequestLease {
+            if (key != current.get()) throw CancellationException("Stale synthetic session")
+            captures.incrementAndGet()
+            val lease = registry.acquire(config) { current.get() == key }
+            controls.add(lease.control)
+            return object : GatewayRequestLease by lease {
+                override fun close() { closes.incrementAndGet(); lease.close() }
+            }
+        }
+
+        fun change(key: ProviderSessionKey, invalidate: Boolean = true) {
+            current.set(key)
+            if (invalidate) registry.invalidate()
+        }
+    }
+
+    /** Queues only when explicitly held; released work still runs off Robolectric's main thread. */
+    private class GatedDispatcher : CoroutineDispatcher() {
+        @Volatile var hold = false
+        private val lock = Any()
+        private val pending = ConcurrentLinkedQueue<Pair<CoroutineContext, Runnable>>()
+        val queued: Int get() = pending.size
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            val queued = synchronized(lock) {
+                if (hold) { pending.add(context to block); true } else false
+            }
+            if (!queued) Dispatchers.IO.dispatch(context, block)
+        }
+        fun release() {
+            val released = synchronized(lock) {
+                hold = false
+                buildList {
+                    while (true) { add(pending.poll() ?: break) }
+                }
+            }
+            released.forEach { (context, block) -> Dispatchers.IO.dispatch(context, block) }
+        }
+    }
+
+    /** Actual HTTP 405 permits one non-stream request, which then stays silent until cancelled. */
+    private class FallbackProbe(private val sendHeaders: Boolean) : AutoCloseable {
+        private val server = ServerSocket(0)
+        @Volatile private var accepted: Socket? = null
+        val fallbackStarted = CountDownLatch(1)
+        val peerClosed = CountDownLatch(1)
+        val requests = AtomicInteger()
+        val streaming = CopyOnWriteArrayList<Boolean>()
+        val config = GatewayConfig(gatewayBaseUrl = "http://127.0.0.1:" + server.localPort,
+            gatewayKey = "synthetic-fallback-key", readTimeout = Duration.ofSeconds(30))
+        private val worker = thread(isDaemon = true) {
+            try {
+                repeat(2) { attempt ->
+                    server.accept().use { client ->
+                        accepted = client
+                        client.soTimeout = 15000
+                        requests.incrementAndGet()
+                        val input = client.getInputStream().buffered()
+                        val header = StringBuilder()
+                        while (!header.endsWith("\r\n\r\n")) {
+                            val value = input.read()
+                            if (value < 0) return@use
+                            header.append(value.toChar())
+                        }
+                        val length = header.lineSequence().firstOrNull { it.startsWith("Content-Length:", true) }
+                            ?.substringAfter(':')?.trim()?.toInt() ?: 0
+                        val body = ByteArray(length)
+                        for (index in body.indices) body[index] = input.read().also { check(it >= 0) }.toByte()
+                        streaming.add(String(body, Charsets.UTF_8).contains("\"stream\":true"))
+                        if (attempt == 0) {
+                            client.getOutputStream().apply {
+                                write("HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                                flush()
+                            }
+                        } else {
+                            if (sendHeaders) client.getOutputStream().apply {
+                                write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 128\r\nConnection: close\r\n\r\n".toByteArray())
+                                flush()
+                            }
+                            fallbackStarted.countDown()
+                            try {
+                                if (input.read() < 0) peerClosed.countDown()
+                            } catch (_: SocketException) { peerClosed.countDown() }
+                        }
+                    }
+                }
+            } catch (_: java.io.IOException) { /* Listener/peer closes during test cleanup. */ }
+        }
+        override fun close() {
+            accepted?.close()
+            server.close()
+            worker.join(5000)
+        }
+    }
+
     /** The server never releases a response: only cancellation can close the client promptly. */
     private class SilentProbe(private val sendHeaders: Boolean) : AutoCloseable {
         private val server = ServerSocket(0)
@@ -402,8 +892,14 @@ class ChatViewModelTest {
     }
 
     /** Local synthetic SSE only: no vendor key, DNS, inference, or public network. */
-    private class Probe(val success: Boolean = true, val reasoning: String? = null) : AutoCloseable {
+    private class Probe(
+        val success: Boolean = true,
+        val reasoning: String? = null,
+        private val pauseAfterPreview: Boolean = false,
+    ) : AutoCloseable {
         private val socket = ServerSocket(0)
+        @Volatile private var active: Socket? = null
+        val peerClosed = CountDownLatch(1)
         val started = CountDownLatch(1)
         val release = CountDownLatch(1)
         val requests = AtomicInteger()
@@ -413,7 +909,8 @@ class ChatViewModelTest {
             while (!socket.isClosed) {
                 val accepted = try { socket.accept() } catch (_: java.net.SocketException) { break }
                 requests.incrementAndGet()
-                accepted.use { client ->
+                active = accepted
+                try { accepted.use { client ->
                 val input = client.getInputStream().buffered()
                 val requestHeader = StringBuilder()
                 while (!requestHeader.endsWith("\r\n\r\n")) {
@@ -431,15 +928,35 @@ class ChatViewModelTest {
                 val reasoningBody = reasoning?.let {
                     "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"$it\"}}]}\n\n"
                 }.orEmpty()
-                val body = reasoningBody +
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n" +
-                    if (success) "data: [DONE]\n\n" else ""
-                val bytes = body.toByteArray()
+                val preview = reasoningBody + "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n"
+                val suffix = if (success) "data: [DONE]\n\n" else ""
+                val bytes = (preview + suffix).toByteArray()
                 val header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: " + bytes.size + "\r\nConnection: close\r\n\r\n"
-                client.getOutputStream().apply { write(header.toByteArray()); write(bytes); flush() }
+                client.getOutputStream().apply {
+                    write(header.toByteArray())
+                    write(if (pauseAfterPreview) preview.toByteArray() else bytes)
+                    flush()
                 }
+                if (pauseAfterPreview) {
+                    try {
+                        if (input.read() < 0) peerClosed.countDown()
+                    } catch (_: SocketException) { peerClosed.countDown() }
+                }
+                } } catch (_: java.io.IOException) { /* Cancellation/cleanup closes the peer. */ }
             }
         }
-        override fun close() { release.countDown(); socket.close(); worker.join(10000) }
+        override fun close() {
+            release.countDown()
+            active?.close()
+            socket.close()
+            worker.join(10000)
+        }
     }
+
+    private companion object {
+        val SESSION_A = ProviderSessionKey(81, 1)
+        val SESSION_A_NEXT = ProviderSessionKey(81, 2)
+        val SESSION_B = ProviderSessionKey(82, 1)
+    }
+
 }

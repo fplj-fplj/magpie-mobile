@@ -16,6 +16,7 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import cc.fplj.magpiemobile.core.*
+import cc.fplj.magpiemobile.data.ChatRepository
 import java.io.BufferedInputStream
 import java.io.Closeable
 import java.io.File
@@ -686,6 +687,7 @@ class OfficialPluginsInstrumentedTest {
                         else { device.findObject(By.text("网关"))?.click(); false }
                     }
                     verifySameOwnerProviderReconnect(artifacts)
+                    verifyChatAndCatalogReconnect(upstream, artifacts)
                     val stoppedOwner = requireNotNull(NativeCoreSession.providerSessionId())
                     val stoppedProviderSession = requireNotNull(NativeCoreSession.providerSessionKey())
                     val stoppedLease = NativeCoreSession.gatewayRequest(stoppedOwner)
@@ -842,12 +844,15 @@ class OfficialPluginsInstrumentedTest {
         assertSame(oldList, cache.read(before) { error("same-connection cache was not reused") })
         val oldLease = NativeCoreSession.providerRequest(before)
         val oldPluginLease = NativeCoreSession.pluginRequest(before)
+        val oldGatewayLease = NativeCoreSession.gatewayRequest(before)
         try {
+            oldGatewayLease.ensureCurrent()
             NativeCoreSession.suspend(before.owner)
             assertNull(NativeCoreSession.providerSessionKey())
             assertNull(NativeCoreSession.status.value.providerSession)
             assertThrows(java.util.concurrent.CancellationException::class.java) { oldLease.control.ensureActive() }
             assertThrows(java.util.concurrent.CancellationException::class.java) { oldPluginLease.control.ensureActive() }
+            assertThrows(java.util.concurrent.CancellationException::class.java) { oldGatewayLease.control.ensureActive() }
             NativeCoreSession.connect(before.owner, context.filesDir)
             await("same-owner real core re-authentication", 30_000) { NativeCoreSession.status.value.ready }
             val after = requireNotNull(NativeCoreSession.providerSessionKey())
@@ -859,6 +864,8 @@ class OfficialPluginsInstrumentedTest {
             assertThrows(java.util.concurrent.CancellationException::class.java) { oldLease.client.getProviders() }
             assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.pluginRequest(before) }
             assertThrows(java.util.concurrent.CancellationException::class.java) { oldPluginLease.client.plugins() }
+            assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.gatewayRequest(before) }
+            assertThrows(java.util.concurrent.CancellationException::class.java) { oldGatewayLease.ensureCurrent() }
             NativeCoreSession.connect(after.owner, context.filesDir)
             assertEquals("duplicate RUNNING changed the verified connection", after, NativeCoreSession.providerSessionKey())
             val refreshed = cache.read(after) {
@@ -868,6 +875,10 @@ class OfficialPluginsInstrumentedTest {
             assertEquals(updatedName, refreshed.providers.single { it.id == "android-runtime" }.name)
             assertEquals(2, fetches)
             NativeCoreSession.pluginRequest(after).use { fresh -> assertTrue(fresh.client.plugins().bun) }
+            NativeCoreSession.gatewayRequest(after).use { fresh ->
+                fresh.ensureCurrent()
+                assertTrue(ModelsClient(fresh.config, requestControl = fresh.control).list().isNotEmpty())
+            }
             File(artifacts, "provider-same-owner-reconnect.txt").writeText(
                 "PASS: real management edit followed by suspend/re-authentication of the same running core; " +
                     "Service owner unchanged, epoch advanced, READY snapshot changed, duplicate RUNNING stable; " +
@@ -880,6 +891,93 @@ class OfficialPluginsInstrumentedTest {
         } finally {
             oldLease.close()
             oldPluginLease.close()
+            oldGatewayLease.close()
+        }
+    }
+
+    /** Production VMs, real Room and a silent SSE through the installed Go gateway. */
+    private fun verifyChatAndCatalogReconnect(upstream: LocalUpstream, artifacts: File) {
+        val store = ViewModelStore()
+        val application = context.applicationContext as android.app.Application
+        lateinit var shell: AppShellViewModel
+        lateinit var chat: ChatViewModel
+        instrumentation.runOnMainSync {
+            shell = AppShellViewModel(application)
+            chat = ChatViewModel(application)
+            store.put("reconnect-catalog", shell)
+            store.put("reconnect-chat", chat)
+            shell.connectionChanged()
+        }
+        try {
+            await("production catalog and chat initialized") {
+                shell.state.value.catalogValid && shell.state.value.preferences.ready &&
+                    chat.state.value.ready && !chat.state.value.busy
+            }
+            val before = requireNotNull(shell.state.value.catalogSession)
+            assertEquals(NativeCoreSession.providerSessionKey(), before)
+            val model = shell.state.value.models.single {
+                it.id.contains("android-runtime") && it.id.endsWith("fake-echo")
+            }.id
+            instrumentation.runOnMainSync { shell.selectModel(model); chat.newConversation() }
+            await("isolated reconnect conversation") { !chat.state.value.busy && chat.state.value.messages.isEmpty() }
+            val conversation = requireNotNull(chat.state.value.selected).id
+            val repo = ChatRepository.open(context)
+            instrumentation.runOnMainSync {
+                chat.editDraft(RECONNECT_PROBE)
+                chat.send(model, expectedSession = before)
+            }
+            assertTrue("real chat never reached the controlled upstream", upstream.chatGateReached.await(15, TimeUnit.SECONDS))
+            await("real SSE preview before reauthentication") { chat.state.value.partial.isNotEmpty() }
+            assertTrue(chat.state.value.sending)
+
+            NativeCoreSession.suspend(before.owner)
+            NativeCoreSession.connect(before.owner, context.filesDir)
+            await("same-owner reauthentication during real chat") { NativeCoreSession.status.value.ready }
+            val after = requireNotNull(NativeCoreSession.providerSessionKey())
+            assertEquals(before.owner, after.owner)
+            assertTrue(after.epoch > before.epoch)
+            assertTrue("upstream SSE socket was not actually closed", upstream.chatPeerClosed.await(10, TimeUnit.SECONDS))
+            await("cancelled chat worker and Room cleanup") { !chat.state.value.sending }
+            assertEquals(RECONNECT_PROBE, chat.state.value.draft)
+            assertTrue(chat.state.value.notice.contains("草稿已保留"))
+            val failed = repo.messages(conversation)
+            assertEquals(listOf("user", "error"), failed.map { it.role })
+            assertTrue(failed.all { it.state == "FAILED" })
+            assertNull(repo.database.chatDao().runningOperation(conversation))
+            assertTrue(repo.context(conversation).isEmpty())
+            assertEquals(1, upstream.requests.count { it.contains(RECONNECT_PROBE) })
+
+            // Deliberately do not notify this shell: simulate a click before its Compose effect.
+            assertEquals(before, shell.state.value.catalogSession)
+            val retry = "android-reconnect-explicit-retry"
+            instrumentation.runOnMainSync {
+                chat.editDraft(retry)
+                chat.send(model, expectedSession = shell.state.value.catalogSession)
+            }
+            assertFalse("stale catalog click started a new worker", chat.state.value.sending)
+            assertEquals(retry, chat.state.value.draft)
+            assertEquals(failed, repo.messages(conversation))
+            assertEquals(0, upstream.requests.count { it.contains(retry) })
+            instrumentation.runOnMainSync { shell.connectionChanged() }
+            await("fresh real catalog after same-owner epoch change") {
+                shell.state.value.catalogValid && shell.state.value.catalogSession == after
+            }
+            assertEquals(model, shell.state.value.selectedModel)
+            assertEquals(0, upstream.requests.count { it.contains(retry) })
+            instrumentation.runOnMainSync { chat.send(model, expectedSession = shell.state.value.catalogSession) }
+            await("explicit retry saved exactly once") { !chat.state.value.sending && chat.state.value.draft.isEmpty() }
+            assertEquals(1, upstream.requests.count { it.contains(retry) })
+            assertEquals(listOf("user", "error", "user", "assistant"), repo.messages(conversation).map { it.role })
+            assertEquals(listOf("user", "assistant"), repo.context(conversation).map { it.role })
+            File(artifacts, "chat-catalog-same-owner-reconnect.txt").writeText(
+                "PASS: production Chat/Catalog VMs used the installed Go gateway and real Room; " +
+                    "same-owner reauthentication closed the held SSE peer, failed the old turn, " +
+                    "kept the live draft and excluded partial output from context; an old catalog click " +
+                    "created no worker, HTTP or Room write; a fresh authenticated catalog kept the " +
+                    "selected model, and only one explicit new click committed the retry\n",
+            )
+        } finally {
+            instrumentation.runOnMainSync { store.clear() }
         }
     }
 
@@ -1049,6 +1147,8 @@ class OfficialPluginsInstrumentedTest {
         val requests = CopyOnWriteArrayList<String>()
         val signInGateReached = CountDownLatch(1)
         val releaseSignInGate = CountDownLatch(1)
+        val chatGateReached = CountDownLatch(1)
+        val chatPeerClosed = CountDownLatch(1)
         val base = "http://127.0.0.1:${server.localPort}"
         @Volatile var streamFinished = false
         init {
@@ -1116,6 +1216,19 @@ class OfficialPluginsInstrumentedTest {
             }
             val messages = body.getJSONArray("messages")
             val text = messages.getJSONObject(messages.length() - 1).getString("content")
+            if (text.startsWith(RECONNECT_PROBE)) {
+                output.write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".toByteArray())
+                val event = JSONObject().put("choices", JSONArray().put(JSONObject().put("index", 0)
+                    .put("delta", JSONObject().put("content", "controlled partial"))))
+                output.write("data: $event\n\n".toByteArray())
+                output.flush()
+                chatGateReached.countDown()
+                // A read timeout is a failure: only EOF/reset proves the actual peer closed.
+                try {
+                    if (input.read() == -1) chatPeerClosed.countDown()
+                } catch (_: java.net.SocketException) { chatPeerClosed.countDown() }
+                return
+            }
             if (body.optBoolean("stream")) {
                 streamFinished = false
                 output.write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".toByteArray())
@@ -1146,6 +1259,7 @@ class OfficialPluginsInstrumentedTest {
     }
 
     companion object {
+        private const val RECONNECT_PROBE = "android-reconnect-silent-probe"
         private val PROVIDER = """
             import { writeFileSync } from "node:fs"
             export const AndroidFixture = async (_, options = {}) => ({

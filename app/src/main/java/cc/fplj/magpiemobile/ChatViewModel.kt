@@ -6,8 +6,6 @@ import androidx.lifecycle.viewModelScope
 import cc.fplj.magpiemobile.core.ChatClient
 import cc.fplj.magpiemobile.core.ChatTurnStore
 import cc.fplj.magpiemobile.core.ChatException
-import cc.fplj.magpiemobile.core.ChatRequestControl
-import cc.fplj.magpiemobile.core.GatewayConfig
 import cc.fplj.magpiemobile.core.StreamingChatClient
 import cc.fplj.magpiemobile.core.StreamingChatException
 import cc.fplj.magpiemobile.core.StreamingChatFailure
@@ -17,9 +15,13 @@ import cc.fplj.magpiemobile.data.ContextLimitException
 import cc.fplj.magpiemobile.data.ConversationSummary
 import cc.fplj.magpiemobile.data.StoredChatMessage
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,47 +47,53 @@ data class ChatUiState(
     val contextBlocked: Boolean = false,
 )
 
-/** Activity ViewModel owns requests: rotation never launches another billable send. */
-internal class ChatConnection(val config: GatewayConfig, val isCurrent: () -> Boolean)
-
 /** Once begin commits, cancellation must close that identity even before core receives it. */
-internal fun cancellableTurnStore(base: ChatTurnStore, context: kotlin.coroutines.CoroutineContext): ChatTurnStore =
-    object : ChatTurnStore by base {
-        override fun begin(user: cc.fplj.magpiemobile.core.SessionRecord): String {
-            context.ensureActive()
-            val id = base.begin(user)
-            try {
-                context.ensureActive()
-            } catch (cancelled: CancellationException) {
-                try {
-                    base.fail(id, cc.fplj.magpiemobile.core.SessionRecord(System.currentTimeMillis(), "error", user.engine, "Chat failed; partial characters=0"))
-                } catch (_: Exception) {
-                    // Storage is unavailable: retain UNKNOWN/RUNNING for later process recovery, never replay.
-                }
-                throw cancelled
-            }
-            return id
-        }
-
-        override fun complete(turnId: String, assistant: cc.fplj.magpiemobile.core.SessionRecord) {
-            // Cancellation before entering the storage transaction prevents a success commit.
-            // Once that transaction starts, its result is authoritative; do not fail it afterwards.
-            context.ensureActive()
-            base.complete(turnId, assistant)
-        }
+internal fun cancellableTurnStore(
+    base: ChatTurnStore,
+    context: kotlin.coroutines.CoroutineContext,
+    ensureCurrent: () -> Unit = {},
+    onCommitted: () -> Unit = {},
+): ChatTurnStore = object : ChatTurnStore by base {
+    private fun guard() {
+        context.ensureActive()
+        ensureCurrent()
+        context.ensureActive()
     }
 
+    override fun begin(user: cc.fplj.magpiemobile.core.SessionRecord): String {
+        guard()
+        val id = base.begin(user)
+        try {
+            guard()
+        } catch (cancelled: CancellationException) {
+            try {
+                base.fail(id, cc.fplj.magpiemobile.core.SessionRecord(System.currentTimeMillis(),
+                    "error", user.engine, "Chat failed; partial characters=0"))
+            } catch (_: Exception) {
+                // Keep UNKNOWN/RUNNING for later process recovery if storage is unavailable.
+            }
+            throw cancelled
+        }
+        return id
+    }
+
+    override fun complete(turnId: String, assistant: cc.fplj.magpiemobile.core.SessionRecord) {
+        // Before entry cancellation prevents the transaction; once committed Room is authoritative.
+        guard()
+        base.complete(turnId, assistant)
+        onCommitted()
+    }
+}
+
+/** Activity ViewModel owns requests: rotation never launches another billable send. */
 class ChatViewModel internal constructor(
     application: Application,
     private val openRepository: (Application) -> ChatRepository,
-    private val currentConnection: () -> ChatConnection?,
+    private val acquire: (ProviderSessionKey) -> GatewayRequestLease,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val turnStore: (ChatRepository, String) -> ChatTurnStore = { repo, id -> repo.turnStore(id) },
 ) : AndroidViewModel(application) {
-    constructor(application: Application) : this(application, { ChatRepository.open(it) }, {
-        val owner = NativeCoreSession.providerSessionId()
-        if (owner == null) null else try {
-            ChatConnection(NativeCoreSession.gatewayConfig()) { owner == NativeCoreSession.providerSessionId() }
-        } catch (_: Exception) { null }
-    })
+    constructor(application: Application) : this(application, { ChatRepository.open(it) }, NativeCoreSession::gatewayRequest)
     private val mutable = MutableStateFlow(ChatUiState())
     val state = mutable.asStateFlow()
     private var repository: ChatRepository? = null
@@ -104,7 +112,7 @@ class ChatViewModel internal constructor(
         mutable.update { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                val report = withContext(Dispatchers.IO) {
+                val report = withContext(dispatcher) {
                     val repo = repository ?: openRepository(getApplication()).also { repository = it }
                     repo.initialize(File(getApplication<Application>().filesDir, "chat.jsonl"))
                 }
@@ -129,7 +137,7 @@ class ChatViewModel internal constructor(
         mutable.update { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { checkNotNull(repository).renameConversation(id, title) }
+                withContext(dispatcher) { checkNotNull(repository).renameConversation(id, title) }
                 if (snapshot.selected?.id == id) loadLatest(id) else reloadConversationList()
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { mutable.update { it.copy(notice = "会话重命名失败；原标题保留。") } }
@@ -144,7 +152,7 @@ class ChatViewModel internal constructor(
         mutable.update { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { checkNotNull(repository).deleteConversation(id) }
+                withContext(dispatcher) { checkNotNull(repository).deleteConversation(id) }
                 drafts.remove(id)
                 // Deleted selection falls back to the newest live conversation automatically.
                 loadLatest(if (snapshot.selected?.id == id) null else snapshot.selected?.id)
@@ -162,7 +170,7 @@ class ChatViewModel internal constructor(
 
     private suspend fun reloadConversationList() {
         val repo = checkNotNull(repository)
-        val list = withContext(Dispatchers.IO) { repo.conversations(limit = 31) }
+        val list = withContext(dispatcher) { repo.conversations(limit = 31) }
         mutable.update { it.copy(conversations = list.take(30), moreConversations = list.size > 30) }
     }
 
@@ -173,7 +181,7 @@ class ChatViewModel internal constructor(
         mutable.update { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                val target = if (create) withContext(Dispatchers.IO) { checkNotNull(repository).createConversation() } else id
+                val target = if (create) withContext(dispatcher) { checkNotNull(repository).createConversation() } else id
                 loadLatest(target)
                 mutable.update {
                     it.copy(draft = drafts[it.selected?.id].orEmpty(), partial = "",
@@ -186,7 +194,7 @@ class ChatViewModel internal constructor(
     }
 
     private suspend fun loadLatest(selectedId: String?) {
-        val loaded = withContext(Dispatchers.IO) {
+        val loaded = withContext(dispatcher) {
             val repo = checkNotNull(repository)
             val list = repo.conversations(limit = 31)
             val selected = selectedId?.let(repo::conversation)
@@ -213,7 +221,7 @@ class ChatViewModel internal constructor(
         mutable.update { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                val page = withContext(Dispatchers.IO) { checkNotNull(repository).messages(id, before, 51) }
+                val page = withContext(dispatcher) { checkNotNull(repository).messages(id, before, 51) }
                 mutable.update { it.copy(messages = page.takeLast(50), olderMessages = page.size > 50, viewingOlderMessages = true) }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { mutable.update { it.copy(notice = "更早消息读取失败；现有消息保留。") } }
@@ -227,7 +235,7 @@ class ChatViewModel internal constructor(
         mutable.update { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                val page = withContext(Dispatchers.IO) { checkNotNull(repository).conversations(snapshot.conversations.size, 31) }
+                val page = withContext(dispatcher) { checkNotNull(repository).conversations(snapshot.conversations.size, 31) }
                 mutable.update { it.copy(conversations = it.conversations + page.take(30), moreConversations = page.size > 30) }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { mutable.update { it.copy(notice = "会话列表读取失败；现有列表保留。") } }
@@ -235,53 +243,64 @@ class ChatViewModel internal constructor(
         }
     }
 
-    fun send(model: String) {
+    fun send(model: String, expectedSession: ProviderSessionKey?) {
         val snapshot = mutable.value
         val selected = snapshot.selected ?: return
         if (!snapshot.ready || snapshot.busy || snapshot.sending || selected.legacy || snapshot.contextBlocked || snapshot.draft.isBlank() || model.isBlank()) return
-        // Capture a current private connection, never store its key in Room or public state.
-        val connection = try { currentConnection() } catch (_: Exception) { null } ?: return
-        val config = connection.config
+        if (expectedSession == null) return
+        // Capture on the caller: an old catalog click must never acquire replacement credentials.
+        val lease = try { acquire(expectedSession) } catch (_: Exception) {
+            mutable.update { it.copy(notice = "连接已变化；草稿已保留，未自动重发。请等待模型目录刷新后手动发送。") }
+            return
+        }
+        val committed = AtomicBoolean()
+        val released = AtomicBoolean()
         mutable.update { it.copy(sending = true, partial = "", partialReasoning = "", notice = "") }
-        viewModelScope.launch {
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
-                withContext(Dispatchers.IO) {
+                withContext(dispatcher) {
+                    val sendContext = coroutineContext
+                    fun ensureCurrent() {
+                        sendContext.ensureActive()
+                        lease.ensureCurrent()
+                        sendContext.ensureActive()
+                    }
+                    ensureCurrent()
                     val repo = checkNotNull(repository)
                     val context = repo.context(selected.id)
+                    ensureCurrent()
                     if (context.size >= 80 || context.sumOf { it.content.length.toLong() } + snapshot.draft.length > 65536) throw ContextLimitException()
-                    check(connection.isCurrent())
-                    val sendContext = coroutineContext
-                    sendContext.ensureActive()
-                    val baseTurns = repo.turnStore(selected.id)
-                    val guardedTurns = cancellableTurnStore(baseTurns, sendContext)
-                    val requestControl = ChatRequestControl()
+                    val guardedTurns = cancellableTurnStore(turnStore(repo, selected.id), sendContext,
+                        ensureCurrent = lease::ensureCurrent, onCommitted = { committed.set(true) })
+                    val requestControl = lease.control
                     val session = StreamingChatSession(
-                        StreamingChatClient(config, requestControl = requestControl),
-                        ChatClient(config, requestControl = requestControl), store = null, defaultModel = model,
+                        StreamingChatClient(lease.config, requestControl = requestControl),
+                        ChatClient(lease.config, requestControl = requestControl), store = null, defaultModel = model,
                         turnStore = guardedTurns, initialMessages = context, requestControl = requestControl,
                     )
                     withChatRequestCancellation(requestControl) { session.sendWithReasoning(
                         text = snapshot.draft,
                         model = model,
                         onReasoning = { delta ->
-                            sendContext.ensureActive()
+                            ensureCurrent()
                             mutable.update {
                                 it.copy(partialReasoning = (it.partialReasoning + delta).take(65536))
                             }
                         },
                         onDelta = { delta ->
-                            sendContext.ensureActive()
+                            ensureCurrent()
                             // Direct atomic update; no unlimited channel or delayed Activity callback.
                             mutable.update { it.copy(partial = (it.partial + delta).take(65536)) }
                         },
                     ) }
+                    // No post-lease guard: a successful Room commit is the result of this turn.
                 }
-                drafts.remove(selected.id)
-                mutable.update {
-                    it.copy(draft = "", partial = "", partialReasoning = "", notice = "本轮已保存。")
+            } catch (e: CancellationException) {
+                if (!committed.get()) mutable.update {
+                    it.copy(notice = "连接已变化；草稿已保留，未自动重发。上游可能已处理，手动发送可能再次消耗额度。")
                 }
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) {
+                if (!coroutineContext.isActive) throw e
+            } catch (e: Exception) {
                 val status = when (e) {
                     is ContextLimitException -> "上下文达到本机安全上限，请新建会话"
                     is ChatException -> "HTTP " + e.httpCode
@@ -294,12 +313,28 @@ class ChatViewModel internal constructor(
                 }
                 mutable.update { it.copy(notice = "发送未完成（" + status + "）；草稿已保留，未自动重发。上游可能已处理，手动发送可能再次消耗额度。") }
             } finally {
-                // A read failure must not be followed by another network operation or destructive repair.
-                try { loadLatest(selected.id) }
-                catch (e: CancellationException) { throw e }
-                catch (_: Exception) { mutable.update { it.copy(ready = false, notice = it.notice + " 会话读取失败；保留原始数据，当前禁止发送。") } }
-                finally { mutable.update { it.copy(sending = false) } }
+                // withContext may throw on its return dispatch even after the transaction committed.
+                if (committed.get()) {
+                    drafts.remove(selected.id)
+                    mutable.update { it.copy(draft = "", partial = "", partialReasoning = "", notice = "本轮已保存。") }
+                }
+                // A disposed ViewModel needs no extra read; the blocking worker has already ended.
+                if (coroutineContext.isActive) {
+                    try { loadLatest(selected.id) }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { mutable.update { it.copy(ready = false, notice = it.notice + " 会话读取失败；保留原始数据，当前禁止发送。") } }
+                }
             }
         }
+        // Also runs if the captured request never reaches its Main or IO body.
+        job.invokeOnCompletion {
+            if (released.compareAndSet(false, true)) {
+                if (!committed.get()) lease.control.cancel()
+                lease.close()
+            }
+            // Completion waits for the actual worker and Room cleanup, not just a new READY event.
+            mutable.update { it.copy(sending = false) }
+        }
+        job.start()
     }
 }

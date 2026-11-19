@@ -4,22 +4,18 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cc.fplj.magpiemobile.core.ModelEntry
-import cc.fplj.magpiemobile.core.ModelsClient
 import cc.fplj.magpiemobile.preferences.AppPage
 import cc.fplj.magpiemobile.preferences.AppUiPreferences
-import cc.fplj.magpiemobile.preferences.GatewayIntent
 import cc.fplj.magpiemobile.preferences.ThemeMode
 import cc.fplj.magpiemobile.preferences.UiPreferencesState
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-
-/** A private catalog connection: key-bearing clients never enter public state. */
-internal class CatalogConnection(val owner: Long, val read: () -> List<ModelEntry>, val isCurrent: () -> Boolean)
 
 data class AppShellState(
     val page: AppPage = AppPage.GATEWAY,
@@ -29,6 +25,8 @@ data class AppShellState(
     val models: List<ModelEntry> = emptyList(),
     val selectedModel: String = "",
     val catalogValid: Boolean = false,
+    /** Non-secret identity of the confirmed catalog; unconfirmed caches have no usable key. */
+    val catalogSession: ProviderSessionKey? = null,
     val loadingModels: Boolean = false,
     val modelsNotice: String = "请先启动网关并完成安全连接。",
 )
@@ -37,15 +35,11 @@ data class AppShellState(
 class AppShellViewModel internal constructor(
     application: Application,
     private val preferences: AppUiPreferences,
-    private val catalogConnection: () -> CatalogConnection?,
+    private val currentCatalogSession: () -> ProviderSessionKey?,
+    private val captureCatalog: (ProviderSessionKey) -> CatalogConnection,
 ) : AndroidViewModel(application) {
-    constructor(application: Application) : this(application, AppUiPreferences.open(application), {
-        val owner = NativeCoreSession.providerSessionId()
-        if (owner == null) null else try {
-            val config = NativeCoreSession.gatewayConfig()
-            CatalogConnection(owner, { ModelsClient(config).list() }) { owner == NativeCoreSession.providerSessionId() }
-        } catch (_: Exception) { null }
-    })
+    constructor(application: Application) : this(application, AppUiPreferences.open(application),
+        NativeCoreSession::providerSessionKey, CatalogOperationController()::capture)
 
     private val mutable = MutableStateFlow(AppShellState())
     val state = mutable.asStateFlow()
@@ -56,8 +50,10 @@ class AppShellViewModel internal constructor(
     private var restoredModel: String? = null
     private var modelRestorePending = true
     private var initialCatalog = true
-    private var owner: Long? = null
+    private var session: ProviderSessionKey? = null
     private var request = 0L
+    private var catalogJob: Job? = null
+    private var catalogOperation: CatalogConnection? = null
 
     init {
         viewModelScope.launch {
@@ -90,7 +86,7 @@ class AppShellViewModel internal constructor(
 
     fun selectModel(id: String) {
         val snapshot = mutable.value
-        if (!snapshot.catalogValid || snapshot.models.none { it.id == id }) return
+        if (!hasCurrentCatalog() || snapshot.models.none { it.id == id }) return
         modelTouched = true; modelRestorePending = false; initialCatalog = false
         mutable.update { it.copy(selectedModel = id) }
         save { preferences.setModelId(id) }
@@ -110,39 +106,112 @@ class AppShellViewModel internal constructor(
 
     /** Called for a live connection change only, never because a page became visible. */
     fun connectionChanged() {
-        val connection = catalogConnection()
-        if (connection == null) {
-            owner = null; ++request
-            mutable.update { it.copy(catalogValid = false, loadingModels = false, modelsNotice = "请先启动网关并完成安全连接。") }
-        } else if (owner != connection.owner) {
-            owner = connection.owner
-            refreshModels()
-        }
+        val key = currentCatalogSession()
+        if (bindCatalog(key) && key != null) readModels(key)
     }
 
     fun refreshModels() {
-        val connection = catalogConnection() ?: run { connectionChanged(); return }
-        owner = connection.owner
+        val key = currentCatalogSession()
+        bindCatalog(key)
+        if (key != null) readModels(key)
+    }
+
+    private fun bindCatalog(key: ProviderSessionKey?): Boolean {
+        if (session == key) return false
+        session = key
+        ++request
+        cancelCatalog()
+        mutable.update { it.copy(catalogValid = false, catalogSession = null, loadingModels = false, modelsNotice =
+            if (key == null) "请先启动网关并完成安全连接。" else "正在核对当前连接的模型目录，缓存尚未确认。") }
+        return true
+    }
+
+    private fun cancelCatalog() {
+        val operation = catalogOperation
+        val job = catalogJob
+        catalogOperation = null
+        catalogJob = null
+        try { operation?.cancel() } finally { job?.cancel() }
+    }
+
+    private fun isCurrentRequest(key: ProviderSessionKey, sequence: Long): Boolean =
+        sequence == request && session == key && currentCatalogSession() == key
+
+    private fun finishCatalog(key: ProviderSessionKey, sequence: Long) {
+        if (sequence != request || session != key) return
+        mutable.update { if (currentCatalogSession() == key) it.copy(loadingModels = false)
+            else it.copy(catalogValid = false, catalogSession = null, loadingModels = false, modelsNotice = "核心连接已变化，模型目录尚未确认。") }
+    }
+
+    private fun readModels(key: ProviderSessionKey) {
         val sequence = ++request
-        mutable.update { it.copy(catalogValid = false, loadingModels = true) }
-        viewModelScope.launch {
+        cancelCatalog()
+        mutable.update { it.copy(catalogValid = false, catalogSession = null, loadingModels = true, modelsNotice = "正在读取模型目录，缓存尚未确认。") }
+        var captured: CatalogConnection? = null
+        val operation = try {
+            captureCatalog(key).also {
+                captured = it
+                check(it.key == key) { "Catalog session differs from captured connection" }
+                it.ensureCurrent()
+            }
+        } catch (cancelled: CancellationException) {
+            try { captured?.cancel() } finally { captured?.close() }
+            if (isCurrentRequest(key, sequence)) mutable.update { it.copy(modelsNotice = "模型目录读取已停止，缓存尚未确认；可手动刷新。") }
+            finishCatalog(key, sequence)
+            return
+        } catch (_: Exception) {
+            captured?.close()
+            if (isCurrentRequest(key, sequence)) mutable.update { it.copy(modelsNotice = "模型目录读取失败，缓存未确认；请手动刷新。") }
+            finishCatalog(key, sequence)
+            return
+        }
+        val released = AtomicBoolean()
+        fun release() {
+            if (released.compareAndSet(false, true)) {
+                try { operation.close() } finally {
+                    if (catalogOperation === operation) { catalogOperation = null; catalogJob = null }
+                    finishCatalog(key, sequence)
+                }
+            }
+        }
+        catalogOperation = operation
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
-                val models = withContext(Dispatchers.IO) { check(connection.isCurrent()); connection.read() }
-                if (sequence == request && owner == connection.owner && connection.isCurrent()) {
-                    mutable.update { it.copy(models = models, catalogValid = true, modelsNotice =
+                operation.ensureCurrent()
+                val models = operation.read()
+                operation.ensureCurrent()
+                if (isCurrentRequest(key, sequence)) {
+                    mutable.update { it.copy(models = models, catalogValid = true, catalogSession = key, modelsNotice =
                         if (models.isEmpty()) "没有已配置模型，请添加提供商。" else "可选模型 " + models.size) }
                     reconcileSelection()
                 }
-            } catch (e: CancellationException) { throw e }
-            catch (_: Exception) {
-                if (sequence == request) mutable.update { it.copy(modelsNotice = "模型目录读取失败，缓存未确认；请手动刷新。") }
-            } finally {
-                if (sequence == request) mutable.update { it.copy(loadingModels = false) }
+            } catch (e: CancellationException) {
+                operation.cancel()
+                if (isCurrentRequest(key, sequence)) mutable.update { it.copy(modelsNotice = "模型目录读取已停止，缓存尚未确认；可手动刷新。") }
+                throw e
             }
+            catch (_: Exception) {
+                if (isCurrentRequest(key, sequence)) mutable.update { it.copy(modelsNotice = "模型目录读取失败，缓存未确认；请手动刷新。") }
+            } finally { release() }
         }
+        catalogJob = job
+        job.invokeOnCompletion { cause ->
+            try { if (cause is CancellationException) operation.cancel() } finally { release() }
+        }
+        job.start()
+    }
+
+    private fun hasCurrentCatalog(): Boolean {
+        val snapshot = mutable.value
+        val current = snapshot.catalogValid && snapshot.catalogSession != null &&
+            snapshot.catalogSession == session && currentCatalogSession() == session
+        if (snapshot.catalogValid && !current) mutable.update { it.copy(catalogValid = false, catalogSession = null,
+            modelsNotice = "核心连接已变化，模型目录尚未确认。") }
+        return current
     }
 
     private fun reconcileSelection() {
+        if (!hasCurrentCatalog()) return
         val snapshot = mutable.value
         val ids = snapshot.models.map { it.id }.toSet()
         if (snapshot.selectedModel.isNotBlank()) {
@@ -162,5 +231,10 @@ class AppShellViewModel internal constructor(
             initialCatalog = false
             mutable.update { it.copy(selectedModel = snapshot.models.firstOrNull()?.id.orEmpty()) }
         }
+    }
+
+    override fun onCleared() {
+        cancelCatalog()
+        super.onCleared()
     }
 }

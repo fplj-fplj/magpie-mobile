@@ -20,6 +20,7 @@ class NativeCoreSessionTest {
             assertThrows(IllegalStateException::class.java) { NativeCoreSession.providerClient() }
             assertThrows(IllegalStateException::class.java) { NativeCoreSession.gatewayConfig() }
             assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(owner) }
+            assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(ProviderSessionKey(owner, 1)) }
             assertThrows(CancellationException::class.java) { NativeCoreSession.providerRequest(ProviderSessionKey(owner, 1)) }
             assertThrows(CancellationException::class.java) { NativeCoreSession.pluginRequest(ProviderSessionKey(owner, 1)) }
         } finally { NativeCoreSession.disconnect(owner) }
@@ -32,6 +33,7 @@ class NativeCoreSessionTest {
         val before = NativeCoreSession.status.value
         NativeCoreSession.disconnect(old)
         assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(old) }
+        assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(ProviderSessionKey(old, 1)) }
         assertThrows(CancellationException::class.java) { NativeCoreSession.providerRequest(ProviderSessionKey(old, 1)) }
         assertThrows(CancellationException::class.java) { NativeCoreSession.pluginRequest(ProviderSessionKey(old, 1)) }
         assertEquals(before, NativeCoreSession.status.value)
@@ -40,6 +42,7 @@ class NativeCoreSessionTest {
         NativeCoreSession.disconnect(current)
         assertEquals(NativeCoreSession.Phase.DISCONNECTED, NativeCoreSession.status.value.phase)
         assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(current) }
+        assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(ProviderSessionKey(current, 1)) }
         assertThrows(CancellationException::class.java) { NativeCoreSession.providerRequest(ProviderSessionKey(current, 1)) }
         assertThrows(CancellationException::class.java) { NativeCoreSession.pluginRequest(ProviderSessionKey(current, 1)) }
         assertEquals(null, NativeCoreSession.providerSessionKey())

@@ -115,7 +115,13 @@ fun Dashboard(
         GatewayEngineController.Phase.RUNNING, GatewayEngineController.Phase.BACKOFF)
     val clientReady = running && !stopping && connection.ready
     val owner = if (clientReady) NativeCoreSession.providerSessionId() else null
-    val pluginSession = if (clientReady) connection.providerSession else null
+    val liveSession = if (clientReady) connection.providerSession else null
+    val catalogSession = shell.catalogSession?.takeIf { shell.catalogValid && it == liveSession }
+    val catalogShell = if (shell.catalogValid && catalogSession == null) shell.copy(
+        catalogValid = false, modelsNotice = "核心连接已变化，模型目录尚未确认。",
+    ) else shell
+    val pluginSession = liveSession
+    LaunchedEffect(liveSession) { appShell.connectionChanged() }
     LaunchedEffect(pluginSession) { officialPlugins.attach(pluginSession) }
     LaunchedEffect(section, pluginSession) {
         if (section == GatewaySection.PLUGINS && pluginSession != null && !officialPlugins.state.value.loading && !officialPlugins.state.value.busy) {
@@ -139,7 +145,6 @@ fun Dashboard(
         }
     }
     LaunchedEffect(clientReady, owner) {
-        appShell.connectionChanged()
         usageViewModel.attach(owner)
         if (clientReady) {
             keysViewModel.refresh()
@@ -237,7 +242,8 @@ fun Dashboard(
                         modelGroups = groups,
                         selectedModel = shell.selectedModel,
                         onSelectModel = appShell::selectModel,
-                        canConnect = clientReady && shell.catalogValid,
+                        canConnect = catalogSession != null,
+                        catalogSession = catalogSession,
                         providerBusy = providerBusy,
                         modifier = Modifier.widthIn(max = UiSpacing.contentWidth).fillMaxSize()
                             .padding(horizontal = UiSpacing.medium, vertical = UiSpacing.small),
@@ -271,7 +277,7 @@ fun Dashboard(
                                 KeyPoolingCard(clientReady, keyPoolViewModel, keyPoolState)
                             }
                             GatewaySection.MODELS -> {
-                                ModelCatalogCard(shell, clientReady, !chat.sending, appShell::refreshModels)
+                                ModelCatalogCard(catalogShell, clientReady, !chat.sending, appShell::refreshModels)
                                 CatalogCard(usageState)
                             }
                             GatewaySection.PLUGINS -> {
@@ -286,7 +292,7 @@ fun Dashboard(
                     } else when (shell.page) {
                         AppPage.GATEWAY -> GatewayOverview(
                             gateway, stopping, active, clientReady,
-                            if (clientReady && shell.catalogValid) shell.models.size else null,
+                            if (catalogSession != null) shell.models.size else null,
                             stabilityState, notificationNotice, onAllowNotifications,
                             onStartGateway, onStopGateway, ::openSection,
                             { appShell.selectPage(AppPage.PROVIDERS) }, { appShell.selectPage(AppPage.CHAT) },
@@ -342,7 +348,7 @@ fun Dashboard(
                         modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(UiSpacing.medium),
                     ) {
-                        ModelCatalogCard(shell, clientReady, !chat.sending, appShell::refreshModels)
+                        ModelCatalogCard(catalogShell, clientReady, !chat.sending, appShell::refreshModels)
                         ChatProfileCard(profileViewModel, profileState)
                     }
                 }

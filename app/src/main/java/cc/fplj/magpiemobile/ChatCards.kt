@@ -228,7 +228,7 @@ internal fun ChatProfileCard(
 internal fun ModelCatalogCard(shell: AppShellState, ready: Boolean, idle: Boolean, refresh: () -> Unit) {
     ContentCard {
             Text("模型目录与速览", style = MaterialTheme.typography.titleMedium)
-            if (ready) {
+            if (ready && shell.catalogValid) {
                 val modelCountText = "可用模型：${shell.models.size} 个"
                 val selectedText = if (shell.selectedModel.isNotBlank()) "当前默认：${shell.selectedModel}" else "尚未选择默认模型"
                 Text("$modelCountText · $selectedText", style = MaterialTheme.typography.bodyMedium)

@@ -137,7 +137,20 @@ object NativeCoreSession {
         providerSessions.current(current, current?.config, current != null && isRunningOwner(current))
     }
 
-    /** Owner, key and cancellation registration are captured atomically before dispatch to IO. */
+    /** Chat and catalog work capture the full verified connection before dispatch to IO. */
+    internal fun gatewayRequest(key: ProviderSessionKey): GatewayRequestLease = synchronized(lock) {
+        val current = binding
+        val config = current?.config
+        val captured = providerSessions.capture(key, current, config, current != null && isRunningOwner(current))
+        requests.acquire(captured.config) {
+            synchronized(lock) {
+                val active = binding
+                providerSessions.isCurrent(captured, active, active?.config, active != null && isRunningOwner(active))
+            }
+        }
+    }
+
+    /** Legacy capability callers capture their owner, configuration and cancellation atomically. */
     internal fun gatewayRequest(owner: Long): GatewayRequestLease = synchronized(lock) {
         val current = binding
         val config = current?.config

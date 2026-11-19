@@ -59,12 +59,14 @@ fun ChatPanel(
     selectedModel: String,
     onSelectModel: (String) -> Unit,
     canConnect: Boolean,
+    catalogSession: ProviderSessionKey?,
     providerBusy: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var historyOpen by remember { mutableStateOf(false) }
     var modelSheet by remember { mutableStateOf(false) }
+    var modelSheetSession by remember { mutableStateOf<ProviderSessionKey?>(null) }
     val idle = state.ready && !state.busy && !state.sending
     val messagesScroll = rememberLazyListState()
     val configuration = LocalConfiguration.current
@@ -82,6 +84,10 @@ fun ChatPanel(
     val liveVisible = state.sending || state.partial.isNotEmpty() ||
         state.partialReasoning.isNotEmpty()
     val listItems = state.messages.size + if (liveVisible) 1 else 0
+
+    LaunchedEffect(catalogSession) {
+        if (modelSheetSession != catalogSession) modelSheet = false
+    }
 
     LaunchedEffect(
         listItems,
@@ -162,12 +168,13 @@ fun ChatPanel(
             ModelSelectionField(
                 displayName = if (selectedModel.isBlank()) "选择模型"
                 else selectedEntry?.displayName ?: selectedModel,
-                enabled = modelIds.isNotEmpty() && idle && state.selected?.legacy != true,
+                enabled = canConnect && catalogSession != null && modelIds.isNotEmpty() &&
+                    idle && state.selected?.legacy != true,
                 modifier = Modifier.testTag("chat-model-selector").semantics {
                     testTagsAsResourceId = true
                 },
                 compact = true,
-                onClick = { modelSheet = true },
+                onClick = { modelSheetSession = catalogSession; modelSheet = true },
             )
 
             if (!compactChrome) {
@@ -299,7 +306,7 @@ fun ChatPanel(
                         placeholder = { Text("写下你的问题…") },
                     )
                     Button(
-                        enabled = idle && canConnect && !providerBusy &&
+                        enabled = idle && canConnect && catalogSession != null && !providerBusy &&
                             state.selected?.legacy == false && !state.contextBlocked &&
                             state.draft.isNotBlank() && selectedModel in modelIds,
                         modifier = Modifier
@@ -308,7 +315,7 @@ fun ChatPanel(
                             .semantics { testTagsAsResourceId = true },
                         contentPadding = PaddingValues(0.dp),
                         shape = MaterialTheme.shapes.medium,
-                        onClick = { viewModel.send(selectedModel) },
+                        onClick = { viewModel.send(selectedModel, expectedSession = catalogSession) },
                     ) {
                         AppIcon(
                             AppSymbol.SEND,
@@ -320,12 +327,15 @@ fun ChatPanel(
         }
     }
     ModelSelectionSheet(
-        visible = modelSheet,
+        visible = modelSheet && canConnect && catalogSession != null &&
+            modelSheetSession == catalogSession,
         groups = modelGroups,
         selectedIds = setOfNotNull(selectedModel.takeIf { it.isNotBlank() }),
         onDismissRequest = { modelSheet = false },
         onSelectionChange = { selection ->
-            selection.singleOrNull()?.let(onSelectModel)
+            if (canConnect && catalogSession != null && modelSheetSession == catalogSession) {
+                selection.singleOrNull()?.let(onSelectModel)
+            }
         },
         title = "选择模型",
         singleSelect = true,
