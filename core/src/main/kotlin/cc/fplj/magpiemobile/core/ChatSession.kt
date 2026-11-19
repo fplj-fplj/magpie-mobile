@@ -57,23 +57,22 @@ class ChatSession(
             val root = json.parseToJsonElement(raw).jsonObject
             val choice0 = (root["choices"] as? kotlinx.serialization.json.JsonArray)?.firstOrNull()?.jsonObject
                 ?: throw IllegalArgumentException("choices missing")
-            // 非流式降级也遵守同一正文契约：JSON null/数字不是可展示文本。
+            // JSON null/数字不是正文；仅有有效思考文本时允许空正文，两个通道不混用。
             val message = choice0["message"]?.jsonObject
-            val content = (message?.get("content")
-                as? kotlinx.serialization.json.JsonPrimitive)
-                ?.takeIf { it.isString }
-                ?.content
-                ?: throw IllegalArgumentException("content missing")
-            val reasoning = (message?.get("reasoning_content")
-                as? kotlinx.serialization.json.JsonPrimitive)
-                ?.takeIf { it.isString }
-                ?.content
-                .orEmpty()
+                ?: throw IllegalArgumentException("message missing")
+            fun stringValue(field: String): String? =
+                (message[field] as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.takeIf { it.isString }?.content
+            val reasoning = stringValue("reasoning_content").orEmpty()
+                .ifBlank { stringValue("reasoning").orEmpty() }
+            val content = stringValue("content")
+                ?: if (reasoning.any { !it.isWhitespace() && !it.isISOControl() }) ""
+                    else throw IllegalArgumentException("content missing")
             Completion(content = content, reasoning = reasoning)
         } catch (e: ChatException) {
             throw e
-        } catch (e: Exception) {
-            throw ChatException("reply shape unexpected: " + e.message, 200)
+        } catch (_: Exception) {
+            throw ChatException("Reply shape unexpected", 200)
         }
 
         fun extractReply(raw: String): String = extractCompletion(raw).content

@@ -14,6 +14,8 @@ import cc.fplj.magpiemobile.core.SessionRecord
 import cc.fplj.magpiemobile.data.ChatDatabase
 import cc.fplj.magpiemobile.data.ChatRepository
 import java.net.ServerSocket
+import java.net.Socket
+import java.net.SocketException
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -259,6 +261,144 @@ class ChatViewModelTest {
         assertTrue(repo.context(id).isEmpty())
         val next = real.begin(SessionRecord(2, "user", "chat:p/m", "new explicit turn"))
         real.fail(next, SessionRecord(3, "error", "chat:p/m", "HTTP 429"))
+    }
+
+    @Test fun clearingViewModelStoreCancelsSilentHeadersAndSilentBodyAndFinalizesRoomTurn() {
+        for (sendHeaders in listOf(false, true)) {
+            SilentProbe(sendHeaders).use { probe ->
+                val vm = vm { ChatConnection(probe.config) { true } }
+                vm.newConversation(); settled(vm)
+                val id = checkNotNull(vm.state.value.selected).id
+                vm.editDraft("one turn with no callbacks")
+                vm.send("provider/model")
+                assertTrue(probe.started.await(5, TimeUnit.SECONDS))
+                assertTrue(vm.state.value.sending)
+                assertEquals("", vm.state.value.partial)
+                assertEquals("", vm.state.value.partialReasoning)
+                assertNotNull(runBlocking(Dispatchers.IO) { db.chatDao().runningOperation(id) })
+
+                val startedClearing = System.nanoTime()
+                stores.last().clear()
+                assertTrue("ViewModelStore.clear must not wait for blocked HTTP I/O",
+                    System.nanoTime() - startedClearing < TimeUnit.SECONDS.toNanos(3))
+                assertTrue("Cancelled HTTP peer must close before its 30-second read timeout",
+                    probe.peerClosed.await(5, TimeUnit.SECONDS))
+                runBlocking { withTimeout(5000) { vm.state.first { !it.sending } } }
+
+                runBlocking(Dispatchers.IO) {
+                    assertNull(db.chatDao().runningOperation(id))
+                    val messages = repo.messages(id)
+                    assertEquals(listOf("user", "error"), messages.map { it.role })
+                    assertTrue(messages.all { it.state == "FAILED" })
+                    assertEquals("Chat failed; partial characters=0", messages.last().text)
+                    assertTrue(repo.context(id).isEmpty())
+                }
+                // Reopening reads the finalized failure; it must not replay the cancelled turn.
+                val reopened = vm { ChatConnection(probe.config) { true } }
+                assertEquals(id, reopened.state.value.selected?.id)
+                assertFalse(reopened.state.value.sending)
+                assertTrue(reopened.state.value.messages.none { it.role == "assistant" })
+                assertEquals(1, probe.requests.get())
+            }
+        }
+    }
+
+    @Test fun completeGuardRejectsCancellationBeforeEnteringStorageAndAllowsFailureFinalization() = runBlocking(Dispatchers.IO) {
+        val id = repo.createConversation()
+        val real = repo.turnStore(id)
+        val job = Job()
+        val entered = AtomicInteger()
+        val observed = object : ChatTurnStore by real {
+            override fun complete(turnId: String, assistant: SessionRecord) {
+                entered.incrementAndGet()
+                real.complete(turnId, assistant)
+            }
+        }
+        val guarded = cancellableTurnStore(observed, job)
+        val turn = guarded.begin(SessionRecord(1, "user", "chat:p/m", "cancel before commit"))
+        job.cancel()
+
+        assertThrows(CancellationException::class.java) {
+            guarded.complete(turn, SessionRecord(2, "assistant", "chat:p/m", "must not commit"))
+        }
+
+        assertEquals(0, entered.get())
+        assertEquals("RUNNING", db.chatDao().operation(turn)?.state)
+        // Session cleanup can still close the known turn even though its send Job is cancelled.
+        guarded.fail(turn, SessionRecord(3, "error", "chat:p/m", "Chat failed; partial characters=0"))
+        assertEquals("FAILED", db.chatDao().operation(turn)?.state)
+        assertNull(db.chatDao().runningOperation(id))
+        assertTrue(repo.messages(id).none { it.role == "assistant" })
+    }
+
+    @Test fun completeGuardKeepsSuccessWhenCancellationOccursAfterStorageWasEntered() = runBlocking(Dispatchers.IO) {
+        val id = repo.createConversation()
+        val real = repo.turnStore(id)
+        val job = Job()
+        val entered = AtomicInteger()
+        val cancelInsideStorage = object : ChatTurnStore by real {
+            override fun complete(turnId: String, assistant: SessionRecord) {
+                entered.incrementAndGet()
+                job.cancel()
+                real.complete(turnId, assistant)
+            }
+        }
+        val guarded = cancellableTurnStore(cancelInsideStorage, job)
+        val turn = guarded.begin(SessionRecord(1, "user", "chat:p/m", "commit this turn"))
+
+        guarded.complete(turn, SessionRecord(2, "assistant", "chat:p/m", "committed answer"))
+
+        assertEquals(1, entered.get())
+        assertEquals("SUCCEEDED", db.chatDao().operation(turn)?.state)
+        assertNull(db.chatDao().runningOperation(id))
+        assertEquals(listOf("user", "assistant"), repo.messages(id).map { it.role })
+        assertEquals(listOf("commit this turn", "committed answer"), repo.context(id).map { it.content })
+    }
+
+    /** The server never releases a response: only cancellation can close the client promptly. */
+    private class SilentProbe(private val sendHeaders: Boolean) : AutoCloseable {
+        private val server = ServerSocket(0)
+        @Volatile private var accepted: Socket? = null
+        val started = CountDownLatch(1)
+        val peerClosed = CountDownLatch(1)
+        val requests = AtomicInteger()
+        val config = GatewayConfig(gatewayBaseUrl = "http://127.0.0.1:" + server.localPort,
+            gatewayKey = "synthetic-silent-request-key", readTimeout = Duration.ofSeconds(30))
+        private val worker = thread(isDaemon = true) {
+            try {
+                server.accept().use { client ->
+                    accepted = client
+                    client.soTimeout = 15000
+                    requests.incrementAndGet()
+                    val input = client.getInputStream().buffered()
+                    val header = StringBuilder()
+                    while (!header.endsWith("\r\n\r\n")) {
+                        val value = input.read()
+                        if (value < 0) return@use
+                        header.append(value.toChar())
+                    }
+                    val length = header.lineSequence().firstOrNull { it.startsWith("Content-Length:", true) }
+                        ?.substringAfter(':')?.trim()?.toInt() ?: 0
+                    repeat(length) { check(input.read() >= 0) }
+                    if (sendHeaders) {
+                        client.getOutputStream().apply {
+                            write(("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n" +
+                                "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n").toByteArray(Charsets.UTF_8))
+                            flush()
+                        }
+                    }
+                    started.countDown()
+                    try {
+                        if (input.read() < 0) peerClosed.countDown()
+                    } catch (_: SocketException) { peerClosed.countDown() }
+                }
+            } catch (_: SocketException) { /* Test cleanup closes the listener or accepted socket. */ }
+        }
+        override fun close() {
+            accepted?.close()
+            server.close()
+            worker.join(5000)
+        }
     }
 
     /** Local synthetic SSE only: no vendor key, DNS, inference, or public network. */

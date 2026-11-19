@@ -8,9 +8,11 @@ import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.time.Duration
+import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -314,6 +316,286 @@ class StreamingChatClientTest {
             assertFalse(e.stackTraceToString().contains(key))
             assertFalse(e.stackTraceToString().contains("billing"))
             assertEquals(i + 1, n.get())
+        }
+    }
+
+    @Test
+    fun oversizedUnterminatedCommentFailsBeforeEofAndKeepsAcceptedDeltas() {
+        val release = CountDownLatch(1)
+        val requests = AtomicInteger()
+        val executor = Executors.newSingleThreadExecutor()
+        server.createContext("/v1/chat/completions") { ex ->
+            requests.incrementAndGet()
+            ex.requestBody.close()
+            ex.responseHeaders.add("Content-Type", "text/event-stream")
+            ex.sendResponseHeaders(200, 0)
+            try {
+                ex.responseBody.write((
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"ok\",\"reasoning_content\":\"plan\"}}]}\n" +
+                        ":" + "x".repeat(128)
+                    ).toByteArray(Charsets.UTF_8))
+                ex.responseBody.flush()
+                release.await(10, TimeUnit.SECONDS)
+            } catch (_: IOException) {
+                // The bounded client may close before the handler finishes flushing.
+            } finally { ex.close() }
+        }
+        val result = executor.submit<StreamingChatException> {
+            assertFailsWith<StreamingChatException> {
+                StreamingChatClient(config().copy(readTimeout = Duration.ofSeconds(10)),
+                    StreamingChatLimits(maxLineBytes = 128)).stream("m", listOf(ChatClient.Message("user", "x")))
+            }
+        }
+        try {
+            val failure = result.get(3, TimeUnit.SECONDS)
+            assertEquals(StreamingChatFailure.RESPONSE_LIMIT, failure.failure)
+            assertEquals("ok", failure.partialText)
+            assertEquals("plan", failure.partialReasoning)
+            assertEquals(200, failure.httpCode)
+            assertNull(failure.cause)
+            assertEquals(1, requests.get())
+            assertEquals(1L, release.count)
+        } finally {
+            release.countDown()
+            result.cancel(true)
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun ignoredCommentsAndUnknownEventsCountTowardResponseBudget() {
+        val first = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\r\n"
+        val ignored = ": heartbeat\r\nevent: ping\ndata: {\"unknown\":true}\n\n"
+        val body = first + ignored + "data: [DONE]\n"
+        val requests = AtomicInteger()
+        server.createContext("/v1/chat/completions") { ex ->
+            requests.incrementAndGet()
+            respond(ex, body)
+        }
+        val failure = assertFailsWith<StreamingChatException> {
+            StreamingChatClient(config(), StreamingChatLimits(
+                maxResponseBytes = (first + ignored).toByteArray(Charsets.UTF_8).size.toLong() - 1,
+            )).stream("m", listOf(ChatClient.Message("user", "x")))
+        }
+        assertEquals(StreamingChatFailure.RESPONSE_LIMIT, failure.failure)
+        assertEquals("ok", failure.partialText)
+        assertEquals(1, requests.get())
+    }
+
+    @Test
+    fun exactUtf8ResponseBudgetAndAllLineEndingsRemainSuccessful() {
+        val event = "data: {\"choices\":[{\"delta\":{\"content\":\"你🙂\"}}]}"
+        val body = ": comment\r\n" + event + "\rdata: [DONE]\n"
+        server.createContext("/v1/chat/completions") { ex -> respond(ex, body) }
+        val output = StreamingChatClient(config(), StreamingChatLimits(
+            maxLineBytes = event.toByteArray(Charsets.UTF_8).size,
+            maxResponseBytes = body.toByteArray(Charsets.UTF_8).size.toLong(),
+        )).stream("m", listOf(ChatClient.Message("user", "x")))
+        assertEquals("你🙂", output)
+    }
+
+    @Test
+    fun ongoingHeartbeatsCannotOutliveOverallDeadline() {
+        val release = CountDownLatch(1)
+        val accepted = CountDownLatch(1)
+        val heartbeats = AtomicInteger()
+        val requests = AtomicInteger()
+        val executor = Executors.newSingleThreadExecutor()
+        server.createContext("/v1/chat/completions") { ex ->
+            requests.incrementAndGet()
+            ex.requestBody.close()
+            ex.responseHeaders.add("Content-Type", "text/event-stream")
+            ex.sendResponseHeaders(200, 0)
+            try {
+                ex.responseBody.write("data: {\"choices\":[{\"delta\":{\"content\":\"part\"}}]}\n\n".toByteArray())
+                ex.responseBody.flush()
+                while (!release.await(25, TimeUnit.MILLISECONDS)) {
+                    ex.responseBody.write(": heartbeat\n\n".toByteArray())
+                    ex.responseBody.flush()
+                    heartbeats.incrementAndGet()
+                }
+            } catch (_: IOException) { /* Deadline closes the socket. */ }
+            finally { ex.close() }
+        }
+        val result = executor.submit<StreamingChatException> {
+            assertFailsWith<StreamingChatException> {
+                StreamingChatClient(config().copy(readTimeout = Duration.ofSeconds(10)),
+                    StreamingChatLimits(maxDuration = Duration.ofSeconds(2)))
+                    .stream("m", listOf(ChatClient.Message("user", "x"))) { accepted.countDown() }
+            }
+        }
+        try {
+            assertTrue(accepted.await(3, TimeUnit.SECONDS))
+            val failure = result.get(4, TimeUnit.SECONDS)
+            assertEquals(StreamingChatFailure.DEADLINE_EXCEEDED, failure.failure)
+            assertEquals("part", failure.partialText)
+            assertEquals(200, failure.httpCode)
+            assertTrue(heartbeats.get() > 0)
+            assertEquals(1, requests.get())
+            assertEquals(1L, release.count)
+        } finally {
+            release.countDown()
+            result.cancel(true)
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun cancelClosesSilentBodyReadWithoutWaitingForReadTimeoutOrEof() {
+        val release = CountDownLatch(1)
+        val accepted = CountDownLatch(1)
+        val control = ChatRequestControl()
+        val requests = AtomicInteger()
+        val executor = Executors.newSingleThreadExecutor()
+        server.createContext("/v1/chat/completions") { ex ->
+            requests.incrementAndGet()
+            ex.requestBody.close()
+            ex.responseHeaders.add("Content-Type", "text/event-stream")
+            ex.sendResponseHeaders(200, 0)
+            try {
+                ex.responseBody.write("data: {\"choices\":[{\"delta\":{\"content\":\"part\"}}]}\n\n".toByteArray())
+                ex.responseBody.flush()
+                release.await(10, TimeUnit.SECONDS)
+            } catch (_: IOException) { /* Cancellation closes the socket. */ }
+            finally { ex.close() }
+        }
+        val result = executor.submit<CancellationException> {
+            assertFailsWith<CancellationException> {
+                StreamingChatClient(config().copy(readTimeout = Duration.ofSeconds(10)), requestControl = control)
+                    .stream("m", listOf(ChatClient.Message("user", "x"))) { accepted.countDown() }
+            }
+        }
+        try {
+            assertTrue(accepted.await(3, TimeUnit.SECONDS))
+            control.cancel()
+            assertEquals("Chat request cancelled", result.get(3, TimeUnit.SECONDS).message)
+            assertEquals(1L, release.count)
+            assertEquals(1, requests.get())
+        } finally {
+            release.countDown()
+            control.cancel()
+            result.cancel(true)
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun deadlineClosesSilentResponseHeadersAndNeverReplays() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val requests = AtomicInteger()
+        val executor = Executors.newSingleThreadExecutor()
+        server.createContext("/v1/chat/completions") { ex ->
+            requests.incrementAndGet()
+            ex.requestBody.close()
+            entered.countDown()
+            try { release.await(10, TimeUnit.SECONDS) } finally { ex.close() }
+        }
+        val result = executor.submit<StreamingChatException> {
+            assertFailsWith<StreamingChatException> {
+                StreamingChatClient(config().copy(readTimeout = Duration.ofSeconds(10)),
+                    StreamingChatLimits(maxDuration = Duration.ofSeconds(2)))
+                    .stream("m", listOf(ChatClient.Message("user", "x")))
+            }
+        }
+        try {
+            assertTrue(entered.await(3, TimeUnit.SECONDS))
+            val failure = result.get(4, TimeUnit.SECONDS)
+            assertEquals(StreamingChatFailure.DEADLINE_EXCEEDED, failure.failure)
+            assertEquals("", failure.partialText)
+            assertNull(failure.httpCode)
+            assertEquals(1, requests.get())
+            assertEquals(1L, release.count)
+        } finally {
+            release.countDown()
+            result.cancel(true)
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun headersMayTakeMoreThanOneSecondWithinConfiguredReadTimeout() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        server.createContext("/v1/chat/completions") { ex ->
+            ex.requestBody.close()
+            entered.countDown()
+            try {
+                if (release.await(10, TimeUnit.SECONDS)) respond(ex, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\ndata: [DONE]\n")
+            } finally { ex.close() }
+        }
+        val result = executor.submit<String> {
+            StreamingChatClient(config().copy(readTimeout = Duration.ofSeconds(5)))
+                .stream("m", listOf(ChatClient.Message("user", "x")))
+        }
+        try {
+            assertTrue(entered.await(3, TimeUnit.SECONDS))
+            assertFailsWith<TimeoutException> { result.get(1200, TimeUnit.MILLISECONDS) }
+            release.countDown()
+            assertEquals("ok", result.get(3, TimeUnit.SECONDS))
+        } finally {
+            release.countDown()
+            result.cancel(true)
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun retryAfterErrorsAndRedirectNeverReplayBillablePost() {
+        val status = AtomicInteger(503)
+        val requests = AtomicInteger()
+        server.createContext("/v1/chat/completions") { ex ->
+            requests.incrementAndGet()
+            ex.requestBody.close()
+            ex.responseHeaders.add("Retry-After", "0")
+            ex.responseHeaders.add("Location", "/redirected-chat")
+            ex.sendResponseHeaders(status.get(), -1)
+            ex.close()
+        }
+        server.createContext("/redirected-chat") { ex ->
+            requests.incrementAndGet()
+            respond(ex, "data: [DONE]\n")
+        }
+        for ((index, code) in listOf(503, 408, 307).withIndex()) {
+            status.set(code)
+            val failure = assertFailsWith<ChatException> {
+                StreamingChatClient(config()).stream("m", listOf(ChatClient.Message("user", "x")))
+            }
+            assertEquals(code, failure.httpCode)
+            assertEquals(index + 1, requests.get())
+        }
+    }
+
+    @Test
+    fun errorStatusDoesNotReadOrWaitForUnfinishedResponseBody() {
+        val release = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        server.createContext("/v1/chat/completions") { ex ->
+            ex.requestBody.close()
+            ex.sendResponseHeaders(503, 0)
+            try {
+                ex.responseBody.write('x'.code)
+                ex.responseBody.flush()
+                release.await(10, TimeUnit.SECONDS)
+            } catch (_: IOException) { /* The client cancels the error response immediately. */ }
+            finally { ex.close() }
+        }
+        val result = executor.submit<ChatException> {
+            assertFailsWith<ChatException> {
+                StreamingChatClient(config().copy(readTimeout = Duration.ofSeconds(10)))
+                    .stream("m", listOf(ChatClient.Message("user", "x")))
+            }
+        }
+        try {
+            val failure = result.get(3, TimeUnit.SECONDS)
+            assertEquals(503, failure.httpCode)
+            assertEquals("stream -> HTTP 503", failure.message)
+            assertEquals(1L, release.count)
+        } finally {
+            release.countDown()
+            result.cancel(true)
+            executor.shutdownNow()
         }
     }
 }

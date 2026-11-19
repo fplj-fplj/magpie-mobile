@@ -15,10 +15,12 @@ import java.io.IOException
 import java.net.InetSocketAddress
 import java.time.Duration
 import java.util.Collections
+import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -47,8 +49,9 @@ class StreamingChatSessionTest {
 
     private fun cfg() = GatewayConfig(gatewayKey = "k", gatewayBaseUrl = "http://127.0.0.1:" + port)
 
-    private fun session(store: SessionStore, config: GatewayConfig = cfg()) =
-        StreamingChatSession(StreamingChatClient(config), ChatClient(config), store, "m")
+    private fun session(store: SessionStore, config: GatewayConfig = cfg(), control: ChatRequestControl? = null) =
+        StreamingChatSession(StreamingChatClient(config, requestControl = control),
+            ChatClient(config, requestControl = control), store, "m", requestControl = control)
 
     private fun respond(ex: HttpExchange, body: String, contentType: String = "text/event-stream") {
         val bytes = body.toByteArray(Charsets.UTF_8)
@@ -559,5 +562,136 @@ class StreamingChatSessionTest {
         assertEquals(requestMessages(bodies[0]), requestMessages(bodies[1]))
         assertFailedOnly(store, s)
         assertEquals("chat:m:fallback", store.readAll().last().engine)
+    }
+
+    @Test
+    fun reasoningOnlyFallbackIsStoredSeparatelyAndNeverSentAsVisibleAnswerOrNextContext() {
+        val requests = AtomicInteger()
+        val bodies = Collections.synchronizedList(mutableListOf<String>())
+        server.createContext("/v1/chat/completions") { ex ->
+            bodies.add(ex.requestBody.bufferedReader().readText())
+            when (requests.incrementAndGet()) {
+                1 -> { ex.sendResponseHeaders(501, -1); ex.close() }
+                2 -> respond(ex,
+                    """{"choices":[{"message":{"content":null,"reasoning_content":"thought only"}}]}""",
+                    "application/json")
+                else -> respond(ex, "data: {\"choices\":[{\"delta\":{\"content\":\"next reply\"}}]}\n\ndata: [DONE]\n\n")
+            }
+        }
+        val store = SessionStore(File(tmp, "reasoning-only.jsonl"))
+        val s = session(store, control = ChatRequestControl())
+        val thoughts = mutableListOf<String>()
+        assertEquals("", s.sendWithReasoning("first", onReasoning = thoughts::add))
+        assertEquals(listOf("thought only"), thoughts)
+        assertEquals("", store.readAll().last().text)
+        assertEquals("thought only", store.readAll().last().reasoning)
+        assertEquals("chat:m:fallback", store.readAll().last().engine)
+        assertEquals("", s.messages().last().content)
+
+        assertEquals("next reply", s.send("second"))
+
+        assertEquals(3, requests.get())
+        assertEquals(listOf(ChatClient.Message("user", "first"), ChatClient.Message("assistant", ""),
+            ChatClient.Message("user", "second")), requestMessages(bodies[2]))
+        assertFalse(bodies[2].contains("thought only"))
+    }
+
+    @Test
+    fun fallbackRespectsFullFieldBudgetsWithoutTruncatingValidLongOutputOrDispatchingOversizedReasoning() {
+        val limits = StreamingChatLimits()
+        val response = AtomicReference("")
+        val requests = AtomicInteger()
+        server.createContext("/v1/chat/completions") { ex ->
+            val body = ex.requestBody.bufferedReader().readText()
+            requests.incrementAndGet()
+            if (body.contains("\"stream\":true")) {
+                ex.sendResponseHeaders(501, -1)
+                ex.close()
+            } else respond(ex, response.get(), "application/json")
+        }
+        for ((index, sizes) in listOf(
+            limits.maxContentChars to limits.maxReasoningChars,
+            limits.maxContentChars + 1 to 0,
+            0 to limits.maxReasoningChars + 1,
+        ).withIndex()) {
+            response.set("""{"choices":[{"message":{"content":"${"c".repeat(sizes.first)}","reasoning_content":"${"r".repeat(sizes.second)}"}}]}""")
+            val store = SessionStore(File(tmp, "fallback-budget-$index.jsonl"))
+            val s = session(store, control = ChatRequestControl())
+            val dispatchedReasoning = AtomicInteger()
+            val before = requests.get()
+            if (index == 0) {
+                val reply = s.sendWithReasoning("hello", onReasoning = { dispatchedReasoning.addAndGet(it.length) })
+                assertEquals(limits.maxContentChars, reply.length)
+                assertEquals(limits.maxReasoningChars, dispatchedReasoning.get())
+                assertEquals(limits.maxContentChars, store.readAll().last().text.length)
+                assertEquals(limits.maxReasoningChars, store.readAll().last().reasoning.length)
+                assertEquals(limits.maxContentChars, s.messages().last().content.length)
+            } else {
+                val failure = assertFailsWith<StreamingChatException> {
+                    s.sendWithReasoning("hello", onReasoning = { dispatchedReasoning.addAndGet(it.length) })
+                }
+                assertEquals(StreamingChatFailure.RESPONSE_LIMIT, failure.failure)
+                assertEquals(0, dispatchedReasoning.get())
+                assertFailedOnly(store, s)
+                assertEquals(StreamingChatFailure.RESPONSE_LIMIT.safeMessage + "; partial characters=0",
+                    store.readAll().last().text)
+            }
+            assertEquals(before + 2, requests.get())
+        }
+    }
+
+    @Test
+    fun cancellingBlockedStreamingOrFallbackCleansUpJsonlWithoutWaitingForLateDoneOrCompletion() {
+        for (fallback in listOf(false, true)) {
+            val requests = AtomicInteger()
+            val bodyStarted = CountDownLatch(1)
+            val releaseBody = CountDownLatch(1)
+            val executor = Executors.newFixedThreadPool(2)
+            val path = "/v1/chat/completions"
+            server.createContext(path) { ex ->
+                ex.requestBody.readBytes()
+                val call = requests.incrementAndGet()
+                if (fallback && call == 1) {
+                    ex.sendResponseHeaders(501, -1)
+                    ex.close()
+                } else {
+                    ex.responseHeaders.add("Content-Type", if (fallback) "application/json" else "text/event-stream")
+                    ex.sendResponseHeaders(200, 0)
+                    try {
+                        val prefix = if (fallback) "{\"choices\":[{\"message\":{\"content\":\"" else
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"part\"}}]}\n\n"
+                        ex.responseBody.write(prefix.toByteArray(Charsets.UTF_8))
+                        ex.responseBody.flush()
+                        bodyStarted.countDown()
+                        check(releaseBody.await(5, TimeUnit.SECONDS))
+                        val suffix = if (fallback) "late reply\"}}]}" else "data: [DONE]\n\n"
+                        runCatching { ex.responseBody.write(suffix.toByteArray(Charsets.UTF_8)) }
+                    } finally { ex.close() }
+                }
+            }
+            val config = cfg().copy(readTimeout = Duration.ofSeconds(1))
+            val control = ChatRequestControl()
+            val store = SessionStore(File(tmp, "cancel-$fallback.jsonl"))
+            val s = session(store, config, control)
+            val result = executor.submit<CancellationException> {
+                assertFailsWith<CancellationException> { s.send("cancel this turn") }
+            }
+            try {
+                assertTrue(bodyStarted.await(5, TimeUnit.SECONDS))
+                val cancelled = executor.submit { control.cancel() }
+                result.get(4, TimeUnit.SECONDS)
+                assertEquals(if (fallback) 2 else 1, requests.get())
+                assertFailedOnly(store, s)
+                assertEquals("Chat failed; partial characters=0", store.readAll().last().text)
+                s.reset()
+                releaseBody.countDown()
+                cancelled.get(5, TimeUnit.SECONDS)
+            } finally {
+                releaseBody.countDown()
+                result.cancel(true)
+                executor.shutdownNow()
+                server.removeContext(path)
+            }
+        }
     }
 }

@@ -357,6 +357,66 @@ class ProviderModelCapabilityClientTest {
         assertOrdinaryResponseLimit(client().run("saved", "vendor/model"))
     }
 
+    @Test
+    fun oversizedUnterminatedStreamCommentFailsSafelyAndToolCheckStillRuns() {
+        val secret = "fixture-comment-and-partial-secret"
+        capabilityResponses(stream = {
+            "data: {\"choices\":[{\"delta\":{\"content\":\"$secret\",\"reasoning_content\":\"$secret\"}}]}\n\n" +
+                ": $secret" + "x".repeat(256 * 1024) // no newline, and no DONE
+        })
+        val progress = CopyOnWriteArrayList<ProviderCapabilityResult>()
+
+        val report = client().run("saved", "vendor/model", progress::add)
+
+        assertStreamResponseLimit(report, progress, secret)
+    }
+
+    @Test
+    fun mixedStreamEventOverCombinedBudgetFailsWithoutPublishingEitherPartial() {
+        val secret = "fixture-mixed-event-secret"
+        val content = secret + "c".repeat(8 * 1024)
+        val reasoning = secret + "r".repeat(8 * 1024)
+        assertTrue(content.length <= 16 * 1024)
+        assertTrue(reasoning.length <= 16 * 1024)
+        assertTrue(content.length + reasoning.length > 16 * 1024)
+        capabilityResponses(stream = {
+            "data: {\"choices\":[{\"delta\":{\"content\":\"$content\",\"reasoning_content\":\"$reasoning\"}}]}\n\n" +
+                "data: [DONE]\n\n"
+        })
+        val progress = CopyOnWriteArrayList<ProviderCapabilityResult>()
+
+        val report = client().run("saved", "vendor/model", progress::add)
+
+        assertStreamResponseLimit(report, progress, secret)
+    }
+
+    private fun assertStreamResponseLimit(
+        report: ProviderCapabilityReport,
+        progress: List<ProviderCapabilityResult>,
+        secret: String,
+    ) {
+        assertEquals(
+            listOf(ProviderCapabilityStatus.PASSED, ProviderCapabilityStatus.FAILED, ProviderCapabilityStatus.PASSED),
+            report.results.map { it.status },
+        )
+        val stream = report.results.single { it.check == ProviderCapabilityCheck.STREAMING }
+        assertEquals("响应超过测试安全上限", stream.safeMessage)
+        assertEquals("", stream.preview)
+        assertEquals("", stream.reasoning)
+        assertEquals(3, chatRequests.size)
+        assertFalse(chatRequests[0].contains("\"stream\":true"))
+        assertTrue(chatRequests[1].contains("\"stream\":true"))
+        assertTrue(chatRequests[2].contains("\"tools\""))
+        assertEquals(stream, progress.last { it.check == ProviderCapabilityCheck.STREAMING })
+        (report.results + progress).forEach { result ->
+            assertFalse(result.safeMessage.contains(secret))
+            assertFalse(result.preview.contains(secret))
+            assertFalse(result.reasoning.contains(secret))
+            assertFalse(result.toString().contains(secret))
+            assertFalse(result.safeMessage.contains("gateway-test-key"))
+        }
+    }
+
     private fun assertOrdinaryResponseLimit(report: ProviderCapabilityReport) {
         assertEquals(ProviderCapabilityStatus.FAILED, report.results[0].status)
         assertEquals("响应超过测试安全上限", report.results[0].safeMessage)

@@ -6,9 +6,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.ByteArrayOutputStream
+import java.io.Closeable
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
+import java.time.Duration
+import okhttp3.Request
 
 /**
  * 应用内聊天测试客户端（plan.md §3「聊天测试（新增）」的传输层）。
@@ -20,9 +21,15 @@ import java.net.URL
  * 安全：gatewayKey 来自 GatewayConfig（构造期已强制非空）；
  * 本类不记录请求体/响应体（可能含用户对话内容，plan.md §4.3）。
  */
-class ChatClient(private val config: GatewayConfig) {
+class ChatClient(
+    private val config: GatewayConfig,
+    private val requestControl: ChatRequestControl? = null,
+    private val maxDuration: Duration = StreamingChatLimits().maxDuration,
+) {
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    internal fun withRequestControl(control: ChatRequestControl) = ChatClient(config, control, maxDuration)
 
     /** 非流式一轮对话。 */
     fun complete(
@@ -32,6 +39,8 @@ class ChatClient(private val config: GatewayConfig) {
         temperature: Double? = null,
         topP: Double? = null,
     ): String {
+        val control = requestControl ?: ChatRequestControl()
+        control.ensureActive()
         val body = buildJsonObject {
             put("model", model)
             put("messages", json.encodeToJsonElement(ListSerializer(Message.serializer()), messages))
@@ -40,37 +49,56 @@ class ChatClient(private val config: GatewayConfig) {
             if (topP != null) put("top_p", topP)
         }.toString()
 
-        val conn = URL(config.chatCompletionsPath()).openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.connectTimeout = config.connectTimeout.toMillis().toInt()
-        conn.readTimeout = config.readTimeout.toMillis().toInt()
-        conn.doOutput = true
-        conn.instanceFollowRedirects = false
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.setRequestProperty("Authorization", "Bearer " + config.gatewayKey)
+        val request = Request.Builder()
+            .url(config.chatCompletionsPath())
+            .header("Authorization", "Bearer " + config.gatewayKey)
+            .post(ChatHttpTransport.jsonBody(body))
+            .build()
+        val call = ChatHttpTransport.client(config).newCall(request)
+        val deadline = control.startDeadline(maxDuration)
+        var registration: Closeable? = null
         try {
-            val bytes = body.toByteArray(Charsets.UTF_8)
-            conn.setFixedLengthStreamingMode(bytes.size)
-            conn.outputStream.use { it.write(bytes) }
-            val code = conn.responseCode
-            // Status is sufficient: a slow or unbounded error body must not hide HTTP 429/503.
-            if (code !in 200..299) throw ChatException("chat -> HTTP " + code, code)
-            if (conn.contentLengthLong > MAX_RESPONSE_BYTES) throw responseLimitExceeded()
-            val text = conn.inputStream.use { input ->
-                val output = ByteArrayOutputStream()
-                val buffer = ByteArray(8192)
-                while (true) {
-                    val count = input.read(buffer, 0, minOf(buffer.size, MAX_RESPONSE_BYTES + 1 - output.size()))
-                    if (count == -1) break
-                    if (output.size() + count > MAX_RESPONSE_BYTES) throw responseLimitExceeded()
-                    output.write(buffer, 0, count)
+            registration = control.register(call::cancel)
+            control.ensureActive()
+            return call.execute().use { response ->
+                control.ensureActive()
+                // Cancel before close: do not let close drain a slow/error response for reuse.
+                if (!response.isSuccessful) {
+                    call.cancel()
+                    throw ChatException("chat -> HTTP " + response.code, response.code)
                 }
-                output.toString(Charsets.UTF_8.name())
+                val responseBody = response.body ?: throw IOException("Chat response body missing")
+                if (responseBody.contentLength() > MAX_RESPONSE_BYTES) {
+                    call.cancel()
+                    throw responseLimitExceeded()
+                }
+                val text = responseBody.byteStream().use { input ->
+                    val output = ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        control.ensureActive()
+                        val count = input.read(buffer, 0, minOf(buffer.size, MAX_RESPONSE_BYTES + 1 - output.size()))
+                        control.ensureActive()
+                        if (count == -1) break
+                        if (output.size() + count > MAX_RESPONSE_BYTES) {
+                            call.cancel()
+                            throw responseLimitExceeded()
+                        }
+                        output.write(buffer, 0, count)
+                    }
+                    output.toString(Charsets.UTF_8.name())
+                }
+                // The response stays raw JSON; callers validate the completion shape.
+                control.ensureActive()
+                text
             }
-            // 宽松返回原始 JSON：choices 形状上游未钉死（plan.md §4.2），由上层按需取字段
-            return text
+        } catch (error: IOException) {
+            control.ensureActive()
+            throw error
         } finally {
-            conn.disconnect()
+            registration?.close()
+            deadline.close()
+            call.cancel()
         }
     }
 

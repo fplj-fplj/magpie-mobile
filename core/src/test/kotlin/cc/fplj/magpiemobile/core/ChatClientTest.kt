@@ -7,10 +7,15 @@ import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.time.Duration
+import java.util.concurrent.Callable
+import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class ChatClientTest {
@@ -152,5 +157,175 @@ class ChatClientTest {
         val output = ChatClient(config()).complete("m", listOf(ChatClient.Message("user", "x")))
 
         assertEquals(body, output)
+    }
+
+    @Test
+    fun unavailableWithImmediateRetryAfterNeverReplaysThePost() {
+        assertSinglePostResponse(503, retryAfter = "0")
+    }
+
+    @Test
+    fun requestTimeoutWithImmediateRetryAfterNeverReplaysThePost() {
+        assertSinglePostResponse(408, retryAfter = "0")
+    }
+
+    @Test
+    fun temporaryRedirectNeverReplaysOrForwardsThePost() {
+        assertSinglePostResponse(307)
+    }
+
+    @Test
+    fun sharedControlCancelsASilentResponseHeaderWaitPromptly() {
+        assertSilentRequestCancelled(sendHeaders = false)
+    }
+
+    @Test
+    fun sharedControlCancelsASilentSuccessfulResponseBodyPromptly() {
+        assertSilentRequestCancelled(sendHeaders = true)
+    }
+
+    @Test
+    fun responseHeadersTakingMoreThanOneSecondStillUseConfiguredTimeout() {
+        val holdHeaders = CountDownLatch(1)
+        val body = """{"choices":[{"message":{"content":"slow headers are valid"}}]}"""
+        val calls = AtomicInteger()
+        server.createContext("/v1/chat/completions") { exchange ->
+            calls.incrementAndGet()
+            exchange.requestBody.readBytes()
+            // A latch timeout simulates an upstream which takes longer than a one-second poll
+            // interval. A receive timeout must not terminate this otherwise valid request.
+            holdHeaders.await(1_250, TimeUnit.MILLISECONDS)
+            val bytes = body.toByteArray(Charsets.UTF_8)
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+
+        val output = ChatClient(config().copy(readTimeout = Duration.ofSeconds(5)))
+            .complete("m", listOf(ChatClient.Message("user", "x")))
+
+        assertEquals(body, output)
+        assertEquals(1, calls.get())
+    }
+
+    @Test
+    fun continuouslyArrivingOrdinaryBodyStillStopsAtItsTotalDeadline() {
+        val release = CountDownLatch(1)
+        val writes = AtomicInteger()
+        val calls = AtomicInteger()
+        server.createContext("/v1/chat/completions") { exchange ->
+            calls.incrementAndGet()
+            exchange.requestBody.readBytes()
+            exchange.sendResponseHeaders(200, 0)
+            try {
+                while (!release.await(30, TimeUnit.MILLISECONDS)) {
+                    exchange.responseBody.write('x'.code)
+                    exchange.responseBody.flush()
+                    writes.incrementAndGet()
+                }
+            } catch (_: IOException) {
+                // Deadline cancellation closes this intentionally endless, tiny response.
+            } finally {
+                exchange.close()
+            }
+        }
+        val worker = Executors.newSingleThreadExecutor()
+        val result = worker.submit(Callable<Throwable?> {
+            try {
+                ChatClient(
+                    config().copy(readTimeout = Duration.ofSeconds(5)),
+                    maxDuration = Duration.ofMillis(700),
+                ).complete("m", listOf(ChatClient.Message("user", "x")))
+                null
+            } catch (failure: Throwable) { failure }
+        })
+        try {
+            val failure = assertIs<StreamingChatException>(result.get(3, TimeUnit.SECONDS))
+
+            assertEquals(StreamingChatFailure.DEADLINE_EXCEEDED, failure.failure)
+            assertTrue(writes.get() >= 3, "Body data should keep arriving before the total deadline")
+            assertEquals(1, calls.get())
+        } finally {
+            release.countDown()
+            worker.shutdownNow()
+            worker.awaitTermination(5, TimeUnit.SECONDS)
+        }
+    }
+
+    private fun assertSinglePostResponse(status: Int, retryAfter: String? = null) {
+        val posts = AtomicInteger()
+        val redirected = AtomicInteger()
+        server.createContext("/v1/chat/completions") { exchange ->
+            assertEquals("POST", exchange.requestMethod)
+            assertEquals("Bearer test-key", exchange.requestHeaders.getFirst("Authorization"))
+            val requestBody = exchange.requestBody.bufferedReader().readText()
+            assertTrue(requestBody.contains("\"model\":\"m\""))
+            posts.incrementAndGet()
+            if (retryAfter != null) exchange.responseHeaders.add("Retry-After", retryAfter)
+            if (status == 307) {
+                exchange.responseHeaders.add("Location", "http://127.0.0.1:$port/redirected")
+            }
+            exchange.sendResponseHeaders(status, -1)
+            exchange.close()
+        }
+        server.createContext("/redirected") { exchange ->
+            redirected.incrementAndGet()
+            exchange.requestBody.readBytes()
+            exchange.sendResponseHeaders(200, -1)
+            exchange.close()
+        }
+
+        val failure = assertFailsWith<ChatException> {
+            ChatClient(config()).complete("m", listOf(ChatClient.Message("user", "x")))
+        }
+
+        assertEquals(status, failure.httpCode)
+        assertEquals("chat -> HTTP $status", failure.message)
+        assertEquals(1, posts.get())
+        assertEquals(0, redirected.get())
+    }
+
+    private fun assertSilentRequestCancelled(sendHeaders: Boolean) {
+        val requestArrived = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val calls = AtomicInteger()
+        server.createContext("/v1/chat/completions") { exchange ->
+            calls.incrementAndGet()
+            exchange.requestBody.readBytes()
+            if (sendHeaders) {
+                exchange.sendResponseHeaders(200, 0)
+                exchange.responseBody.flush()
+            }
+            requestArrived.countDown()
+            try {
+                release.await(10, TimeUnit.SECONDS)
+            } finally {
+                exchange.close()
+            }
+        }
+        val control = ChatRequestControl()
+        val worker = Executors.newSingleThreadExecutor()
+        val result = worker.submit(Callable<Throwable?> {
+            try {
+                ChatClient(config().copy(readTimeout = Duration.ofSeconds(15)), control)
+                    .complete("m", listOf(ChatClient.Message("user", "x")))
+                null
+            } catch (failure: Throwable) {
+                failure
+            }
+        })
+        try {
+            assertTrue(requestArrived.await(5, TimeUnit.SECONDS), "The request must reach the upstream")
+
+            control.cancel()
+            val failure = assertIs<CancellationException>(result.get(2, TimeUnit.SECONDS))
+
+            assertEquals("Chat request cancelled", failure.message)
+            assertEquals(1, calls.get())
+        } finally {
+            control.cancel()
+            release.countDown()
+            worker.shutdownNow()
+            worker.awaitTermination(5, TimeUnit.SECONDS)
+        }
     }
 }

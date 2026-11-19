@@ -6,9 +6,11 @@ import androidx.lifecycle.viewModelScope
 import cc.fplj.magpiemobile.core.ChatClient
 import cc.fplj.magpiemobile.core.ChatTurnStore
 import cc.fplj.magpiemobile.core.ChatException
+import cc.fplj.magpiemobile.core.ChatRequestControl
 import cc.fplj.magpiemobile.core.GatewayConfig
 import cc.fplj.magpiemobile.core.StreamingChatClient
 import cc.fplj.magpiemobile.core.StreamingChatException
+import cc.fplj.magpiemobile.core.StreamingChatFailure
 import cc.fplj.magpiemobile.core.StreamingChatSession
 import cc.fplj.magpiemobile.data.ChatRepository
 import cc.fplj.magpiemobile.data.ContextLimitException
@@ -63,6 +65,13 @@ internal fun cancellableTurnStore(base: ChatTurnStore, context: kotlin.coroutine
                 throw cancelled
             }
             return id
+        }
+
+        override fun complete(turnId: String, assistant: cc.fplj.magpiemobile.core.SessionRecord) {
+            // Cancellation before entering the storage transaction prevents a success commit.
+            // Once that transaction starts, its result is authoritative; do not fail it afterwards.
+            context.ensureActive()
+            base.complete(turnId, assistant)
         }
     }
 
@@ -245,11 +254,13 @@ class ChatViewModel internal constructor(
                     sendContext.ensureActive()
                     val baseTurns = repo.turnStore(selected.id)
                     val guardedTurns = cancellableTurnStore(baseTurns, sendContext)
+                    val requestControl = ChatRequestControl()
                     val session = StreamingChatSession(
-                        StreamingChatClient(config), ChatClient(config), store = null, defaultModel = model,
-                        turnStore = guardedTurns, initialMessages = context,
+                        StreamingChatClient(config, requestControl = requestControl),
+                        ChatClient(config, requestControl = requestControl), store = null, defaultModel = model,
+                        turnStore = guardedTurns, initialMessages = context, requestControl = requestControl,
                     )
-                    session.sendWithReasoning(
+                    withChatRequestCancellation(requestControl) { session.sendWithReasoning(
                         text = snapshot.draft,
                         model = model,
                         onReasoning = { delta ->
@@ -263,7 +274,7 @@ class ChatViewModel internal constructor(
                             // Direct atomic update; no unlimited channel or delayed Activity callback.
                             mutable.update { it.copy(partial = (it.partial + delta).take(65536)) }
                         },
-                    )
+                    ) }
                 }
                 drafts.remove(selected.id)
                 mutable.update {
@@ -274,7 +285,11 @@ class ChatViewModel internal constructor(
                 val status = when (e) {
                     is ContextLimitException -> "上下文达到本机安全上限，请新建会话"
                     is ChatException -> "HTTP " + e.httpCode
-                    is StreamingChatException -> e.httpCode?.let { "HTTP " + it } ?: "网络或流式中断"
+                    is StreamingChatException -> when (e.failure) {
+                        StreamingChatFailure.RESPONSE_LIMIT -> "响应超过本机接收上限"
+                        StreamingChatFailure.DEADLINE_EXCEEDED -> "请求超过本轮等待时限"
+                        else -> e.httpCode?.takeIf { it !in 200..299 }?.let { "HTTP " + it } ?: "网络或流式中断"
+                    }
                     else -> "请求或本地保存未能完成"
                 }
                 mutable.update { it.copy(notice = "发送未完成（" + status + "）；草稿已保留，未自动重发。上游可能已处理，手动发送可能再次消耗额度。") }

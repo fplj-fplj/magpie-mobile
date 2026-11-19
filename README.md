@@ -2,10 +2,10 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
-## 当前源码版本：0.1.47-bugfixes（会话、连通测试与状态修复）
+## 当前源码版本：0.1.48-streaming（流式接收与取消收尾）
 
 - **上游核心**：v0.1.3781（commit `b52c7111`）；
-- **本轮修复**：修复非空会话删除、删除后的草稿与失败预览串用、空模型响应误报通过、提供商根地址回开与目录回调、旧用量请求回填及插件市场安装状态过期；插件地址先校验再保留操作标记，普通聊天响应增加大小上限。保持现有界面与字体；JVM 621 项、Go、插件及 Android 模拟器均通过。详见 [0.1.47 修复与验收记录](docs/bugfixes-0.1.47.md)。
+- **本轮修复**：限制流式读取与正文／思考内存预算，增加跨降级的整轮时限，修复静默连接取消与待定轮次收尾，支持普通降级的纯思考响应；聊天请求禁止自动重发。保持现有界面与字体。本轮候选等待 GitHub Actions 完整验证，当前可用 Release 仍为下方已验证版本。详见 [0.1.48 修复与验收记录](docs/bugfixes-0.1.48.md)。
 - **思考过程**：聊天测试页独立显示可折叠的 `reasoning_content`；生成中实时预览，完成后自动收起。历史中可重新展开，但思考内容不会进入下一轮模型上下文。详见 [0.1.45 思考内容说明](docs/chat-reasoning-ui-0.1.45.md)；
 - **页面重排**：提供商添加、模型选择和连通测试参照 RikkaHub 页面结构重新组织；聊天区改为独立消息滚动与底部固定输入框，支持模型搜索、按提供商分组以及三项能力测试。全屏编辑、模型多选与聊天键盘布局已通过实际 Android 回归，详见 [0.1.46 界面与验收记录](docs/rikkahub-pages-0.1.46.md)；
 - **流式空值修复**：推理模型在正文前返回的 `delta.content: null` 不再被拼成 `"null"`；流式与非流式正文均只接受 JSON 字符串。详见 [0.1.44 修复说明](docs/chat-null-delta-fix-0.1.44.md)；
@@ -22,6 +22,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/bugfixes-0.1.48.md](docs/bugfixes-0.1.48.md) | 流式接收预算、整轮时限、静默取消与纯思考降级修复及 Actions 验收 |
 | [docs/bugfixes-0.1.47.md](docs/bugfixes-0.1.47.md) | 会话删除、空响应、root 地址、用量与插件状态修复及完整 Actions 验收 |
 | [docs/rikkahub-pages-0.1.46.md](docs/rikkahub-pages-0.1.46.md) | RikkaHub 参考页面、全屏编辑、模型多选、聊天键盘与同提交构建验收 |
 | [docs/chat-reasoning-ui-0.1.45.md](docs/chat-reasoning-ui-0.1.45.md) | 思考过程折叠卡、独立持久化、上下文边界与聊天页布局 |

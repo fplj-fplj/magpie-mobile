@@ -3,9 +3,13 @@ package cc.fplj.magpiemobile.core
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.io.Closeable
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import okhttp3.Call
+import okhttp3.Request
 
 /**
  * 流式聊天的 HTTP 层；SSE 事件语义交给 SseChatParser。
@@ -13,9 +17,18 @@ import java.net.URL
  * 只有收到 [DONE] 才成功；EOF/IO/SSE/回调错误保留增量并安全上抛，不自动重发。
  * 仅真正的非 2xx HTTP 响应抛 ChatException；回调不得伪造不支持流式的状态。
  */
-class StreamingChatClient(private val config: GatewayConfig) {
+class StreamingChatClient(
+    private val config: GatewayConfig,
+    internal val limits: StreamingChatLimits = StreamingChatLimits(),
+    private val requestControl: ChatRequestControl? = null,
+) {
 
     private val json = Json { ignoreUnknownKeys = true }
+    private val client = ChatHttpTransport.client(config)
+
+    internal val maxDuration get() = limits.maxDuration
+
+    internal fun withRequestControl(control: ChatRequestControl) = StreamingChatClient(config, limits, control)
 
     /** 流式一轮：onDelta 每增量回调一次；成功时返回完整拼接文本。保持原始签名以兼容尾随 lambda。 */
     fun stream(
@@ -54,6 +67,14 @@ class StreamingChatClient(private val config: GatewayConfig) {
         onDelta: (String) -> Unit,
         onReasoning: (String) -> Unit,
     ): String {
+        val control = requestControl ?: ChatRequestControl()
+        val started = System.nanoTime()
+        val durationNanos = limits.maxDuration.toNanos()
+        fun checkActive() {
+            if (System.nanoTime() - started >= durationNanos) control.deadlineExceeded()
+            control.ensureActive()
+        }
+        checkActive()
         val body = buildJsonObject {
             put("model", model)
             put("messages", json.encodeToJsonElement(
@@ -63,72 +84,75 @@ class StreamingChatClient(private val config: GatewayConfig) {
             if (temperature != null) put("temperature", temperature)
             if (topP != null) put("top_p", topP)
         }.toString()
-        val parser = SseChatParser(onReasoning = onReasoning, onDelta = onDelta)
-        var conn: HttpURLConnection? = null
+        val parser = SseChatParser(limits = limits, onReasoning = onReasoning, onDelta = onDelta)
         var httpCode: Int? = null
+        var registration: Closeable? = null
+        var watchdog: ScheduledFuture<*>? = null
+        var activeCall: Call? = null
         try {
-            val connection = URL(config.chatCompletionsPath()).openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
-            conn = connection
-            connection.requestMethod = "POST"
-            connection.connectTimeout = config.connectTimeout.toMillis().toInt()
-            connection.readTimeout = config.readTimeout.toMillis().toInt()
-            connection.doOutput = true
-            connection.instanceFollowRedirects = false
-            connection.setRequestProperty("Content-Type", "application/json")
-            connection.setRequestProperty("Authorization", "Bearer " + config.gatewayKey)
-            connection.setRequestProperty("Accept", "text/event-stream")
-            // 定长传输禁止 HttpURLConnection 在认证/重定向时隐式重发这个计费 POST。
-            val bytes = body.toByteArray(Charsets.UTF_8)
-            connection.setFixedLengthStreamingMode(bytes.size)
-            connection.outputStream.use { it.write(bytes) }
-            val code = connection.responseCode
-            httpCode = code
-            if (code !in 200..299) {
-                // 不读取错误 body：状态足够判定，且错误 body 可能含凭据或保持长连接。
-                throw ChatException("stream -> HTTP " + code, code)
-            }
-            val mediaType = connection.contentType?.substringBefore(';')?.trim()
-            if (!mediaType.equals("text/event-stream", ignoreCase = true)) {
-                throw StreamingChatException(
-                    StreamingChatFailure.UNEXPECTED_CONTENT_TYPE,
-                    parser.fullText(),
-                    code,
-                    parser.fullReasoningText(),
-                )
-            }
-            try {
-                connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                    while (true) {
-                        val line = reader.readLine()
-                            ?: throw StreamingChatException(
-                                StreamingChatFailure.EOF_BEFORE_DONE,
-                                parser.fullText(),
-                                code,
-                                parser.fullReasoningText(),
-                            )
-                        // 必须先判断 DONE 再读下一行；长连接不需要关闭才算完成。
-                        if (parser.feedLine(line)) break
+            checkActive()
+            // The watchdog covers response headers and silent blocking reads too. The monotonic
+            // checks also cover busy streams and avoid relying on scheduler timing for success.
+            watchdog = deadlines.schedule(Runnable { control.deadlineExceeded() },
+                (durationNanos - (System.nanoTime() - started)).coerceAtLeast(0L), TimeUnit.NANOSECONDS)
+            val request = Request.Builder()
+                .url(config.chatCompletionsPath())
+                .header("Authorization", "Bearer " + config.gatewayKey)
+                .header("Accept", "text/event-stream")
+                .post(ChatHttpTransport.jsonBody(body))
+                .build()
+            val call = client.newCall(request)
+            activeCall = call
+            registration = control.register(call::cancel)
+            checkActive()
+            call.execute().use { response ->
+                try {
+                    val code = response.code
+                    httpCode = code
+                    checkActive()
+                    if (code !in 200..299) {
+                        // Status is sufficient; do not read error bodies or drain them on close.
+                        call.cancel()
+                        throw ChatException("stream -> HTTP " + code, code)
                     }
+                    val mediaType = response.header("Content-Type")?.substringBefore(';')?.trim()
+                    if (!mediaType.equals("text/event-stream", ignoreCase = true)) {
+                        call.cancel()
+                        throw StreamingChatException(StreamingChatFailure.UNEXPECTED_CONTENT_TYPE, "")
+                    }
+                    try {
+                        val input = response.body?.byteStream()
+                            ?: throw StreamingChatException(StreamingChatFailure.EOF_BEFORE_DONE, "")
+                        // Call cancellation closes the socket before response/reader close can try
+                        // draining unread bytes after DONE, a failed callback or a receive limit.
+                        val reader = BoundedSseReader(input, limits, ::checkActive)
+                        try {
+                            while (true) {
+                                checkActive()
+                                val line = reader.readLine()
+                                    ?: throw StreamingChatException(StreamingChatFailure.EOF_BEFORE_DONE, "")
+                                checkActive()
+                                if (parser.feedLine(line)) break
+                            }
+                        } finally {
+                            call.cancel()
+                            try { reader.close() } catch (_: IOException) { /* The terminal socket is already cancelled. */ }
+                        }
+                    } catch (_: ChatException) {
+                        // An SSE error is not a real HTTP 405/501 and must never trigger replay.
+                        throw StreamingChatException(StreamingChatFailure.SSE_ERROR, "")
+                    }
+                    checkActive()
+                    return parser.fullText()
+                } finally {
+                    call.cancel()
                 }
-            } catch (_: ChatException) {
-                // SSE error 不属于 HTTP 405/501；不保留原始 JSON/message/cause。
-                throw StreamingChatException(
-                    StreamingChatFailure.SSE_ERROR,
-                    parser.fullText(),
-                    code,
-                    parser.fullReasoningText(),
-                )
-            } catch (e: StreamingChatException) {
-                // parser 的回调失败使用真实响应 code，不采用回调自报的 HTTP 状态。
-                throw StreamingChatException(
-                    e.failure,
-                    parser.fullText(),
-                    code,
-                    parser.fullReasoningText(),
-                )
             }
-            return parser.fullText()
         } catch (_: IOException) {
+            // A disconnect caused by cancel/deadline is authoritative over its socket exception.
+            try { checkActive() } catch (e: StreamingChatException) {
+                throw StreamingChatException(e.failure, parser.fullText(), httpCode, parser.fullReasoningText())
+            }
             // Throwable cause/类型名也可能夹带自由文本，安全边界只保留固定分类。
             throw StreamingChatException(
                 StreamingChatFailure.IO_FAILURE,
@@ -136,9 +160,21 @@ class StreamingChatClient(private val config: GatewayConfig) {
                 httpCode,
                 parser.fullReasoningText(),
             )
+        } catch (e: StreamingChatException) {
+            // Reader/parser/control failures all carry only bounded accepted deltas and the
+            // actual HTTP status; a callback cannot invent 405/501 to trigger fallback.
+            throw StreamingChatException(e.failure, parser.fullText(), httpCode, parser.fullReasoningText())
         } finally {
-            conn?.disconnect()
+            watchdog?.cancel(false)
+            activeCall?.cancel()
+            registration?.close()
         }
+    }
+
+    companion object {
+        private val deadlines = ScheduledThreadPoolExecutor(1) { runnable ->
+            Thread(runnable, "magpie-stream-deadline").apply { isDaemon = true }
+        }.apply { removeOnCancelPolicy = true }
     }
 }
 
@@ -150,6 +186,8 @@ enum class StreamingChatFailure(val safeMessage: String) {
     EOF_BEFORE_DONE("Stream EOF before [DONE]"),
     UNEXPECTED_CONTENT_TYPE("Stream expected text/event-stream"),
     CHAT_FAILURE("Chat failed"),
+    RESPONSE_LIMIT("Stream response exceeds receive limits"),
+    DEADLINE_EXCEEDED("Stream deadline exceeded"),
 }
 
 /** 失败回答只留在内存供 UI 展示；异常 message/日志不包含 partialText 或原始 cause。 */

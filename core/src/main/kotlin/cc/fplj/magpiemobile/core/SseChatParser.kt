@@ -1,5 +1,6 @@
 package cc.fplj.magpiemobile.core
 
+import java.util.concurrent.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -12,22 +13,40 @@ import kotlinx.serialization.json.jsonObject
  * 输出：正文与 reasoning_content 分别回调并分别拼接；[DONE] 结束返回完整正文。
  * 错误事件只上抛固定安全分类，不携带上游自由文本/JSON；失败保留已收增量。
  */
-class SseChatParser(
+class SseChatParser internal constructor(
+    private val limits: StreamingChatLimits,
     private val onReasoning: (String) -> Unit = {},
     private val onDelta: (String) -> Unit,
 ) {
+    /** Preserve positional callbacks and trailing-lambda calls with the original public API. */
+    constructor(
+        onReasoning: (String) -> Unit = {},
+        onDelta: (String) -> Unit,
+    ) : this(StreamingChatLimits(), onReasoning, onDelta)
+
     private val json = Json { ignoreUnknownKeys = true }
     private val sb = StringBuilder()
     private val reasoningSb = StringBuilder()
 
     /** 喂入一行（不带换行符）；返回 true 表示流结束（收到 [DONE]）。 */
     fun feedLine(line: String): Boolean {
+        // Check before trim or JSON parsing, including comments, whitespace and malformed data.
+        // HTTP additionally limits actual UTF-8 bytes; direct parser callers get a bounded line.
+        if (line.length.toLong() > limits.maxLineBytes.toLong()) throw responseLimit()
         val trimmed = line.trim()
         if (trimmed.isEmpty()) return false
         if (!trimmed.startsWith("data:")) return false // 忽略 event:/comment 行
         val payload = trimmed.removePrefix("data:").trim()
         if (payload == "[DONE]") return true
         val event = extractEvent(payload) ?: return false
+        // Validate the whole event before appending or dispatching either channel. An over-limit
+        // answer must not commit its reasoning first and leave a partially accepted event.
+        val nextContent = sb.length.toLong() + (event.content?.length ?: 0)
+        val nextReasoning = reasoningSb.length.toLong() + (event.reasoning?.length ?: 0)
+        if (nextContent > limits.maxContentChars.toLong() ||
+            nextReasoning > limits.maxReasoningChars.toLong() ||
+            nextContent + nextReasoning > limits.maxCombinedChars.toLong()
+        ) throw responseLimit()
         event.reasoning?.let { reasoning ->
             reasoningSb.append(reasoning)
             dispatchCallback { onReasoning(reasoning) }
@@ -47,9 +66,17 @@ class SseChatParser(
 
     private data class StreamEvent(val content: String?, val reasoning: String?)
 
+    private fun responseLimit(): StreamingChatException = StreamingChatException(
+        StreamingChatFailure.RESPONSE_LIMIT,
+        fullText(),
+        partialReasoning = fullReasoningText(),
+    )
+
     private fun dispatchCallback(callback: () -> Unit) {
         try {
             callback()
+        } catch (error: CancellationException) {
+            throw error
         } catch (_: Exception) {
             // 回调的异常/HTTP code 不属于服务端响应，不得伪造 405/501 触发重放。
             // 不保留原始 cause，避免 UI 或异常日志泄漏任意形状凭据。
@@ -75,6 +102,8 @@ class SseChatParser(
         val content = delta?.get("content").stringOrNull()
         val reasoning = delta?.get("reasoning_content").stringOrNull()
         if (content == null && reasoning == null) null else StreamEvent(content, reasoning)
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: ChatException) {
         throw e
     } catch (e: Exception) {

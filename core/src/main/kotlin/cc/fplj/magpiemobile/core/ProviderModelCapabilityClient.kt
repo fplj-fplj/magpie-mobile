@@ -5,6 +5,7 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.time.Duration
 import java.util.concurrent.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -131,7 +132,14 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
         var streamedCharacters = 0
         var exceeded = false
         try {
-            StreamingChatClient(config).streamWithReasoning(
+            StreamingChatClient(config, limits = StreamingChatLimits(
+                maxLineBytes = 256 * 1024,
+                maxResponseBytes = 4L * 1024 * 1024,
+                maxContentChars = MAX_STREAM_CHARS,
+                maxReasoningChars = MAX_STREAM_CHARS,
+                maxCombinedChars = MAX_STREAM_CHARS,
+                maxDuration = Duration.ofSeconds(60),
+            )).streamWithReasoning(
                 model = route.gatewayModelId,
                 messages = TEST_MESSAGES,
                 onReasoning = { delta ->
@@ -407,6 +415,8 @@ class ProviderModelCapabilityClient(private val config: GatewayConfig) {
                 StreamingChatFailure.SSE_ERROR -> "上游返回了流式错误"
                 StreamingChatFailure.CALLBACK_FAILURE -> "流式测试处理失败"
                 StreamingChatFailure.CHAT_FAILURE -> "流式请求失败"
+                StreamingChatFailure.RESPONSE_LIMIT -> "响应超过测试安全上限"
+                StreamingChatFailure.DEADLINE_EXCEEDED -> "请求超时"
             }
             is CapabilityFailureException -> when (error.failure) {
                 CapabilityFailure.HTTP -> httpFailureMessage(error.httpCode)

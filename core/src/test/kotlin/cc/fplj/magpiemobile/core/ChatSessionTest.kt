@@ -9,6 +9,8 @@ import java.io.File
 import java.net.InetSocketAddress
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ChatSessionTest {
@@ -110,12 +112,44 @@ class ChatSessionTest {
 
     @Test
     fun nullNonStreamingContentIsRejectedInsteadOfBecomingLiteralNull() {
-        val e = assertFailsWith<ChatException> {
-            ChatSession.extractReply(
-                """{"choices":[{"message":{"role":"assistant","content":null,"reasoning_content":"thinking"}}]}""",
-            )
+        for (message in listOf(
+            """{"content":null}""", """{"content":42}""", """{"content":false}""",
+            """{"content":[],"reasoning_content":null}""",
+            """{"content":null,"reasoning_content":42}""",
+            """{"content":null,"reasoning_content":" \n\t"}""",
+            """{"content":null,"reasoning_content":"\u0000"}""",
+        )) {
+            val e = assertFailsWith<ChatException> {
+                ChatSession.extractReply("""{"choices":[{"message":$message}]}""")
+            }
+            assertEquals("Reply shape unexpected", e.message)
+            assertEquals(200, e.httpCode)
+            assertNull(e.cause)
         }
-        assertTrue(e.message.orEmpty().contains("content missing"))
+    }
+
+    @Test
+    fun pureReasoningAcceptsNullContentAndAliasWithoutInventingVisibleBodyText() {
+        for (message in listOf(
+            """{"content":null,"reasoning_content":"thinking"}""",
+            """{"content":42,"reasoning":"thinking"}""",
+            """{"reasoning_content":null,"reasoning":"thinking"}""",
+        )) {
+            val completion = ChatSession.extractCompletion("""{"choices":[{"message":$message}]}""")
+            assertEquals("", completion.content)
+            assertEquals("thinking", completion.reasoning)
+        }
+        // Empty string content keeps its existing protocol contract even without reasoning.
+        assertEquals("", ChatSession.extractReply("""{"choices":[{"message":{"content":""}}]}"""))
+    }
+
+    @Test
+    fun malformedReplyShapeNeverLeaksParserInputThroughException() {
+        val secret = "private-parser-response"
+        val e = assertFailsWith<ChatException> { ChatSession.extractCompletion("{\"$secret\":") }
+        assertEquals("Reply shape unexpected", e.message)
+        assertNull(e.cause)
+        assertFalse(e.stackTraceToString().contains(secret))
     }
 
     @Test

@@ -14,6 +14,10 @@ import java.io.File
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.util.Collections
+import java.util.concurrent.CancellationException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
@@ -21,6 +25,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class StreamingChatTurnStoreTest {
@@ -46,11 +51,14 @@ class StreamingChatTurnStoreTest {
         turnStore: ChatTurnStore? = null,
         initialMessages: List<ChatClient.Message> = emptyList(),
         store: SessionStore? = null,
+        requestControl: ChatRequestControl? = null,
+        now: () -> Long = { 123L },
     ): StreamingChatSession {
         val config = GatewayConfig(gatewayKey = "k", gatewayBaseUrl = "http://127.0.0.1:$port")
         return StreamingChatSession(
-            StreamingChatClient(config), ChatClient(config), store, "m", { 123L },
-            turnStore, initialMessages,
+            StreamingChatClient(config, requestControl = requestControl),
+            ChatClient(config, requestControl = requestControl), store, "m", now,
+            turnStore, initialMessages, requestControl,
         )
     }
 
@@ -90,6 +98,7 @@ class StreamingChatTurnStoreTest {
         var completeFailure: Exception? = null
         var failFailure: Exception? = null
         var onBegin: () -> Unit = {}
+        var onBeginCommitted: () -> Unit = {}
         var onComplete: () -> Unit = {}
 
         override fun begin(user: SessionRecord): String {
@@ -98,6 +107,7 @@ class StreamingChatTurnStoreTest {
             beginFailure?.let { throw it }
             val id = "turn-$beginAttempts"
             begun[id] = user
+            onBeginCommitted()
             return id
         }
 
@@ -464,5 +474,203 @@ class StreamingChatTurnStoreTest {
         assertEquals(SessionRecord(123L, "error", "chat:m:fallback", "Chat failed; partial characters=0"),
             turns.failures.getValue("turn-1"))
         assertTrue(turns.completed.isEmpty())
+    }
+
+    @Test
+    fun cancellationBeforeBeginAndAtCommittedBeginNeverSendsHttpOrLeavesAnOpenTurn() {
+        val requests = AtomicInteger()
+        server.createContext("/v1/chat/completions") { ex ->
+            requests.incrementAndGet()
+            respond(ex, sse("unexpected"))
+        }
+        val initial = pair()
+        val stopped = ChatRequestControl().apply { cancel() }
+        val neverBegun = RecordingTurnStore()
+        val before = session(neverBegun, initial, requestControl = stopped)
+        assertFailsWith<CancellationException> { before.send("new user") }
+        assertEquals(0, neverBegun.beginAttempts)
+        assertTrue(neverBegun.failures.isEmpty())
+        assertEquals(initial, before.messages())
+
+        val beginCancellation = CancellationException("private begin cancellation")
+        val rejected = RecordingTurnStore().apply { beginFailure = beginCancellation }
+        val rejectedSession = session(rejected, initial, requestControl = ChatRequestControl())
+        assertSame(beginCancellation,
+            assertFailsWith<CancellationException> { rejectedSession.send("new user") })
+        assertTrue(rejected.begun.isEmpty())
+        assertTrue(rejected.failures.isEmpty())
+        assertEquals(initial, rejectedSession.messages())
+
+        val control = ChatRequestControl()
+        val committed = RecordingTurnStore().apply { onBeginCommitted = { control.cancel() } }
+        val after = session(committed, initial, requestControl = control)
+        assertFailsWith<CancellationException> { after.send("new user") }
+        assertEquals(setOf("turn-1"), committed.begun.keys)
+        assertEquals(setOf("turn-1"), committed.failures.keys)
+        assertEquals("Chat failed; partial characters=0", committed.failures.getValue("turn-1").text)
+        assertTrue(committed.completeAttempts.isEmpty())
+        assertEquals(initial, after.messages())
+        assertEquals(0, requests.get())
+        after.reset()
+    }
+
+    @Test
+    fun callbackCancellationKeepsItsIdentityAndCleansUpWithoutFallbackOrPrivateDiagnostics() {
+        val requests = AtomicInteger()
+        server.createContext("/v1/chat/completions") { ex ->
+            requests.incrementAndGet()
+            respond(ex,
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thought\",\"content\":\"reply\"}}]}\n\n" +
+                    "data: [DONE]\n\n")
+        }
+        for (cancelInReasoning in listOf(false, true)) {
+            val cancellation = CancellationException("private callback cancellation")
+            val turns = RecordingTurnStore()
+            val initial = pair("same user")
+            val s = session(turns, initial, requestControl = ChatRequestControl())
+            val thrown = assertFailsWith<CancellationException> {
+                s.sendWithReasoning("same user",
+                    onReasoning = { if (cancelInReasoning) throw cancellation },
+                    onDelta = { if (!cancelInReasoning) throw cancellation })
+            }
+            assertSame(cancellation, thrown)
+            assertEquals(initial, s.messages())
+            assertTrue(turns.completeAttempts.isEmpty())
+            assertEquals(setOf("turn-1"), turns.failures.keys)
+            assertEquals("Chat failed; partial characters=0", turns.failures.getValue("turn-1").text)
+            assertFalse(turns.failures.getValue("turn-1").text.contains("private"))
+            s.reset()
+        }
+        assertEquals(2, requests.get())
+    }
+
+    @Test
+    fun cancellationThrownByCompleteIsPreservedEvenIfFailureCleanupAlsoThrows() {
+        val requests = AtomicInteger()
+        server.createContext("/v1/chat/completions") { ex ->
+            requests.incrementAndGet()
+            respond(ex, sse("reply"))
+        }
+        val cancellation = CancellationException("private complete cancellation")
+        val turns = RecordingTurnStore().apply {
+            completeFailure = cancellation
+            failFailure = IOException("private cleanup failure")
+        }
+        val initial = pair("same user")
+        val s = session(turns, initial, requestControl = ChatRequestControl())
+
+        assertSame(cancellation, assertFailsWith<CancellationException> { s.send("same user") })
+
+        assertEquals(1, requests.get())
+        assertEquals(initial, s.messages())
+        assertEquals(1, turns.completeAttempts.size)
+        assertTrue(turns.completed.isEmpty())
+        assertEquals("Chat failed; partial characters=0", turns.failures.getValue("turn-1").text)
+        assertTrue(cancellation.suppressed.isEmpty())
+        s.reset()
+    }
+
+    @Test
+    fun cancellationAfterDoneBeforeCommitRejectsSuccessAndRollsBackOnlyThisUser() {
+        val requests = AtomicInteger()
+        val beforeCommit = CountDownLatch(1)
+        val releaseCommit = CountDownLatch(1)
+        val clockReads = AtomicInteger()
+        val executor = Executors.newSingleThreadExecutor()
+        server.createContext("/v1/chat/completions") { ex ->
+            requests.incrementAndGet()
+            respond(ex, sse("received complete reply"))
+        }
+        val control = ChatRequestControl()
+        val turns = RecordingTurnStore()
+        val initial = pair("same user")
+        val s = session(turns, initial, requestControl = control, now = {
+            if (clockReads.incrementAndGet() == 2) {
+                beforeCommit.countDown()
+                check(releaseCommit.await(5, TimeUnit.SECONDS))
+            }
+            123L
+        })
+        val result = executor.submit<CancellationException> {
+            assertFailsWith<CancellationException> { s.send("same user") }
+        }
+        try {
+            assertTrue(beforeCommit.await(5, TimeUnit.SECONDS))
+            control.cancel()
+            releaseCommit.countDown()
+            result.get(5, TimeUnit.SECONDS)
+            assertEquals(1, requests.get())
+            assertEquals(initial, s.messages())
+            assertTrue(turns.completeAttempts.isEmpty())
+            assertTrue(turns.completed.isEmpty())
+            assertEquals(setOf("turn-1"), turns.failures.keys)
+            assertEquals("Chat failed; partial characters=0", turns.failures.getValue("turn-1").text)
+            s.reset()
+        } finally {
+            releaseCommit.countDown()
+            result.cancel(true)
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun cancellationAfterCompleteBeginsDoesNotMisreportAnAlreadyCommittedTurnAsFailure() {
+        server.createContext("/v1/chat/completions") { ex -> respond(ex, sse("committed reply")) }
+        val control = ChatRequestControl()
+        val turns = RecordingTurnStore().apply { onComplete = { control.cancel() } }
+        val initial = pair()
+        val s = session(turns, initial, requestControl = control)
+
+        assertEquals("committed reply", s.send("new user"))
+
+        assertEquals(setOf("turn-1"), turns.completed.keys)
+        assertTrue(turns.failures.isEmpty())
+        assertEquals(initial + ChatClient.Message("user", "new user") +
+            ChatClient.Message("assistant", "committed reply"), s.messages())
+        s.reset()
+    }
+
+    @Test
+    fun cancelledFallbackReasoningCallbackClosesTheOriginalTurnAndNeverStartsAThirdRequest() {
+        val requests = AtomicInteger()
+        server.createContext("/v1/chat/completions") { ex ->
+            if (requests.incrementAndGet() == 1) status(ex, 501) else respond(ex,
+                """{"choices":[{"message":{"content":null,"reasoning_content":"fallback thought"}}]}""",
+                "application/json")
+        }
+        val cancellation = CancellationException("private fallback callback cancellation")
+        val turns = RecordingTurnStore()
+        val initial = pair()
+        val s = session(turns, initial, requestControl = ChatRequestControl())
+
+        val failure = assertFailsWith<CancellationException> {
+            s.sendWithReasoning("new user", onReasoning = { throw cancellation })
+        }
+
+        assertSame(cancellation, failure)
+        assertEquals(2, requests.get())
+        assertEquals(1, turns.beginAttempts)
+        assertTrue(turns.completeAttempts.isEmpty())
+        assertEquals(initial, s.messages())
+        assertEquals(SessionRecord(123L, "error", "chat:m:fallback", "Chat failed; partial characters=0"),
+            turns.failures.getValue("turn-1"))
+        s.reset()
+    }
+
+    @Test
+    fun deadlineAtCommittedBeginStillFinalizesTheTurnUsingAFixedFailureSummary() {
+        val control = ChatRequestControl()
+        val turns = RecordingTurnStore().apply { onBeginCommitted = { control.deadlineExceeded() } }
+        val initial = pair()
+        val s = session(turns, initial, requestControl = control)
+
+        val failure = assertFailsWith<StreamingChatException> { s.send("new user") }
+
+        assertEquals(StreamingChatFailure.DEADLINE_EXCEEDED, failure.failure)
+        assertEquals(initial, s.messages())
+        assertTrue(turns.completeAttempts.isEmpty())
+        assertEquals(setOf("turn-1"), turns.failures.keys)
+        assertEquals(StreamingChatFailure.DEADLINE_EXCEEDED.safeMessage + "; partial characters=0",
+            turns.failures.getValue("turn-1").text)
     }
 }
