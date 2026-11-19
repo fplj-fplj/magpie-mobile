@@ -8,7 +8,7 @@ assert 'delay(1000)' in s, 'Settle input before automatic metadata GET'
 for field, source in [('requestedBaseForm', 'baseUrl'), ('requestedKey', 'key')]:
     assert f'val {field} = {source}' in s, 'Capture current draft before dispatching discovery'
 assert 'requestedBaseForm, requestedKey, requestedProviderId, requestedRevision, requestedLocalHttp' in s, 'Discovery must use the captured draft, not saved gateway catalog'
-assert 'withProviderRequest(owner)' in s, 'Discovery must bind the expected authenticated session'
+assert 'withProviderRequest(sessionKey)' in s, 'Discovery must bind the full authenticated connection key'
 assert 'NativeCoreSession.providerClient()' not in s, 'Provider operations must not resolve replacement credentials in an IO worker'
 assert 'discoverModels(activeRequest)' in s, 'Automatic trigger must call read-only discovery'
 assert 'keyFingerprint' in s and 'catalogSequence' in s, 'Bind late responses to current credentials/generation'

@@ -28,8 +28,8 @@ class ProviderListCacheViewModel(
     private val readDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
     private val mutex = Mutex()
-    private var owner: Long? = null
-    private var ownerGeneration = 0L
+    private var session: ProviderSessionKey? = null
+    private var sessionGeneration = 0L
     private var generation = 0L
     private var cached: ProviderListSnapshot? = null
     private var inflight: Deferred<ProviderListSnapshot>? = null
@@ -41,47 +41,48 @@ class ProviderListCacheViewModel(
     }
 
     /** Register before setting the recovery marker and before dispatching any provider write. */
-    suspend fun beginWrite(owner: Long): WriteBarrier = mutex.withLock {
-        selectOwner(owner)
+    suspend fun beginWrite(session: ProviderSessionKey): WriteBarrier = mutex.withLock {
+        selectSession(session)
         invalidateRead()
-        ActiveWrite().also { writes.getOrPut(owner) { mutableSetOf() }.add(it) }
+        ActiveWrite().also { writes.getOrPut(session.owner) { mutableSetOf() }.add(it) }
     }
 
     suspend fun read(
-        owner: Long,
+        session: ProviderSessionKey,
         force: Boolean = false,
         fetch: suspend () -> ProviderListSnapshot,
-    ): ProviderListSnapshot = readAfterWrites(owner, force, recovery = false, fetch = fetch)
+    ): ProviderListSnapshot = readAfterWrites(session, force, recovery = false, fetch = fetch)
 
     /** Never confirms an unknown write using a cached value or a GET started before that write. */
     suspend fun readForRecovery(
-        owner: Long,
+        session: ProviderSessionKey,
         fetch: suspend () -> ProviderListSnapshot,
-    ): ProviderListSnapshot = readAfterWrites(owner, force = true, recovery = true, fetch = fetch)
+    ): ProviderListSnapshot = readAfterWrites(session, force = true, recovery = true, fetch = fetch)
 
     private suspend fun readAfterWrites(
-        owner: Long,
+        session: ProviderSessionKey,
         force: Boolean,
         recovery: Boolean,
         fetch: suspend () -> ProviderListSnapshot,
     ): ProviderListSnapshot {
-        val selectedOwnerGeneration = mutex.withLock {
-            selectOwner(owner)
-            ownerGeneration
+        val selectedSessionGeneration = mutex.withLock {
+            selectSession(session)
+            sessionGeneration
         }
         var selection: ReadSelection? = null
         while (selection == null) {
             currentCoroutineContext().ensureActive()
             val blockers = mutex.withLock {
-                ensureOwner(owner, selectedOwnerGeneration)
+                ensureSession(session, selectedSessionGeneration)
                 pruneWrites()
-                val pendingWrites = writes[owner]?.toList().orEmpty()
+                // A reconnected epoch still waits for the previous epoch's actual HTTP exit.
+                val pendingWrites = writes[session.owner]?.toList().orEmpty()
                 if (pendingWrites.isNotEmpty()) {
                     pendingWrites
                 } else {
                     // Recheck writes and establish the read generation under the same lock.
                     if (recovery) invalidateRead()
-                    selection = selectRead(owner, force, fetch)
+                    selection = selectRead(session, force, fetch)
                     emptyList()
                 }
             }
@@ -92,7 +93,7 @@ class ProviderListCacheViewModel(
         selected.task?.start()
         val result = selected.task?.await() ?: checkNotNull(selected.value)
         return mutex.withLock {
-            ensureOwner(owner, selectedOwnerGeneration)
+            ensureSession(session, selectedSessionGeneration)
             if (generation != selected.generation) {
                 throw CancellationException("Provider read was superseded")
             }
@@ -102,7 +103,7 @@ class ProviderListCacheViewModel(
 
     /** Called only under mutex, after all writes for this owner have exited. */
     private fun selectRead(
-        owner: Long,
+        session: ProviderSessionKey,
         force: Boolean,
         fetch: suspend () -> ProviderListSnapshot,
     ): ReadSelection {
@@ -128,7 +129,7 @@ class ProviderListCacheViewModel(
                 // Completion owns cleanup, even when every Composable await was cancelled.
                 withContext(NonCancellable) {
                     mutex.withLock {
-                        if (this@ProviderListCacheViewModel.owner == owner &&
+                        if (this@ProviderListCacheViewModel.session == session &&
                             generation == readGeneration && inflight === pending) {
                             cached = healthy
                             inflight = null
@@ -141,23 +142,24 @@ class ProviderListCacheViewModel(
         return ReadSelection(readGeneration, task = pending)
     }
 
-    private fun selectOwner(owner: Long) {
-        // GatewayRuntime attach/stoppedWithoutService allocate monotonically increasing owners.
-        // This VM shares that process lifetime: a late old operation must never select backwards.
-        val latestOwner = this.owner
-        if (latestOwner != null && owner < latestOwner) {
+    private fun selectSession(session: ProviderSessionKey) {
+        // GatewayRuntime owners and NativeCoreSession epochs increase within this VM's process.
+        // A late old operation must never select an older owner or reconnect epoch.
+        val latest = this.session
+        if (latest != null && (session.owner < latest.owner ||
+                (session.owner == latest.owner && session.epoch < latest.epoch))) {
             throw CancellationException("Provider session was superseded")
         }
         pruneWrites()
-        if (this.owner != owner) {
-            this.owner = owner
-            ownerGeneration++
+        if (this.session != session) {
+            this.session = session
+            sessionGeneration++
             invalidateRead()
         }
     }
 
-    private fun ensureOwner(owner: Long, selectedOwnerGeneration: Long) {
-        if (this.owner != owner || ownerGeneration != selectedOwnerGeneration) {
+    private fun ensureSession(session: ProviderSessionKey, selectedSessionGeneration: Long) {
+        if (this.session != session || sessionGeneration != selectedSessionGeneration) {
             throw CancellationException("Provider session changed")
         }
     }

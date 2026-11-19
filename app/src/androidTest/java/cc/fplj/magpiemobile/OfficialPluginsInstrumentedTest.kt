@@ -28,6 +28,8 @@ import java.net.URL
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -295,6 +297,7 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue(device.wait(Until.hasObject(By.text("连接成功")), 20_000))
                     device.findObject(By.text("返回插件")).click()
                     val connectedOwner = NativeCoreSession.providerSessionId()
+                    val connectedProviderSession = NativeCoreSession.providerSessionKey()
                     dismissEmulatorLauncherAnr()
                     device.pressHome()
                     assertEquals(200, http("http://127.0.0.1:3425/api/hello", auth).first)
@@ -311,6 +314,7 @@ class OfficialPluginsInstrumentedTest {
                     }
                     assertTrue(device.wait(Until.hasObject(By.text("官方外部插件")), 15_000))
                     assertEquals("activity recreation restarted the core session", connectedOwner, NativeCoreSession.providerSessionId())
+                    assertEquals("activity recreation changed the provider connection", connectedProviderSession, NativeCoreSession.providerSessionKey())
                     assertEquals("true", client.plugins().entries.single { it.spec == provider.absolutePath }.options["fromNativeUI"].toString())
                     device.findObject(By.res("plugin-installed-filter")).clear()
                     await("installed filter cleared in Compose") { device.findObject(By.res("plugin-installed-filter"))?.text.orEmpty().isEmpty() }
@@ -648,9 +652,11 @@ class OfficialPluginsInstrumentedTest {
                         if (device.findObject(power)?.isChecked == true) true
                         else { device.findObject(By.text("网关"))?.click(); false }
                     }
+                    verifySameOwnerProviderReconnect(artifacts)
                     val stoppedOwner = requireNotNull(NativeCoreSession.providerSessionId())
+                    val stoppedProviderSession = requireNotNull(NativeCoreSession.providerSessionKey())
                     val stoppedLease = NativeCoreSession.gatewayRequest(stoppedOwner)
-                    val stoppedProviderLease = NativeCoreSession.providerRequest(stoppedOwner)
+                    val stoppedProviderLease = NativeCoreSession.providerRequest(stoppedProviderSession)
                     try {
                         stoppedLease.ensureCurrent()
                         stoppedProviderLease.ensureCurrent()
@@ -665,7 +671,7 @@ class OfficialPluginsInstrumentedTest {
                         assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.gatewayRequest(stoppedOwner) }
                         assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedProviderLease.control.ensureActive() }
                         assertThrows(java.util.concurrent.CancellationException::class.java) { stoppedProviderLease.client.getProviders() }
-                        assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.providerRequest(stoppedOwner) }
+                        assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.providerRequest(stoppedProviderSession) }
                         File(artifacts, "capability-session-cancellation.txt").writeText("PASS: actual core shutdown cancelled registered requests and rejected the stale owner\n")
                         File(artifacts, "provider-session-cancellation.txt").writeText("PASS: authenticated provider GET before stop; actual shutdown cancelled management lease and rejected its client and stale owner\n")
                     } finally {
@@ -715,6 +721,57 @@ class OfficialPluginsInstrumentedTest {
                     }
                 }
             }
+        }
+    }
+
+    /** Re-authenticates the real running core, without restarting its process or Service owner. */
+    private fun verifySameOwnerProviderReconnect(artifacts: File) = runBlocking {
+        val beforeStatus = NativeCoreSession.status.value
+        val before = requireNotNull(NativeCoreSession.providerSessionKey())
+        assertEquals(before, beforeStatus.providerSession)
+        val cache = ProviderListCacheViewModel(readScope = this, readDispatcher = Dispatchers.IO)
+        var fetches = 0
+        val oldList = cache.read(before) {
+            withProviderRequest(before) { it.getProviders() }.also { fetches++ }
+        }
+        assertFalse(oldList.hasFileError)
+        val oldName = oldList.providers.single { it.id == "android-runtime" }.name
+        val updatedName = "$oldName reconnected"
+        // A separate editor changes real core state while the native list has a healthy cache.
+        withProviderRequest(before) { client ->
+            client.edit(ProviderEditDraft(client.editable("android-runtime"), name = updatedName))
+        }
+        assertSame(oldList, cache.read(before) { error("same-connection cache was not reused") })
+        val oldLease = NativeCoreSession.providerRequest(before)
+        try {
+            NativeCoreSession.suspend(before.owner)
+            assertNull(NativeCoreSession.providerSessionKey())
+            assertNull(NativeCoreSession.status.value.providerSession)
+            assertThrows(java.util.concurrent.CancellationException::class.java) { oldLease.control.ensureActive() }
+            NativeCoreSession.connect(before.owner, context.filesDir)
+            await("same-owner real core re-authentication", 30_000) { NativeCoreSession.status.value.ready }
+            val after = requireNotNull(NativeCoreSession.providerSessionKey())
+            assertEquals(before.owner, after.owner)
+            assertTrue("reconnection did not advance the provider epoch", after.epoch > before.epoch)
+            assertEquals(after, NativeCoreSession.status.value.providerSession)
+            assertNotEquals("READY snapshots coalesced across reconnect", beforeStatus, NativeCoreSession.status.value)
+            assertThrows(java.util.concurrent.CancellationException::class.java) { NativeCoreSession.providerRequest(before) }
+            assertThrows(java.util.concurrent.CancellationException::class.java) { oldLease.client.getProviders() }
+            NativeCoreSession.connect(after.owner, context.filesDir)
+            assertEquals("duplicate RUNNING changed the verified connection", after, NativeCoreSession.providerSessionKey())
+            val refreshed = cache.read(after) {
+                withProviderRequest(after) { it.getProviders() }.also { fetches++ }
+            }
+            assertFalse(refreshed.hasFileError)
+            assertEquals(updatedName, refreshed.providers.single { it.id == "android-runtime" }.name)
+            assertEquals(2, fetches)
+            File(artifacts, "provider-same-owner-reconnect.txt").writeText(
+                "PASS: real management edit followed by suspend/re-authentication of the same running core; " +
+                    "Service owner unchanged, epoch advanced, READY snapshot changed, duplicate RUNNING stable; " +
+                    "old key/client rejected and healthy old list replaced by a fresh authenticated GET\n",
+            )
+        } finally {
+            oldLease.close()
         }
     }
 

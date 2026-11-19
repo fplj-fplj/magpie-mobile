@@ -15,7 +15,12 @@ import kotlinx.coroutines.flow.asStateFlow
 /** Private credentials never enter Flow, Intent, healthz, logs, clipboard or Compose state. */
 object NativeCoreSession {
     enum class Phase { DISCONNECTED, CONNECTING, READY, ERROR }
-    data class Snapshot(val phase: Phase, val message: String, val webEditor: Boolean = false) {
+    data class Snapshot(
+        val phase: Phase,
+        val message: String,
+        val webEditor: Boolean = false,
+        val providerSession: ProviderSessionKey? = null,
+    ) {
         val ready: Boolean get() = phase == Phase.READY
     }
     private data class Binding(val owner: Long, val credential: ManagerCredential) {
@@ -27,6 +32,7 @@ object NativeCoreSession {
     private data class ConnectedCore(val config: GatewayConfig, val webEditor: Boolean)
     private val lock = Any()
     private var binding: Binding? = null
+    private val providerSessions = ProviderSessionEpochs<Binding, GatewayConfig>()
     private val requests = GatewayRequestLeases()
     private val providerRequests = ProviderRequestLeases()
     private val mutableStatus = MutableStateFlow(Snapshot(Phase.DISCONNECTED, "网关未连接"))
@@ -43,6 +49,7 @@ object NativeCoreSession {
         onConnecting = { current ->
             requests.invalidate()
             providerRequests.invalidate()
+            providerSessions.begin(current.owner, current)
             current.config = null
             current.providers = null
             current.plugins = null
@@ -52,13 +59,16 @@ object NativeCoreSession {
         onReady = { current, result ->
             current.config = result.config
             current.webEditor = result.webEditor
-            mutableStatus.value = Snapshot(Phase.READY, "核心连接已就绪；本机客户端密钥已登记", result.webEditor)
+            val providerSession = providerSessions.publish(current, result.config)
+            mutableStatus.value = Snapshot(Phase.READY, "核心连接已就绪；本机客户端密钥已登记", result.webEditor, providerSession)
         },
         onError = { current, error ->
+            providerSessions.invalidate()
             current.config = null
             mutableStatus.value = Snapshot(Phase.ERROR, connectionFailureMessage(error))
         },
         onCancelled = { current ->
+            providerSessions.invalidate()
             current.config = null
             mutableStatus.value = Snapshot(Phase.DISCONNECTED, "核心连接已取消，等待网关重新就绪")
         },
@@ -67,6 +77,7 @@ object NativeCoreSession {
     fun attach(owner: Long, adminKey: String) = synchronized(lock) {
         requests.invalidate()
         providerRequests.invalidate()
+        providerSessions.invalidate()
         val current = Binding(owner, ManagerCredential.fromKey(adminKey))
         binding = current
         connections.attach(current)
@@ -87,6 +98,7 @@ object NativeCoreSession {
         connections.suspend(current)
         requests.invalidate()
         providerRequests.invalidate()
+        providerSessions.invalidate()
         current.config = null
         current.providers = null
         current.plugins = null
@@ -100,6 +112,7 @@ object NativeCoreSession {
         connections.disconnect(current)
         requests.invalidate()
         providerRequests.invalidate()
+        providerSessions.invalidate()
         binding = null
         mutableStatus.value = Snapshot(Phase.DISCONNECTED, "网关已断开，管理凭据已从会话释放")
     }
@@ -112,6 +125,11 @@ object NativeCoreSession {
 
     fun providerSessionId(): Long? = synchronized(lock) {
         binding?.takeIf { isRunningOwner(it) && it.config != null }?.owner
+    }
+
+    fun providerSessionKey(): ProviderSessionKey? = synchronized(lock) {
+        val current = binding
+        providerSessions.current(current, current?.config, current != null && isRunningOwner(current))
     }
 
     /** Owner, key and cancellation registration are captured atomically before dispatch to IO. */
@@ -128,16 +146,15 @@ object NativeCoreSession {
         }
     }
 
-    /** Management credential and current config identity are registered before leaving the lock. */
-    internal fun providerRequest(owner: Long): ProviderRequestLease = synchronized(lock) {
+    /** A verified connection key and both private identities are checked before exposing a lease. */
+    internal fun providerRequest(key: ProviderSessionKey): ProviderRequestLease = synchronized(lock) {
         val current = binding
         val config = current?.config
-        if (current == null || current.owner != owner || config == null || !isRunningOwner(current)) {
-            throw CancellationException("Provider session is no longer current")
-        }
-        providerRequests.acquire(current.credential) {
+        val captured = providerSessions.capture(key, current, config, current != null && isRunningOwner(current))
+        providerRequests.acquire(captured.binding.credential) {
             synchronized(lock) {
-                binding === current && current.config === config && isRunningOwner(current)
+                val active = binding
+                providerSessions.isCurrent(captured, active, active?.config, active != null && isRunningOwner(active))
             }
         }
     }

@@ -55,12 +55,12 @@ class ProviderOperationControllerTest {
             val finished = AtomicInteger()
             val entered = AtomicInteger()
             try {
-                val job = controller.launch(OWNER_A, onFinished = { finished.incrementAndGet() }) {
+                val job = controller.launch(SESSION_A, onFinished = { finished.incrementAndGet() }) {
                     entered.incrementAndGet()
                     request { it.getProviders() }
                 }
                 // The owner Long is unchanged across suspend/reconnect, but its old lease expires.
-                source.changeOwner(OWNER_A)
+                source.changeSession(SESSION_A_NEXT)
                 dispatcher.scheduler.runCurrent()
                 withTimeout(5000) { job.join() }
 
@@ -77,6 +77,14 @@ class ProviderOperationControllerTest {
     }
 
     @Test fun replacingOwnerWhileIoIsQueuedCannotSendTheOldWriteToEitherSession() = runBlocking {
+        assertQueuedReplacement(SESSION_B)
+    }
+
+    @Test fun replacingEpochWhileIoIsQueuedCannotSendTheOldWriteToEitherSession() = runBlocking {
+        assertQueuedReplacement(SESSION_A_NEXT)
+    }
+
+    private suspend fun assertQueuedReplacement(replacement: ProviderSessionKey) {
         ManagementPeer().use { first ->
             ManagementPeer().use { second ->
                 val ui = StandardTestDispatcher()
@@ -86,7 +94,7 @@ class ProviderOperationControllerTest {
                 val controller = ProviderOperationController(scope, source::acquire, io)
                 val completed = AtomicInteger()
                 try {
-                    val job = controller.launch(OWNER_A) {
+                    val job = controller.launch(SESSION_A) {
                         request { client ->
                             val draft = createDraft()
                             try { client.create(draft) } finally { draft.clearSecret() }
@@ -95,7 +103,7 @@ class ProviderOperationControllerTest {
                     }
                     assertEquals(1, source.leases.size) // Capture happened synchronously.
                     ui.scheduler.runCurrent() // The request is now queued on the IO dispatcher.
-                    source.changeOwner(OWNER_B)
+                    source.changeSession(replacement)
                     withTimeout(5000) {
                         // The real IO cancellation watcher can enqueue cleanup after either pump.
                         while (!job.isCompleted) {
@@ -153,8 +161,8 @@ class ProviderOperationControllerTest {
             val cache = ProviderListCacheViewModel(vmScope, Dispatchers.IO)
             try {
                 val first = oldUi.async {
-                    cache.read(OWNER_A) {
-                        withProviderRequest(OWNER_A, source::acquire) { it.getProviders() }
+                    cache.read(SESSION_A) {
+                        withProviderRequest(SESSION_A, source::acquire) { it.getProviders() }
                     }
                 }
                 assertTrue(peer.requestHeld.await(5, TimeUnit.SECONDS))
@@ -166,8 +174,8 @@ class ProviderOperationControllerTest {
                 val secondEntered = CompletableDeferred<Unit>()
                 val second = newUi.async {
                     secondEntered.complete(Unit)
-                    cache.read(OWNER_A) {
-                        withProviderRequest(OWNER_A, source::acquire) { it.getProviders() }
+                    cache.read(SESSION_A) {
+                        withProviderRequest(SESSION_A, source::acquire) { it.getProviders() }
                     }
                 }
                 secondEntered.await()
@@ -198,11 +206,11 @@ class ProviderOperationControllerTest {
             val success = AtomicInteger()
             val controller = ProviderOperationController(oldUi, source::acquire)
             try {
-                cache.read(OWNER_A) {
-                    withProviderRequest(OWNER_A, source::acquire) { it.getProviders() }
+                cache.read(SESSION_A) {
+                    withProviderRequest(SESSION_A, source::acquire) { it.getProviders() }
                 }
-                val writeJob = controller.launch(OWNER_A) {
-                    write(cache, OWNER_A, onPending = { pending.set(true) }) { client ->
+                val writeJob = controller.launch(SESSION_A) {
+                    write(cache, SESSION_A, onPending = { pending.set(true) }) { client ->
                         val draft = createDraft()
                         try { client.create(draft) } finally {
                             requestExited.set(true)
@@ -218,9 +226,9 @@ class ProviderOperationControllerTest {
                 val recoveryEntered = CompletableDeferred<Unit>()
                 val recovery = vmScope.async {
                     recoveryEntered.complete(Unit)
-                    cache.readForRecovery(OWNER_A) {
+                    cache.readForRecovery(SESSION_A) {
                         assertTrue("A recovery GET ran before the write transport exited", requestExited.get())
-                        withProviderRequest(OWNER_A, source::acquire) { it.getProviders() }
+                        withProviderRequest(SESSION_A, source::acquire) { it.getProviders() }
                     }
                 }
                 recoveryEntered.await()
@@ -247,6 +255,14 @@ class ProviderOperationControllerTest {
         }
     }
 
+    @Test fun newEpochRecoveryRetiresAnUnknownCreateOnlyAfterItsOldTransportExits() = runBlocking {
+        assertNewEpochWriteRecovery(edit = false)
+    }
+
+    @Test fun newEpochRecoveryRetiresAnUnknownEditOnlyAfterItsOldTransportExits() = runBlocking {
+        assertNewEpochWriteRecovery(edit = true)
+    }
+
     @Test fun cancelFromPendingMarkerFinishesBarrierWithoutSendingAnyHttp() = runBlocking {
         ManagementPeer().use { peer ->
             val source = LeaseSource(peer)
@@ -256,8 +272,8 @@ class ProviderOperationControllerTest {
             val controller = ProviderOperationController(uiScope, source::acquire)
             val pending = AtomicBoolean()
             try {
-                val job = controller.launch(OWNER_A) {
-                    write(cache, OWNER_A, onPending = {
+                val job = controller.launch(SESSION_A) {
+                    write(cache, SESSION_A, onPending = {
                         pending.set(true)
                         uiScope.cancel()
                     }) { client -> client.getProviders() }
@@ -268,8 +284,8 @@ class ProviderOperationControllerTest {
                 assertTrue(peer.requests.isEmpty())
 
                 val snapshot = withTimeout(5000) {
-                    cache.readForRecovery(OWNER_A) {
-                        withProviderRequest(OWNER_A, source::acquire) { it.getProviders() }
+                    cache.readForRecovery(SESSION_A) {
+                        withProviderRequest(SESSION_A, source::acquire) { it.getProviders() }
                     }
                 }
                 assertFalse(snapshot.hasFileError)
@@ -283,6 +299,14 @@ class ProviderOperationControllerTest {
     }
 
     @Test fun cacheFetchWithAnOldExpectedOwnerCannotAcquireTheReplacementCredentials() = runBlocking {
+        assertQueuedFetchReplacement(SESSION_B)
+    }
+
+    @Test fun cacheFetchWithAnOldExpectedEpochCannotAcquireTheReplacementCredentials() = runBlocking {
+        assertQueuedFetchReplacement(SESSION_A_NEXT)
+    }
+
+    private suspend fun assertQueuedFetchReplacement(replacement: ProviderSessionKey) {
         ManagementPeer().use { first ->
             ManagementPeer().use { second ->
                 val source = LeaseSource(first, second)
@@ -292,17 +316,17 @@ class ProviderOperationControllerTest {
                 val uiScope = CoroutineScope(SupervisorJob() + ui)
                 val cache = ProviderListCacheViewModel(vmScope, io)
                 val read = uiScope.async {
-                    cache.read(OWNER_A) {
-                        withProviderRequest(OWNER_A, source::acquire) { it.getProviders() }
+                    cache.read(SESSION_A) {
+                        withProviderRequest(SESSION_A, source::acquire) { it.getProviders() }
                     }
                 }
                 try {
                     ui.scheduler.runCurrent() // Register the VM fetch, without running its IO body.
-                    source.changeOwner(OWNER_B)
+                    source.changeSession(replacement)
                     io.scheduler.runCurrent()
                     ui.scheduler.runCurrent()
                     withTimeout(5000) { read.join() }
-                    assertTrue("Old expected owner read unexpectedly succeeded", read.isCancelled)
+                    assertTrue("Old expected session read unexpectedly succeeded", read.isCancelled)
                     assertTrue(source.leases.isEmpty())
                     assertTrue(first.requests.isEmpty())
                     assertTrue(second.requests.isEmpty())
@@ -324,7 +348,7 @@ class ProviderOperationControllerTest {
             val controller = ProviderOperationController(scope, source::acquire, dispatcher)
             try {
                 if (alreadyDisposed) scope.cancel()
-                val job = controller.launch(OWNER_A) { request { it.getProviders() } }
+                val job = controller.launch(SESSION_A) { request { it.getProviders() } }
                 if (!alreadyDisposed) job.cancel()
                 dispatcher.scheduler.runCurrent()
                 withTimeout(5000) { job.join() }
@@ -340,6 +364,90 @@ class ProviderOperationControllerTest {
         }
     }
 
+    private suspend fun assertNewEpochWriteRecovery(edit: Boolean) {
+        val writePath = if (edit) EDIT_PATH else CREATE_PATH
+        ManagementPeer(silentPath = writePath, sendHeaders = true).use { oldPeer ->
+            ManagementPeer().use { newPeer ->
+                val source = LeaseSource(oldPeer, newPeer)
+                val recoveryDispatcher = StandardTestDispatcher()
+                val vmScope = CoroutineScope(SupervisorJob() + recoveryDispatcher)
+                val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+                val cache = ProviderListCacheViewModel(vmScope, recoveryDispatcher)
+                val controller = ProviderOperationController(uiScope, source::acquire)
+                val marker = AtomicReference(ProviderWriteRecoveryState())
+                val transportUnwinding = CountDownLatch(1)
+                val releaseTransportExit = CountDownLatch(1)
+                val transportExited = AtomicBoolean()
+                val completed = AtomicInteger()
+                try {
+                    val initial = if (edit) withProviderRequest(SESSION_A, source::acquire) {
+                        it.editable("saved")
+                    } else null
+                    val writeJob = controller.launch(SESSION_A) {
+                        write(cache, SESSION_A, onPending = {
+                            marker.set(ProviderWriteRecoveryState(if (edit) "saved" else "new-provider"))
+                        }) { client ->
+                            try {
+                                if (initial == null) {
+                                    val draft = createDraft()
+                                    try { client.create(draft) } finally { draft.clearSecret() }
+                                } else {
+                                    val draft = ProviderEditDraft(initial, name = "Renamed provider")
+                                    try { client.edit(draft) } finally { draft.clearSecret() }
+                                }
+                            } finally {
+                                transportUnwinding.countDown()
+                                check(releaseTransportExit.await(5, TimeUnit.SECONDS))
+                                transportExited.set(true)
+                            }
+                        }
+                        completed.incrementAndGet()
+                    }
+                    assertTrue(oldPeer.silentArrived.await(5, TimeUnit.SECONDS))
+                    source.changeSession(SESSION_A_NEXT)
+                    assertTrue(oldPeer.peerClosed.await(5, TimeUnit.SECONDS))
+                    assertTrue(transportUnwinding.await(5, TimeUnit.SECONDS))
+                    val recovered = vmScope.async {
+                        marker.get().read(cache, SESSION_A_NEXT, sequence = 9L) {
+                            assertTrue("New epoch GET preceded old write exit", transportExited.get())
+                            withProviderRequest(SESSION_A_NEXT, source::acquire) { it.getProviders() }
+                        }
+                    }
+                    // Drain the recovery observer and any incorrectly dispatched cache fetch.
+                    recoveryDispatcher.scheduler.runCurrent()
+                    assertFalse(recovered.isCompleted)
+                    assertTrue(newPeer.requests.isEmpty())
+                    assertTrue(marker.get().required)
+
+                    releaseTransportExit.countDown()
+                    withTimeout(5000) { writeJob.join() }
+                    val read = withTimeout(5000) {
+                        while (!recovered.isCompleted) {
+                            recoveryDispatcher.scheduler.runCurrent()
+                            yield()
+                        }
+                        recovered.await()
+                    }
+                    val resolution = checkNotNull(read.resolve(SESSION_A_NEXT, 9L, marker.get(), editorOpen = true))
+                    assertTrue(resolution.recoveryChecked)
+                    assertTrue(resolution.retireEditor)
+                    assertFalse(resolution.recovery.required)
+                    assertTrue(writeJob.isCancelled)
+                    assertEquals(0, completed.get())
+                    assertEquals(1, oldPeer.requests.count { it.path == writePath })
+                    assertEquals(0, oldPeer.requests.count { it.path == LIST_PATH })
+                    assertEquals(listOf(LIST_PATH), newPeer.requests.map { it.path })
+                    assertReleasedOnce(source)
+                } finally {
+                    releaseTransportExit.countDown()
+                    uiScope.cancel()
+                    vmScope.cancel()
+                    recoveryDispatcher.scheduler.runCurrent()
+                }
+            }
+        }
+    }
+
     private suspend fun assertSilentCancellation(path: String, sendHeaders: Boolean, replaceOwner: Boolean) {
         ManagementPeer(silentPath = path, sendHeaders = sendHeaders).use { first ->
             ManagementPeer().use { second ->
@@ -348,7 +456,7 @@ class ProviderOperationControllerTest {
                 val controller = ProviderOperationController(scope, source::acquire)
                 val completed = AtomicInteger()
                 val failures = CopyOnWriteArrayList<Exception>()
-                val job = controller.launch(OWNER_A) {
+                val job = controller.launch(SESSION_A) {
                     try {
                         request { client ->
                             when (path) {
@@ -376,7 +484,7 @@ class ProviderOperationControllerTest {
                 }
                 try {
                     assertTrue(first.silentArrived.await(5, TimeUnit.SECONDS))
-                    if (replaceOwner) source.changeOwner(OWNER_B) else scope.cancel()
+                    if (replaceOwner) source.changeSession(SESSION_B) else scope.cancel()
                     assertTrue("Cancellation must close the real management socket",
                         first.peerClosed.await(5, TimeUnit.SECONDS))
                     withTimeout(5000) { job.join() }
@@ -417,25 +525,25 @@ class ProviderOperationControllerTest {
 
     private class LeaseSource(private val first: ManagementPeer, private val second: ManagementPeer = first) {
         private val lock = Any()
-        private var owner = OWNER_A
+        private var session = SESSION_A
         val leases = CopyOnWriteArrayList<TestLease>()
 
-        fun acquire(expectedOwner: Long): ProviderRequestLease = synchronized(lock) {
-            if (owner != expectedOwner) throw CancellationException("Provider session changed")
-            TestLease(expectedOwner, if (expectedOwner == OWNER_A) first else second)
+        fun acquire(expectedSession: ProviderSessionKey): ProviderRequestLease = synchronized(lock) {
+            if (session != expectedSession) throw CancellationException("Provider session changed")
+            TestLease(expectedSession, if (expectedSession == SESSION_A) first else second)
                 .also { leases += it }
         }
 
-        fun changeOwner(next: Long) = synchronized(lock) {
-            owner = next
+        fun changeSession(next: ProviderSessionKey) = synchronized(lock) {
+            session = next
             leases.filter { it.closeCount.get() == 0 }.forEach { it.control.cancel() }
         }
 
-        inner class TestLease(private val expectedOwner: Long, peer: ManagementPeer) : ProviderRequestLease {
+        inner class TestLease(private val expectedSession: ProviderSessionKey, peer: ManagementPeer) : ProviderRequestLease {
             override val control = ChatRequestControl()
             val closeCount = AtomicInteger()
             override val client = ProviderManagementClient(
-                ManagerCredential.fromKey("provider-session-synthetic-$expectedOwner", peer.port),
+                ManagerCredential.fromKey("provider-session-synthetic-${expectedSession.owner}", peer.port),
                 "http://127.0.0.1:${peer.port}",
                 timeout = Duration.ofSeconds(20),
                 requestControl = control,
@@ -444,7 +552,7 @@ class ProviderOperationControllerTest {
 
             override fun ensureCurrent() = synchronized(lock) {
                 control.ensureActive()
-                if (owner != expectedOwner || closeCount.get() != 0) {
+                if (session != expectedSession || closeCount.get() != 0) {
                     control.cancel()
                     throw CancellationException("Provider session changed")
                 }
@@ -546,6 +654,9 @@ class ProviderOperationControllerTest {
     private companion object {
         const val OWNER_A = 11L
         const val OWNER_B = 12L
+        val SESSION_A = ProviderSessionKey(OWNER_A, 1L)
+        val SESSION_A_NEXT = ProviderSessionKey(OWNER_A, 2L)
+        val SESSION_B = ProviderSessionKey(OWNER_B, 3L)
         const val LIST_PATH = "/api/providers"
         const val EDITABLE_PATH = "/api/mobile/providers/editable/saved"
         const val DISCOVERY_PATH = "/api/mobile/providers/models"

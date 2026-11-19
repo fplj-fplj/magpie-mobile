@@ -36,6 +36,8 @@ class ProviderListCacheViewModelTest {
     private val fetchCount = AtomicInteger(0)
     private var returnFileError = false
 
+    private fun key(owner: Long, epoch: Long = 1L) = ProviderSessionKey(owner, epoch)
+
     private fun fetchSnapshot(): ProviderListSnapshot {
         fetchCount.incrementAndGet()
         return ProviderListSnapshot(emptyList(), returnFileError)
@@ -44,11 +46,11 @@ class ProviderListCacheViewModelTest {
     @Test
     fun cacheReusedForSameOwnerWhenHealthy() = runTest {
         val vm = ProviderListCacheViewModel(readScope = this, readDispatcher = Dispatchers.Unconfined)
-        val first = vm.read(1L, force = false) { fetchSnapshot() }
+        val first = vm.read(key(1L), force = false) { fetchSnapshot() }
         assertEquals(1, fetchCount.get())
         assertFalse(first.hasFileError)
 
-        val second = vm.read(1L, force = false) { fetchSnapshot() }
+        val second = vm.read(key(1L), force = false) { fetchSnapshot() }
         assertEquals(1, fetchCount.get()) // No new fetch
         assertSame(first, second)
     }
@@ -61,13 +63,13 @@ class ProviderListCacheViewModelTest {
 
         val blockFetch = CompletableDeferred<Unit>()
         val a = scope.async {
-            vm.read(1L, force = false) {
+            vm.read(key(1L), force = false) {
                 blockFetch.await()
                 fetchSnapshot()
             }
         }
         val b = scope.async {
-            vm.read(1L, force = false) {
+            vm.read(key(1L), force = false) {
                 fetchSnapshot()
             }
         }
@@ -86,15 +88,15 @@ class ProviderListCacheViewModelTest {
     fun forceRefreshBypassesCacheAndInvalidatesOnError() = runTest {
         val scope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Unconfined)
         val vm = ProviderListCacheViewModel(readScope = scope, readDispatcher = Dispatchers.Unconfined)
-        val first = vm.read(1L, force = false) { fetchSnapshot() }
+        val first = vm.read(key(1L), force = false) { fetchSnapshot() }
         assertEquals(1, fetchCount.get())
 
-        val refreshed = vm.read(1L, force = true) { fetchSnapshot() }
+        val refreshed = vm.read(key(1L), force = true) { fetchSnapshot() }
         assertEquals(2, fetchCount.get())
 
         // Now simulate a failing force refresh
         try {
-            vm.read(1L, force = true) {
+            vm.read(key(1L), force = true) {
                 fetchCount.incrementAndGet()
                 throw RuntimeException("Network down")
             }
@@ -104,7 +106,7 @@ class ProviderListCacheViewModelTest {
         assertEquals(3, fetchCount.get())
 
         // Cache must not contain the old healthy one anymore
-        val third = vm.read(1L, force = false) { fetchSnapshot() }
+        val third = vm.read(key(1L), force = false) { fetchSnapshot() }
         assertEquals(4, fetchCount.get())
     }
 
@@ -113,13 +115,13 @@ class ProviderListCacheViewModelTest {
         val vm = ProviderListCacheViewModel(readScope = this, readDispatcher = Dispatchers.Unconfined)
         returnFileError = true
 
-        val errorSnap = vm.read(1L, force = false) { fetchSnapshot() }
+        val errorSnap = vm.read(key(1L), force = false) { fetchSnapshot() }
         assertEquals(1, fetchCount.get())
         assertTrue(errorSnap.hasFileError)
 
         returnFileError = false
         // Next read with force=false must not reuse the error snapshot
-        val healthySnap = vm.read(1L, force = false) { fetchSnapshot() }
+        val healthySnap = vm.read(key(1L), force = false) { fetchSnapshot() }
         assertEquals(2, fetchCount.get())
         assertFalse(healthySnap.hasFileError)
     }
@@ -127,22 +129,22 @@ class ProviderListCacheViewModelTest {
     @Test
     fun ownerChangeInvalidatesOldCache() = runTest {
         val vm = ProviderListCacheViewModel(readScope = this, readDispatcher = Dispatchers.Unconfined)
-        val snap1 = vm.read(1L, force = false) { fetchSnapshot() }
+        val snap1 = vm.read(key(1L), force = false) { fetchSnapshot() }
         assertEquals(1, fetchCount.get())
 
-        val snap2 = vm.read(2L, force = false) { fetchSnapshot() }
+        val snap2 = vm.read(key(2L), force = false) { fetchSnapshot() }
         assertEquals(2, fetchCount.get())
     }
 
     @Test
     fun explicitInvalidateClearsCache() = runTest {
         val vm = ProviderListCacheViewModel(readScope = this, readDispatcher = Dispatchers.Unconfined)
-        vm.read(1L, force = false) { fetchSnapshot() }
+        vm.read(key(1L), force = false) { fetchSnapshot() }
         assertEquals(1, fetchCount.get())
 
         vm.invalidate()
 
-        vm.read(1L, force = false) { fetchSnapshot() }
+        vm.read(key(1L), force = false) { fetchSnapshot() }
         assertEquals(2, fetchCount.get())
     }
 
@@ -155,7 +157,7 @@ class ProviderListCacheViewModelTest {
         val release = CompletableDeferred<Unit>()
 
         val callerJob = scope.launch {
-            vm.read(1L, force = false) {
+            vm.read(key(1L), force = false) {
                 entered.complete(Unit)
                 release.await()
                 fetchSnapshot()
@@ -173,7 +175,7 @@ class ProviderListCacheViewModelTest {
         for (i in 0 until 50) {
             delay(20)
             try {
-                res = vm.read(1L, force = false) { fetchSnapshot() }
+                res = vm.read(key(1L), force = false) { fetchSnapshot() }
                 if (res != null) break
             } catch (_: Exception) {}
         }
@@ -196,13 +198,13 @@ class ProviderListCacheViewModelTest {
         val releaseFreshGet = CompletableDeferred<Unit>()
         val getCount = AtomicInteger()
         try {
-            val warmed = async { vm.read(1L) { getCount.incrementAndGet(); beforeWrite } }
+            val warmed = async { vm.read(key(1L)) { getCount.incrementAndGet(); beforeWrite } }
             runCurrent()
             assertSame(beforeWrite, warmed.await())
             assertEquals(1, getCount.get())
 
             val writer = worker.launch {
-                val barrier = vm.beginWrite(1L)
+                val barrier = vm.beginWrite(key(1L))
                 try {
                     // A blocking transport has not exited merely because its UI caller rotated.
                     withContext(NonCancellable) {
@@ -218,7 +220,7 @@ class ProviderListCacheViewModelTest {
             assertFalse(writer.isCompleted)
 
             val recovery = async {
-                vm.readForRecovery(1L) {
+                vm.readForRecovery(key(1L)) {
                     getCount.incrementAndGet()
                     freshGetEntered.complete(Unit)
                     releaseFreshGet.await()
@@ -239,7 +241,7 @@ class ProviderListCacheViewModelTest {
             releaseFreshGet.complete(Unit)
             runCurrent()
             assertSame(afterWrite, recovery.await())
-            assertSame(afterWrite, vm.read(1L) { error("Expected post-write cache") })
+            assertSame(afterWrite, vm.read(key(1L)) { error("Expected post-write cache") })
         } finally { worker.cancel() }
     }
 
@@ -258,7 +260,7 @@ class ProviderListCacheViewModelTest {
         try {
             val oldObserver = async {
                 runCatching {
-                    vm.read(1L) {
+                    vm.read(key(1L)) {
                         oldStarted.complete(Unit)
                         releaseOld.await()
                         ProviderListSnapshot(emptyList(), false)
@@ -270,9 +272,9 @@ class ProviderListCacheViewModelTest {
             }
             runCurrent()
             oldStarted.await()
-            val barrier = vm.beginWrite(1L)
+            val barrier = vm.beginWrite(key(1L))
             val recovery = async {
-                vm.readForRecovery(1L) {
+                vm.readForRecovery(key(1L)) {
                     freshStarted.complete(Unit)
                     releaseFresh.await()
                     fresh
@@ -294,7 +296,7 @@ class ProviderListCacheViewModelTest {
             runCurrent()
             assertSame(fresh, recovery.await())
             assertFalse(recoveryRequired)
-            assertSame(fresh, vm.read(1L) { error("Stale GET must not overwrite fresh cache") })
+            assertSame(fresh, vm.read(key(1L)) { error("Stale GET must not overwrite fresh cache") })
         } finally { worker.cancel() }
     }
 
@@ -305,17 +307,17 @@ class ProviderListCacheViewModelTest {
         val vm = ProviderListCacheViewModel(worker, dispatcher)
         val getCount = AtomicInteger()
         try {
-            val warm = async { vm.read(1L) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) } }
+            val warm = async { vm.read(key(1L)) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) } }
             runCurrent()
             warm.await()
-            val barrier = vm.beginWrite(1L)
+            val barrier = vm.beginWrite(key(1L))
             val rotatedObserver = async {
-                vm.readForRecovery(1L) { error("Canceled recovery must not start a GET") }
+                vm.readForRecovery(key(1L)) { error("Canceled recovery must not start a GET") }
             }
             runCurrent()
             rotatedObserver.cancelAndJoin()
             val replacement = async {
-                vm.readForRecovery(1L) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) }
+                vm.readForRecovery(key(1L)) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) }
             }
             runCurrent()
             assertFalse(replacement.isCompleted)
@@ -335,12 +337,12 @@ class ProviderListCacheViewModelTest {
         val vm = ProviderListCacheViewModel(worker, dispatcher)
         val getCount = AtomicInteger()
         try {
-            val first = vm.beginWrite(1L)
+            val first = vm.beginWrite(key(1L))
             val recovery = async {
-                vm.readForRecovery(1L) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) }
+                vm.readForRecovery(key(1L)) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) }
             }
             runCurrent()
-            val second = vm.beginWrite(1L)
+            val second = vm.beginWrite(key(1L))
             first.finish()
             first.finish()
             runCurrent()
@@ -361,12 +363,12 @@ class ProviderListCacheViewModelTest {
         val getCount = AtomicInteger()
         var recoveryRequired = true
         try {
-            val warm = async { vm.read(1L) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) } }
+            val warm = async { vm.read(key(1L)) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) } }
             runCurrent()
             warm.await()
             val failed = async {
                 runCatching {
-                    vm.readForRecovery(1L) {
+                    vm.readForRecovery(key(1L)) {
                         getCount.incrementAndGet()
                         throw IllegalStateException("Fresh synthetic GET failed")
                     }
@@ -377,12 +379,12 @@ class ProviderListCacheViewModelTest {
             assertTrue(recoveryRequired)
             assertEquals(2, getCount.get())
             val fileError = async {
-                vm.readForRecovery(1L) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), true) }
+                vm.readForRecovery(key(1L)) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), true) }
             }
             runCurrent()
             assertTrue(fileError.await().hasFileError)
             val healthy = async {
-                vm.read(1L) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) }
+                vm.read(key(1L)) { getCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) }
             }
             runCurrent()
             assertFalse(healthy.await().hasFileError)
@@ -400,10 +402,10 @@ class ProviderListCacheViewModelTest {
         val fresh = ProviderListSnapshot(emptyList(), false)
         val getCount = AtomicInteger()
         try {
-            vm.beginWrite(1L).finish()
+            vm.beginWrite(key(1L)).finish()
             val ordinary = async {
                 runCatching {
-                    vm.read(1L) {
+                    vm.read(key(1L)) {
                         getCount.incrementAndGet()
                         ordinaryEntered.complete(Unit)
                         releaseOrdinary.await()
@@ -413,14 +415,14 @@ class ProviderListCacheViewModelTest {
             }
             runCurrent()
             ordinaryEntered.await()
-            val recovery = async { vm.readForRecovery(1L) { getCount.incrementAndGet(); fresh } }
+            val recovery = async { vm.readForRecovery(key(1L)) { getCount.incrementAndGet(); fresh } }
             runCurrent()
             assertSame(fresh, recovery.await())
             assertEquals(2, getCount.get())
             releaseOrdinary.complete(Unit)
             runCurrent()
             assertTrue(ordinary.await().exceptionOrNull() is CancellationException)
-            assertSame(fresh, vm.read(1L) { error("Fresh recovery cache should be retained") })
+            assertSame(fresh, vm.read(key(1L)) { error("Fresh recovery cache should be retained") })
         } finally { worker.cancel() }
     }
 
@@ -432,24 +434,24 @@ class ProviderListCacheViewModelTest {
         val ownerTwo = ProviderListSnapshot(emptyList(), false)
         val oldFetchCount = AtomicInteger()
         try {
-            val oldWrite = vm.beginWrite(1L)
+            val oldWrite = vm.beginWrite(key(1L))
             val oldRecovery = async {
                 runCatching {
-                    vm.readForRecovery(1L) {
+                    vm.readForRecovery(key(1L)) {
                         oldFetchCount.incrementAndGet()
                         ProviderListSnapshot(emptyList(), false)
                     }
                 }
             }
             runCurrent()
-            val newOwner = async { vm.read(2L) { ownerTwo } }
+            val newOwner = async { vm.read(key(2L)) { ownerTwo } }
             runCurrent()
             assertSame(ownerTwo, newOwner.await())
             oldWrite.finish()
             runCurrent()
             assertTrue(oldRecovery.await().exceptionOrNull() is CancellationException)
             assertEquals(0, oldFetchCount.get())
-            assertSame(ownerTwo, vm.read(2L) { error("Old recovery cannot overwrite new owner") })
+            assertSame(ownerTwo, vm.read(key(2L)) { error("Old recovery cannot overwrite new owner") })
         } finally { worker.cancel() }
     }
 
@@ -462,15 +464,15 @@ class ProviderListCacheViewModelTest {
         val getCount = AtomicInteger()
         val snapshot = ProviderListSnapshot(emptyList(), false)
         try {
-            val barrier = vm.beginWrite(1L)
+            val barrier = vm.beginWrite(key(1L))
             val first = async {
-                vm.read(1L) {
+                vm.read(key(1L)) {
                     getCount.incrementAndGet()
                     releaseGet.await()
                     snapshot
                 }
             }
-            val second = async { vm.read(1L) { error("Must join the first post-write read") } }
+            val second = async { vm.read(key(1L)) { error("Must join the first post-write read") } }
             runCurrent()
             assertEquals(0, getCount.get())
             assertFalse(first.isCompleted)
@@ -497,7 +499,7 @@ class ProviderListCacheViewModelTest {
         val staleGetCount = AtomicInteger()
         try {
             val newRead = async {
-                vm.read(2L) {
+                vm.read(key(2L)) {
                     freshGetCount.incrementAndGet()
                     entered.complete(Unit)
                     release.await()
@@ -508,12 +510,12 @@ class ProviderListCacheViewModelTest {
             entered.await()
 
             suspend fun rejectOldEntrypoints() {
-                assertTrue(runCatching { vm.beginWrite(1L) }.exceptionOrNull() is CancellationException)
+                assertTrue(runCatching { vm.beginWrite(key(1L)) }.exceptionOrNull() is CancellationException)
                 assertTrue(runCatching {
-                    vm.read(1L) { staleGetCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) }
+                    vm.read(key(1L)) { staleGetCount.incrementAndGet(); ProviderListSnapshot(emptyList(), false) }
                 }.exceptionOrNull() is CancellationException)
                 assertTrue(runCatching {
-                    vm.readForRecovery(1L) {
+                    vm.readForRecovery(key(1L)) {
                         staleGetCount.incrementAndGet()
                         ProviderListSnapshot(emptyList(), false)
                     }
@@ -525,7 +527,7 @@ class ProviderListCacheViewModelTest {
             assertFalse(newRead.isCompleted)
             assertEquals(1, freshGetCount.get())
             // A new-owner reader must still join the original GET after every stale entry failed.
-            val joined = async { vm.read(2L) { error("Old owner must not detach new inflight") } }
+            val joined = async { vm.read(key(2L)) { error("Old owner must not detach new inflight") } }
             runCurrent()
             assertFalse(joined.isCompleted)
             release.complete(Unit)
@@ -534,8 +536,195 @@ class ProviderListCacheViewModelTest {
             assertSame(fresh, joined.await())
 
             rejectOldEntrypoints()
-            assertSame(fresh, vm.read(2L) { error("Old owner must not clear new healthy cache") })
+            assertSame(fresh, vm.read(key(2L)) { error("Old owner must not clear new healthy cache") })
             assertEquals(1, freshGetCount.get())
+        } finally { worker.cancel() }
+    }
+
+    @Test
+    fun sameOwnerNewEpochCannotReuseHealthyCache() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val worker = CoroutineScope(SupervisorJob() + dispatcher)
+        val vm = ProviderListCacheViewModel(worker, dispatcher)
+        val old = ProviderListSnapshot(emptyList(), false)
+        val fresh = ProviderListSnapshot(emptyList(), false)
+        val count = AtomicInteger()
+        try {
+            val warm = async { vm.read(key(1L, 3L)) { count.incrementAndGet(); old } }
+            runCurrent()
+            assertSame(old, warm.await())
+            assertSame(old, vm.read(key(1L, 3L)) { error("Same epoch should use healthy cache") })
+
+            val reconnected = async { vm.read(key(1L, 4L)) { count.incrementAndGet(); fresh } }
+            runCurrent()
+            assertSame(fresh, reconnected.await())
+            assertEquals(2, count.get())
+            assertSame(fresh, vm.read(key(1L, 4L)) { error("New epoch should cache its own GET") })
+        } finally { worker.cancel() }
+    }
+
+    @Test
+    fun reconnectDetachesCanceledOldInflightAndItsLateFinallyCannotPolluteFreshCache() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val worker = CoroutineScope(SupervisorJob() + dispatcher)
+        val vm = ProviderListCacheViewModel(worker, dispatcher)
+        val oldEntered = CompletableDeferred<Unit>()
+        val releaseOld = CompletableDeferred<Unit>()
+        val fresh = ProviderListSnapshot(emptyList(), false)
+        val count = AtomicInteger()
+        try {
+            val oldObserver = async {
+                runCatching {
+                    vm.read(key(1L, 2L)) {
+                        count.incrementAndGet()
+                        oldEntered.complete(Unit)
+                        releaseOld.await()
+                        throw CancellationException("Old epoch transport was canceled")
+                    }
+                }
+            }
+            runCurrent()
+            oldEntered.await()
+            val next = async { vm.read(key(1L, 3L)) { count.incrementAndGet(); fresh } }
+            runCurrent()
+            assertTrue(next.isCompleted)
+            assertSame(fresh, next.await())
+            assertFalse(oldObserver.isCompleted)
+            assertEquals(2, count.get())
+
+            releaseOld.complete(Unit)
+            runCurrent()
+            assertTrue(oldObserver.await().exceptionOrNull() is CancellationException)
+            assertSame(fresh, vm.read(key(1L, 3L)) { error("Old canceled finally cleared fresh cache") })
+        } finally { worker.cancel() }
+    }
+
+    @Test
+    fun lateOldEpochResultsAndEntrypointsCannotReplaceNewEpochGetOrHealthyCache() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val worker = CoroutineScope(SupervisorJob() + dispatcher)
+        val vm = ProviderListCacheViewModel(worker, dispatcher)
+        val oldEntered = CompletableDeferred<Unit>()
+        val releaseOld = CompletableDeferred<Unit>()
+        val freshEntered = CompletableDeferred<Unit>()
+        val releaseFresh = CompletableDeferred<Unit>()
+        val fresh = ProviderListSnapshot(emptyList(), false)
+        val staleFetchCount = AtomicInteger()
+        try {
+            val oldObserver = async {
+                runCatching {
+                    vm.read(key(1L, 4L)) {
+                        oldEntered.complete(Unit)
+                        releaseOld.await()
+                        ProviderListSnapshot(emptyList(), false)
+                    }
+                }
+            }
+            runCurrent()
+            oldEntered.await()
+            val next = async {
+                vm.read(key(1L, 5L)) {
+                    freshEntered.complete(Unit)
+                    releaseFresh.await()
+                    fresh
+                }
+            }
+            runCurrent()
+            freshEntered.await()
+
+            suspend fun rejectOldEpoch() {
+                assertTrue(runCatching { vm.beginWrite(key(1L, 4L)) }
+                    .exceptionOrNull() is CancellationException)
+                assertTrue(runCatching {
+                    vm.read(key(1L, 4L)) { staleFetchCount.incrementAndGet(); ProviderListSnapshot() }
+                }.exceptionOrNull() is CancellationException)
+                assertTrue(runCatching {
+                    vm.readForRecovery(key(1L, 4L)) { staleFetchCount.incrementAndGet(); ProviderListSnapshot() }
+                }.exceptionOrNull() is CancellationException)
+                assertEquals(0, staleFetchCount.get())
+            }
+
+            rejectOldEpoch()
+            releaseOld.complete(Unit)
+            runCurrent()
+            assertTrue(oldObserver.await().exceptionOrNull() is CancellationException)
+            val joined = async { vm.read(key(1L, 5L)) { error("Late old key detached new inflight") } }
+            runCurrent()
+            assertFalse(next.isCompleted)
+            assertFalse(joined.isCompleted)
+            releaseFresh.complete(Unit)
+            runCurrent()
+            assertSame(fresh, next.await())
+            assertSame(fresh, joined.await())
+            rejectOldEpoch()
+            assertSame(fresh, vm.read(key(1L, 5L)) { error("Late old epoch cleared healthy cache") })
+        } finally { worker.cancel() }
+    }
+
+    @Test
+    fun newEpochRecoveryAndOrdinaryReadWaitForOldEpochWriteTransportToExit() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val worker = CoroutineScope(SupervisorJob() + dispatcher)
+        val vm = ProviderListCacheViewModel(worker, dispatcher)
+        val freshEntered = CompletableDeferred<Unit>()
+        val releaseFresh = CompletableDeferred<Unit>()
+        val fresh = ProviderListSnapshot(emptyList(), false)
+        val count = AtomicInteger()
+        try {
+            val oldWrite = vm.beginWrite(key(1L, 7L))
+            val oldRecovery = async {
+                runCatching {
+                    vm.readForRecovery(key(1L, 7L)) { error("Old epoch must not read after reconnect") }
+                }
+            }
+            runCurrent()
+            val recovery = async {
+                vm.readForRecovery(key(1L, 8L)) {
+                    count.incrementAndGet()
+                    freshEntered.complete(Unit)
+                    releaseFresh.await()
+                    fresh
+                }
+            }
+            val ordinary = async {
+                vm.read(key(1L, 8L)) { error("Ordinary new epoch read must join recovery after write") }
+            }
+            runCurrent()
+            assertFalse(freshEntered.isCompleted)
+            assertFalse(recovery.isCompleted)
+            assertFalse(ordinary.isCompleted)
+            assertEquals(0, count.get())
+
+            oldWrite.finish()
+            runCurrent()
+            freshEntered.await()
+            assertTrue(oldRecovery.await().exceptionOrNull() is CancellationException)
+            assertEquals(1, count.get())
+            releaseFresh.complete(Unit)
+            runCurrent()
+            assertSame(fresh, recovery.await())
+            assertSame(fresh, ordinary.await())
+        } finally { worker.cancel() }
+    }
+
+    @Test
+    fun newerOwnerMayStartAtLowerEpochAndStillRejectsOlderOwnerAtHigherEpoch() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val worker = CoroutineScope(SupervisorJob() + dispatcher)
+        val vm = ProviderListCacheViewModel(worker, dispatcher)
+        val fresh = ProviderListSnapshot(emptyList(), false)
+        try {
+            val oldWrite = vm.beginWrite(key(1L, 100L))
+            val next = async { vm.read(key(2L, 1L)) { fresh } }
+            runCurrent()
+            assertSame(fresh, next.await()) // An old owner's unfinished write cannot block a new one.
+            assertTrue(runCatching { vm.beginWrite(key(1L, 101L)) }
+                .exceptionOrNull() is CancellationException)
+            assertTrue(runCatching {
+                vm.readForRecovery(key(1L, 101L)) { error("Old owner must stay rejected") }
+            }.exceptionOrNull() is CancellationException)
+            oldWrite.finish()
+            assertSame(fresh, vm.read(key(2L, 1L)) { error("Old owner changed fresh cache") })
         } finally { worker.cancel() }
     }
 }

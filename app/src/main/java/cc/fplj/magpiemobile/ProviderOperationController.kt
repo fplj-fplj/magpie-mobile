@@ -17,15 +17,15 @@ import kotlinx.coroutines.withContext
 /** Captures the expected session before a UI operation can be queued on another dispatcher. */
 internal class ProviderOperationController(
     private val scope: CoroutineScope,
-    private val acquireLease: (Long) -> ProviderRequestLease = NativeCoreSession::providerRequest,
+    private val acquireLease: (ProviderSessionKey) -> ProviderRequestLease = NativeCoreSession::providerRequest,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     fun launch(
-        owner: Long,
+        session: ProviderSessionKey,
         onFinished: () -> Unit = {},
         block: suspend ProviderOperation.() -> Unit,
     ): Job {
-        val operation = ProviderOperation(acquireLease(owner), dispatcher)
+        val operation = ProviderOperation(acquireLease(session), dispatcher)
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 operation.ensureCurrent()
@@ -62,7 +62,7 @@ internal class ProviderOperation(
     /** Recovery reads must wait for this operation's HTTP call, even if its UI is disposed. */
     suspend fun <T> write(
         cache: ProviderListCacheViewModel,
-        owner: Long,
+        session: ProviderSessionKey,
         onPending: () -> Unit,
         action: (ProviderManagementClient) -> T,
     ): T {
@@ -72,7 +72,7 @@ internal class ProviderOperation(
         try {
             // No cancellation gap may leave a registered write without its saveable marker.
             withContext(NonCancellable) {
-                barrier = cache.beginWrite(owner)
+                barrier = cache.beginWrite(session)
                 onPending()
             }
             currentCoroutineContext().ensureActive()
@@ -93,12 +93,12 @@ internal class ProviderOperation(
 
 /** A VM cache read owns its lease inside the fetch task, independently of any UI awaiter. */
 internal suspend fun <T> withProviderRequest(
-    owner: Long,
-    acquireLease: (Long) -> ProviderRequestLease = NativeCoreSession::providerRequest,
+    session: ProviderSessionKey,
+    acquireLease: (ProviderSessionKey) -> ProviderRequestLease = NativeCoreSession::providerRequest,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
     action: (ProviderManagementClient) -> T,
 ): T {
-    val operation = ProviderOperation(acquireLease(owner), dispatcher)
+    val operation = ProviderOperation(acquireLease(session), dispatcher)
     return try {
         operation.request(action)
     } catch (cancelled: CancellationException) {
