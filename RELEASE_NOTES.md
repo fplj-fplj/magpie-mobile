@@ -5,7 +5,7 @@
 - 停止屏障仍等待实际进程清理，期间只合并安全的最终日志与退出码；清理后保留诊断，FAILED 原因不会被 STOPPED 覆盖，新显式启动清空旧诊断。
 - Controller 结构化传递 Process 实际返回的 nullable 退出码到 Service 和审计 JSON。历史 -1、缺失值及 null 统一显示“未知”，23／137 等值不推断为信号或 OOM。
 - 审计读写均先完整脱敏再限长，兼容旧报告且不自动重写旧文件或损坏证据；诊断页保持原布局和进入时读取审计的行为。
-- 云端 Android 验证新增实际 Bun→Go→运行中诊断输出、启动指标与连接轮次不变、正常停止保留诊断，以及受控 Android shell 进程 exit23／137 经生产报告链写审计的场景；运行结果待完整 Actions 验证。
+- 云端 Android 验证新增实际 Bun→Go→运行中诊断输出、启动指标与连接轮次不变、正常停止保留诊断，以及受控 Android shell 进程 exit23／137 经生产报告链写审计的场景；同提交完整 Actions 验证已通过。
 
 保持暖纸色、RikkaHub 页面结构、霞鹜文楷屏幕阅读版与官方插件机制。本地仅静态检查，所有编译与运行回归交给 GitHub Actions；完整验证和同提交签名候选通过后才发布 Release。versionCode 55；备份 appVersion `0.1.54`；核心保持 `0.1.3781-androidhost.2`。
 
