@@ -346,7 +346,7 @@ internal class PluginManagementViewModel(
         if (mutable.value.busy || mutable.value.pending || mutable.value.authBusy ||
             mutable.value.loginRecovery != null || method !in provider.methods.indices) return
         clearLogin()
-        mutable.update { it.copy(authProvider = provider, authMethod = method, error = "") }
+        mutable.update { it.copy(authProvider = provider, authMethod = method, notice = "", error = "") }
         prompt()
     }
 

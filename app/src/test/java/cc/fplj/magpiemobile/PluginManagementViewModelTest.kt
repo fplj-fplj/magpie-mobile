@@ -795,6 +795,27 @@ class PluginManagementViewModelTest {
         assertTrue(vm.state.value.pending)
     }
 
+    @Test fun aNewWaitingLoginDoesNotKeepThePreviousCompletedLoginNotice() = runTest(dispatcher) {
+        var starts = 0
+        val vm = testViewModel(performAuth = { step -> when (step) {
+            is PluginAuthStep.Start -> PluginAuthReply(state = if (++starts == 1) PluginSignInState(state = "done")
+                else PluginSignInState(id = "next-session", state = "waiting"))
+            else -> PluginAuthReply(prompt = PluginPromptResult())
+        } })
+        vm.attach(ProviderSessionKey(1, 1))
+        vm.selectLogin(oauthProvider(), 0)
+        vm.startLogin()
+        assertEquals("done", vm.state.value.signIn!!.state)
+        assertEquals("插件登录已完成", vm.state.value.notice)
+        vm.cancelLogin()
+        vm.selectLogin(oauthProvider(), 0)
+        assertEquals("", vm.state.value.notice)
+        vm.startLogin()
+        assertEquals("waiting", vm.state.value.signIn!!.state)
+        assertEquals("", vm.state.value.notice)
+        vm.endLoginTracking()
+    }
+
     private fun oauthProvider() = PluginProvider(pid = "fixture", methods = listOf(PluginSignInMethod(type = "oauth")))
 
     /** Compatibility fixture: production always captures the whole operation before dispatch. */
