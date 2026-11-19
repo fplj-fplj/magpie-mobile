@@ -721,13 +721,13 @@ fun ProvidersPanel(
                 Column(
                     Modifier
                         .fillMaxWidth()
+                        .testTag("provider-editor-footer")
+                        .semantics { testTagsAsResourceId = true }
                         .windowInsetsPadding(
                             WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)
                                 .union(WindowInsets.ime.only(WindowInsetsSides.Bottom)),
                         )
-                        .padding(vertical = 12.dp)
-                        .testTag("provider-editor-footer")
-                        .semantics { testTagsAsResourceId = true },
+                        .padding(vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(UiSpacing.small),
                 ) {
                     Text(
