@@ -38,6 +38,7 @@ class ProviderManagementClient(
 
     fun list(): ProviderListSnapshot = getProviders()
     fun getProviders(): ProviderListSnapshot {
+        checkCurrent()
         observedFileError = true // a failed/malformed refresh cannot authorize a stale write
         val body = request("GET", "/api/providers")
         return readSafe { parseList(body) }.also { observedFileError = it.hasFileError }
@@ -45,6 +46,7 @@ class ProviderManagementClient(
 
     /** Canonical, versioned snapshot, supported only for custom API-key OpenAI Chat. */
     fun editable(id: String): ProviderEditSnapshot {
+        checkCurrent()
         require(validProviderExistingId(id)) { "提供商标识格式无效" }
         val body = request("GET", "/api/mobile/providers/editable/$id")
         return readSafe { parseEditable(body).also { if (it.id != id) throw ManagementProtocolException() } }
@@ -53,6 +55,7 @@ class ProviderManagementClient(
     fun create(draft: ProviderCreateDraft): ProviderEditSnapshot {
         var writeAttempted = false
         try {
+            checkCurrent()
             if (observedFileError) throw ProviderConfigurationUnreadableException()
             draft.validate() // state/replay before pure preview and non-writing capability requests
             require(draft.requestBody().toString().toByteArray(Charsets.UTF_8).size <= MAX_REQUEST_BYTES) { "提供商请求超过安全上限" }
@@ -69,6 +72,7 @@ class ProviderManagementClient(
     fun edit(draft: ProviderEditDraft): ProviderEditSnapshot {
         var writeAttempted = false
         try {
+            checkCurrent()
             if (observedFileError) throw ProviderConfigurationUnreadableException()
             draft.validate() // state/replay before pure preview and non-writing capability requests
             require(draft.requestBody().toString().toByteArray(Charsets.UTF_8).size <= MAX_REQUEST_BYTES) { "提供商请求超过安全上限" }
@@ -86,6 +90,7 @@ class ProviderManagementClient(
      * No retries. A read failure is a discovery error, not an unknown write/recovery event.
      */
     fun discoverModels(discovery: ProviderModelDiscoveryRequest): ProviderModelCatalog = try {
+        checkCurrent()
         val requestBody = discovery.requestBody()
         val submittedKey = (requestBody["key"] as? JsonPrimitive)?.content
         val body = requestBody.toString().toByteArray(Charsets.UTF_8)
