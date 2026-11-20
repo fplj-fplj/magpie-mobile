@@ -4,9 +4,8 @@
 
 ## 当前源码版本：0.1.60-provider-model-summary（提供商模型摘要）
 
-- **本轮修复**：提供商列表使用已保存 `models[].on` 显示“启用 E / 目录 D”，自动选择配置不再出现“0 / 1 模型”；停用、明确禁用和未就绪状态使用一致的状态口径。编辑页将未保存内容明确标为“当前草稿／保存后生效”，连通测试仍只读取已保存配置。新增真实 Panel 与管理响应覆盖，完整 Actions 验证待本轮提交后进行，详见 [0.1.60 修复记录](docs/bugfixes-0.1.60.md)。
-
-- **本轮修复**：原生连通测试按已保存列表的实际 `models[].on` 识别官方自动选择模型，空显式 `chosen` 不再误报无模型。停用、未就绪和明确禁用继续不可测，未保存草稿与发现目录不进入候选，保留真实网关路由核验。JVM 1,080 项（新增 9 项）、Android API 35 x86_64 的 7 项实际用例及完整 Go／插件回归通过，详见 [0.1.59 修复与验收记录](docs/bugfixes-0.1.59.md)。
+- **本轮修复**：提供商列表使用已保存 `models[].on` 显示“启用 E / 目录 D”，自动选择配置不再出现“0 / 1 模型”；停用、明确禁用和未就绪状态使用一致的状态口径。编辑页将未保存内容明确标为“当前草稿／保存后生效”，连通测试仍只读取已保存配置。JVM 1,080 项、Android API 35 x86_64 的 10 项实际用例及完整 Go／插件回归通过，正式签名、哈希、tag、Latest 和四项附件已核对，详见 [0.1.60 验收记录](docs/bugfixes-0.1.60.md)。
+- **自动选择模型的连通测试**：原生候选按已保存列表的实际 `models[].on` 识别，空显式 `chosen` 不再误报无模型。停用、未就绪和明确禁用继续不可测，未保存草稿与发现目录不进入候选，保留真实网关路由核验。详见 [0.1.59 修复与验收记录](docs/bugfixes-0.1.59.md)。
 - **提供商保存与外部返回**：保存期间锁定手动模型输入并拒绝旧回调，外部返回保留草稿、合并待办，关闭编辑或当前请求退出后自动补读最新列表；未确认前阻止旧配置保存。0.1.58 的 JVM 1,071 项及完整 Actions 验收通过，详见 [0.1.58 修复记录](docs/bugfixes-0.1.58.md)。
 - **聊天预设与停止清理**：预设参数进入真实发送，失败保留表单，存储失败保留原文件；网关停止使用独立清理凭证，重复通知与迟到启动不提前解除屏障。详见 [0.1.57 预设验收](docs/bugfixes-0.1.57.md)及 [0.1.56 停止验收](docs/bugfixes-0.1.56.md)。
 - **实时诊断与退出码**：运行日志有界合并更新，不重复启动连接或通知；停止保留最终日志和实际退出码，完整行先脱敏再截断。详见 [0.1.54 验收记录](docs/bugfixes-0.1.54.md)。
@@ -33,6 +32,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/bugfixes-0.1.60.md](docs/bugfixes-0.1.60.md) | 已保存启用／目录摘要、草稿文案与十项 Android 用例及正式发布 |
 | [docs/bugfixes-0.1.59.md](docs/bugfixes-0.1.59.md) | 自动选择模型的原生连通测试、已保存启用集合及真实网关验收 |
 | [docs/bugfixes-0.1.58.md](docs/bugfixes-0.1.58.md) | 保存期间模型输入保护、外部返回刷新与真实页面验收 |
 | [docs/bugfixes-0.1.57.md](docs/bugfixes-0.1.57.md) | 聊天预设实际请求、失败草稿保留与原子存储验收 |
@@ -83,7 +83,7 @@
 
 `Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`，才会把同一轮验证产物发布为 Latest Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
-当前已验证可用版本：[`0.1.59-provider-auto-models` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.59-provider-auto-models-6b942705)，SHA-256 `209ffb6146d7eb40d9440bb2bd9f1df9e9f594be5b33a6a9e5b39792addad2c0`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44675009286)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44673101779)均通过；JVM 1,080 项（新增 9 项）、Android API 35 x86_64 的 7 项实际用例、Go、实际核心参数转发与 RPC/TLS、官方／社区插件及 race 均通过。官方自动选择模型可在原生页面完成三项能力检查，明确禁用会移除真实路由并禁用开始按钮；保存输入保护、外部返回、预设真实发送与 Room 隔离继续通过。前三轮脚本失败候选仅保存在 Actions，完整验证后才发布；已核实 Latest、正式 tag、固定证书、四项附件与正式 APK 哈希，详情见 [0.1.59 验收记录](docs/bugfixes-0.1.59.md)。ARM64 包仅核对签名与载荷，实际 Android 运行在 x86_64 模拟器完成。
+当前已验证可用版本：[`0.1.60-provider-model-summary` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.60-provider-model-summary-7681edbb)，SHA-256 `3facdc3e97cfb2741226424e3f1bb673fb22b112f6baddd1314ef4e6ced8ebac`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44682572381)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44680940234)均通过；JVM 1,080 项、Android API 35 x86_64 的 10 项实际用例、Go、实际核心参数转发与 RPC/TLS、官方／社区插件及 race 全部通过。列表启用数与测试候选共享已保存模型，24/25、显式选择与 `on` 不一致、未就绪、草稿不写列表及真实 Go/Bun 自动模式检查均已验证。首轮测试 fixture 失败候选仅留 Actions，修正后完整验收才发布；正式 APK 已从 Release 与正式 artifact 分别下载并逐字节比对，Latest、tag、固定证书及四项附件已核对，详情见 [0.1.60 验收记录](docs/bugfixes-0.1.60.md)。ARM64 包仅核对签名与载荷，实际 Android 运行在 x86_64 模拟器完成。
 
 官方插件完整通过基线仍可通过 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)追溯；对应历史 Release 条目已按清理策略移除，运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 
