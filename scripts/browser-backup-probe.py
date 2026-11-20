@@ -48,12 +48,16 @@ CHROME_FIRST_RUN = CHROME_PACKAGE + "/org.chromium.chrome.browser.firstrun.First
 WELCOME_TITLE_ID = CHROME_PACKAGE + ":id/title"
 SKIP_ACCOUNT_ID = CHROME_PACKAGE + ":id/signin_fre_dismiss_button"
 SKIP_ACCOUNT_TEXT = "Use without an account"
+CHROME_TABBED = CHROME_PACKAGE + "/org.chromium.chrome.browser.ChromeTabbedActivity"
+NOTIFICATIONS_TITLE = "Chrome notifications make things easier"
+NOTIFICATIONS_DECLINE_ID = CHROME_PACKAGE + ":id/negative_button"
 # Exact labels observed in both CI image artifacts, never an open-ended
 # "continue/accept/skip" matcher. Unknown subsequent pages are evidence-only.
 SAFE_UI_LABELS = {
     PAGE_MARKER, "Welcome to Chrome", SKIP_ACCOUNT_TEXT, "Add account to device",
     "Sign in to browse easier across devices", "Magpie external browser probe",
     "This local page contains no credentials or account data.", PROBE_URL,
+    NOTIFICATIONS_TITLE, "No thanks",
 }
 SAFE_UI_ATTRIBUTES = {
     "rotation", "index", "resource-id", "class", "package", "checkable", "checked",
@@ -125,7 +129,7 @@ class Probe:
             browserPreparationRequested=args.prepare_browser, firstRunPrepared=False,
             firstRunPreparation={"requested": args.prepare_browser,
                                  "status": "pending" if args.prepare_browser else "not_requested",
-                                 "allowedActions": ["chrome_welcome_use_without_account"] if args.prepare_browser else [],
+                                 "allowedActions": ["chrome_welcome_use_without_account", "chrome_notifications_no_thanks"] if args.prepare_browser else [],
                                  "unknownScreenPolicy": "capture_and_fail", "attempts": []},
             collectionStartedAt=now(), serial=args.serial,
             requestedImage={"apiLevel": 35, "arch": "x86_64", "target": args.target, "profile": "pixel_6"},
@@ -133,7 +137,7 @@ class Probe:
             policy={"noAppInstalled": True, "noAccountOrLoginActions": True,
                     "noAutomatedConsentClicks": not args.prepare_browser,
                     "automatedUIClicksPerformed": 0,
-                    "automatedUIClickPolicy": "exact_observed_chrome_no_account_button_only" if args.prepare_browser else "none",
+                    "automatedUIClickPolicy": "exact_observed_chrome_no_account_and_notification_decline_only" if args.prepare_browser else "none",
                     "savedHierarchyTextPolicy": "known_static_labels_only",
                     "noCredentialsInURL": True, "noRequestHeadersRecorded": True, "loopbackURL": PROBE_URL},
             errors=[], intentEvidence={}, packages={}, launchAttempts=[],
@@ -443,7 +447,7 @@ class Probe:
                 and component_package(foreground["focusedComponent"]) == CHROME_PACKAGE)
 
     def prepare_browser(self, prefix: str, before: dict, hit_start: int, launch_ok: bool) -> tuple[dict, dict]:
-        """One explicit, evidence-backed no-account action; never guess later UI."""
+        """Only observed no-account and notification-decline actions; unknown UI fails."""
         preparation = {"status": "inspecting", "beforeEvidence": before, "actions": []}
         self.report["firstRunPreparation"]["attempts"].append(preparation)
 
@@ -511,6 +515,63 @@ class Probe:
         preparation["afterEvidence"] = after
         if action["command"]["returnCode"] != 0:
             return blocked("no_account_tap_command_failed", after)
+        if not self.page_ready(after, hit_start):
+            # Both image artifacts from run 44796099677 show this exact native
+            # notification promo after the no-account action. Decline it; never
+            # match a generic No thanks / Continue button on an unknown page.
+            def notification_foreground(foreground: dict) -> bool:
+                return (self.independent_foreground(foreground)
+                        and foreground["resumedComponent"] == CHROME_TABBED
+                        and foreground["focusedComponent"] == CHROME_TABBED)
+
+            if (after["captureErrors"] or not after["hierarchy"]
+                    or not all(notification_foreground(after[key])
+                               for key in ("foregroundBefore", "foregroundAfter"))):
+                return blocked("unknown_screen_after_known_no_account_action", after)
+            root = ET.parse(self.output / after["hierarchy"]).getroot()
+            titles = [node for node in root.iter("node")
+                      if node.attrib.get("package") == CHROME_PACKAGE
+                      and node.attrib.get("class") == "android.widget.TextView"
+                      and node.attrib.get("text") == NOTIFICATIONS_TITLE]
+            buttons = [node for node in root.iter("node")
+                       if node.attrib.get("package") == CHROME_PACKAGE
+                       and node.attrib.get("resource-id") == NOTIFICATIONS_DECLINE_ID
+                       and node.attrib.get("text") == "No thanks"
+                       and node.attrib.get("class") == "android.widget.Button"
+                       and node.attrib.get("clickable") == "true" and node.attrib.get("enabled") == "true"
+                       and node.attrib.get("visible-to-user") != "false"]
+            if len(titles) != 1 or len(buttons) != 1:
+                return blocked("unknown_notification_screen_or_ambiguous_decline_button", after)
+            bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", buttons[0].attrib.get("bounds", ""))
+            if not bounds:
+                return blocked("notification_decline_bounds_invalid", after)
+            left, top, right, bottom = map(int, bounds.groups())
+            if not (0 <= left < right <= after.get("screenshotWidth", 0)
+                    and 0 <= top < bottom <= after.get("screenshotHeight", 0)):
+                return blocked("notification_decline_outside_current_screenshot", after)
+            current = self.foreground()
+            if (not notification_foreground(current)
+                    or self.report["policy"]["automatedUIClicksPerformed"] != 1):
+                return blocked("notification_decline_focus_or_action_count_changed", self.capture(prefix + "-prepare-02-focus-changed"))
+            x, y = (left + right) // 2, (top + bottom) // 2
+            decline = {"name": "chrome_notifications_no_thanks", "at": now(),
+                       "selector": {"package": CHROME_PACKAGE, "resourceId": NOTIFICATIONS_DECLINE_ID,
+                                    "text": "No thanks", "title": NOTIFICATIONS_TITLE},
+                       "bounds": [left, top, right, bottom], "tap": {"x": x, "y": y},
+                       "foregroundImmediatelyBeforeTap": current, "beforeEvidence": after,
+                       "status": "about_to_tap"}
+            preparation["actions"].append(decline)
+            self.flush()
+            self.report["policy"]["automatedUIClicksPerformed"] += 1
+            decline["command"] = self.shell(["input", "tap", str(x), str(y)])
+            decline["status"] = "tap_sent" if decline["command"]["returnCode"] == 0 else "tap_failed"
+            self.flush()
+            self.wait_for_page(hit_start)
+            after = self.capture(prefix + "-prepare-02-after")
+            decline["afterEvidence"] = after
+            preparation["afterEvidence"] = after
+            if decline["command"]["returnCode"] != 0:
+                return blocked("notification_decline_tap_command_failed", after)
         if not (self.page_ready(after, hit_start)
                 and all(component_package(after[key]["resumedComponent"]) == CHROME_PACKAGE
                         for key in ("foregroundBefore", "foregroundAfter"))):
@@ -633,7 +694,7 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--serial", default="emulator-5554", choices=("emulator-5554",))
     parser.add_argument("--prepare-browser", action="store_true",
-                        help="Explicitly permit the observed Chrome 'Use without an account' UI action; unknown pages fail closed.")
+                        help="Permit observed Chrome no-account and notification-decline UI actions; unknown pages fail closed.")
     args = parser.parse_args()
     if os.environ.get("GITHUB_ACTIONS") != "true":
         parser.error("This environment probe is CI-only; do not execute it locally.")
