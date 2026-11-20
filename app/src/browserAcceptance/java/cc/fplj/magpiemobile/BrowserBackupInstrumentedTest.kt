@@ -238,14 +238,27 @@ class BrowserBackupInstrumentedTest {
     }
 
     private fun revealNativeBrowserButton(): UiObject2 {
-        repeat(8) {
-            namedControl(context.packageName, listOf("浏览器编辑"))?.let { return it }
-            val scrollable = device.findObjects(By.pkg(context.packageName).scrollable(true))
-                .maxByOrNull { it.visibleBounds.height() }
-                ?: throw AcceptanceFailure(FailureReason.NATIVE_PROVIDER_PAGE_NOT_RECOGNIZED)
-            scrollable.scroll(Direction.DOWN, .65f)
+        var button: UiObject2? = null
+        var scrollAttempts = 0
+        await(30_000, FailureReason.NATIVE_BROWSER_BUTTON_NOT_REACHED) {
+            button = namedControl(context.packageName, listOf("浏览器编辑"))
+            if (button != null) {
+                true
+            } else {
+                // A busy provider page can fit on screen and have no scrollable node.
+                // Keep waiting for its real enabled action; scroll only when possible.
+                if (scrollAttempts < 8) {
+                    device.findObjects(By.pkg(context.packageName).scrollable(true))
+                        .maxByOrNull { it.visibleBounds.height() }
+                        ?.let { scrollable ->
+                            scrollAttempts += 1
+                            scrollable.scroll(Direction.DOWN, .65f)
+                        }
+                }
+                false
+            }
         }
-        throw AcceptanceFailure(FailureReason.NATIVE_BROWSER_BUTTON_NOT_REACHED)
+        return requireNotNull(button)
     }
 
     private fun rejectBrowserFirstRun() {
