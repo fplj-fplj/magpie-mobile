@@ -5,3 +5,4 @@ package mobilepolicy
 
 const Enabled = true
 const FullAdmin = false
+const AndroidHost = false

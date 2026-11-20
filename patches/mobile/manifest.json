@@ -136,9 +136,17 @@
         {
           "old": "\treturn noFramedAPI(held(mux))\n",
           "new": "\treturn mobileAPI(noFramedAPI(held(mux)))\n"
+        },
+        {
+          "old": "\t\"github.com/yetone/magpie/internal/middleware\"\n",
+          "new": "\t\"github.com/yetone/magpie/internal/middleware\"\n\t\"github.com/yetone/magpie/internal/mobilepolicy\"\n"
+        },
+        {
+          "old": "\t\tboot := map[string]any{\"lang\": s.Lang, \"theme\": s.Theme, \"textSize\": s.TextSize, \"web\": isWeb(w)}\n",
+          "new": "\t\tboot := map[string]any{\"lang\": s.Lang, \"theme\": s.Theme, \"textSize\": s.TextSize, \"web\": isWeb(w)}\n\t\tif mobilepolicy.AndroidHost && isWeb(w) {\n\t\t\tboot[\"androidHost\"] = true // build-time platform, never a user-agent guess\n\t\t}\n"
         }
       ],
-      "resultSha256": "df33e3941c9ea0f001a389c551f17d655502bcef6ed75ba35238a56ffe24fed5"
+      "resultSha256": "e9bc057fa74e54b132a91940b195e49bea07cef51c708f65448c36ebf59eeefc"
     },
     {
       "path": "internal/gui/update.go",
@@ -249,6 +257,44 @@
         }
       ],
       "resultSha256": "b343d6f243d1be7eb8a369dcaec62acbc61c9fb6c118b6d1391347486fe6948b"
+    },
+    {
+      "path": "internal/gui/backup.go",
+      "sha256": "8f3d6c8870394226df4ded59ae241895a09045695825f6d1537462fb67e093eb",
+      "replacements": [
+        {
+          "old": "\tmux.HandleFunc(\"POST /api/backup/export\", func(rw http.ResponseWriter, r *http.Request) {\n",
+          "new": "\tmux.HandleFunc(\"POST /api/backup/export\", func(rw http.ResponseWriter, r *http.Request) {\n\t\trw.Header().Set(\"Cache-Control\", \"no-store\")\n"
+        },
+        {
+          "old": "\t\t\tSignIns bool  // the subscriptions' and plugins' sign-ins too\n",
+          "new": "\t\t\tSignIns bool  // the subscriptions' and plugins' sign-ins too\n\t\t\tSink    string // empty/downloads keeps desktop behavior; app returns only sealed bytes\n"
+        },
+        {
+          "old": "\t\tb, err := backup.Collect(in.Keys, Version)\n",
+          "new": "\t\tif in.Sink != \"\" && in.Sink != \"downloads\" && in.Sink != \"app\" {\n\t\t\tfail(rw, errors.New(\"unsupported backup destination\"))\n\t\t\treturn\n\t\t}\n\t\tb, err := backup.Collect(in.Keys, Version)\n"
+        },
+        {
+          "old": "\t\tdir := downloads()\n",
+          "new": "\t\tif in.Sink == \"app\" {\n\t\t\t// The official encrypted format goes directly to the browser.\n\t\t\t// No caller-controlled path, private archive or plaintext temporary file.\n\t\t\trw.Header().Set(\"Content-Type\", \"application/octet-stream\")\n\t\t\trw.Header().Set(\"Content-Disposition\", `attachment; filename=\"magpie.magpie-backup\"`)\n\t\t\trw.Header().Set(\"X-Content-Type-Options\", \"nosniff\")\n\t\t\trw.Header().Set(\"Content-Length\", fmt.Sprint(len(data)))\n\t\t\t_, _ = rw.Write(data)\n\t\t\treturn\n\t\t}\n\t\tdir := downloads()\n"
+        }
+      ],
+      "resultSha256": "2e5c897ea4938b27493d7e2d5b2a720ee71cee27e6f632daae17adb7222de45b"
+    },
+    {
+      "path": "internal/gui/assets/syncfiles.js",
+      "sha256": "5c8b82a949723460a1826fbfd1f4f948168a568ae07b9a0897a1d2ab39f9fe76",
+      "replacements": [
+        {
+          "old": "window.exportForm = function () {\n",
+          "new": "// Only the Android host opts in. The ordinary desktop keeps its saved-path API.\n// A failed JSON response must never become a file with a backup extension.\nasync function androidHostBackupDownload(body) {\n  const response = await fetch(\"/api/backup/export\", {\n    method: \"POST\", credentials: \"same-origin\", mode: \"same-origin\", redirect: \"error\", cache: \"no-store\",\n    headers: { \"Content-Type\": \"application/json\", Accept: \"application/octet-stream\" },\n    body: JSON.stringify({ ...body, sink: \"app\" }),\n  });\n  const type = (response.headers.get(\"Content-Type\") || \"\").split(\";\")[0].trim().toLowerCase();\n  if (!response.ok || type !== \"application/octet-stream\" ||\n      response.headers.get(\"Content-Disposition\") !== 'attachment; filename=\"magpie.magpie-backup\"') {\n    throw new Error(t(\"Export\") + \": \" + t(\"Try again\"));\n  }\n  const blob = await response.blob();\n  if (!blob.size) throw new Error(t(\"Export\") + \": \" + t(\"Try again\"));\n  // Keep a retry button for browsers that require a fresh user gesture. A retry\n  // downloads these same sealed bytes; it does not repeat the export POST.\n  return () => {\n    const a = document.createElement(\"a\");\n    const url = URL.createObjectURL(blob);\n    try {\n      a.href = url;\n      a.download = \"magpie.magpie-backup\";\n      document.body.append(a);\n      a.click();\n    }\n    finally {\n      a.remove();\n      // Revoking immediately can cancel the browser's asynchronous download.\n      setTimeout(() => URL.revokeObjectURL(url), 60e3);\n    }\n  };\n}\n\n// A settings tab or the whole view can stay connected while hidden. Never\n// start an unsolicited download from a hidden page, tab, or background document.\nfunction androidHostBackupFormActive(ed) {\n  if (!ed.isConnected || document.visibilityState !== \"visible\") return false;\n  for (let node = ed; node; node = node.parentElement) {\n    if (node.hidden) return false;\n  }\n  return true;\n}\n\nwindow.exportForm = function () {\n"
+        },
+        {
+          "old": "  go.onclick = async () => {\n    if (!p1.value) return say(t(\"Pick a passphrase: the file is sealed with it\"));\n    if (p1.value !== p2.value) return say(t(\"The two passphrases differ\"));\n    go.classList.add(\"busy\");\n    try {\n      const r = await api(\"backup/export\", { pass: p1.value, keys: keys.checked, library: lib.checked, memory: mem.checked, signIns: si.checked });\n      ed.replaceChildren(el(\"div\", \"done\", t(\"Saved to {path}\", { path: r.path })));\n    } catch (e) {\n      go.classList.remove(\"busy\");\n      say(e.message);\n    }\n  };\n",
+          "new": "  go.onclick = async () => {\n    if (go.disabled) return;\n    if (!p1.value) return say(t(\"Pick a passphrase: the file is sealed with it\"));\n    if (p1.value !== p2.value) return say(t(\"The two passphrases differ\"));\n    go.disabled = true;\n    go.classList.add(\"busy\");\n    try {\n      const body = { pass: p1.value, keys: keys.checked, library: lib.checked, memory: mem.checked, signIns: si.checked };\n      if (window.bootPrefs?.androidHost === true) {\n        const save = await androidHostBackupDownload(body);\n        p1.value = p2.value = \"\";\n        const error = ed.querySelector(\".editor-error\");\n        const download = el(\"button\", \"text primary\", t(\"Download\") + \" · magpie.magpie-backup\");\n        const trySave = () => {\n          say(\"\");\n          try { save(); }\n          catch (e) { say(e?.message || t(\"Try again\")); }\n        };\n        download.onclick = trySave;\n        // Keep syncBar's real alert node so both automatic and manual failures\n        // can be shown after the passphrase fields have been removed.\n        ed.replaceChildren(download, error);\n        if (androidHostBackupFormActive(ed)) trySave();\n        return;\n      }\n      const r = await api(\"backup/export\", body);\n      ed.replaceChildren(el(\"div\", \"done\", t(\"Saved to {path}\", { path: r.path })));\n    } catch (e) {\n      go.disabled = false;\n      go.classList.remove(\"busy\");\n      say(e.message);\n    }\n  };\n"
+        }
+      ],
+      "resultSha256": "c696d26168bf5ca745d97266df8a9c80c6a70fcf0f64faa8e17440dfabc64421"
     }
   ],
   "overlays": [
@@ -302,15 +348,15 @@
     },
     {
       "path": "internal/mobilepolicy/enabled_androidhost.go",
-      "sha256": "5b00751edd68c351cae8779fde7917fe4722168c0a6f43dfaf8d8a28f2eb9e5c"
+      "sha256": "d658fc20e42caf4b57c9d20836efd67b0cf2052d7ac55eab850a03bd30b5a317"
     },
     {
       "path": "internal/mobilepolicy/enabled_desktop.go",
-      "sha256": "c848aa8ae764d02933ff044ed143fb5ea12e93e5b9dd5d747851e491bbb39f24"
+      "sha256": "64ce2f080923021fe493f4c2442c42a1ebe7a6f6c98ab2e4095c10a35aecf314"
     },
     {
       "path": "internal/mobilepolicy/enabled_mobile.go",
-      "sha256": "e956b1932067feda1c7201cb1de4cb9431808171510b47803739609623130447"
+      "sha256": "90064c7cb5d2c43cc962278ae05198dbf45474656d3682b0dc177020dc12a931"
     },
     {
       "path": "internal/plugin/androidhost_bridge.go",
@@ -359,6 +405,10 @@
     {
       "path": "internal/provider/mobile_discovery_tls_test.go",
       "sha256": "0a67b48473f2842f69fe0d6cc82776fe874503a72128995062d6e68148fc1f77"
+    },
+    {
+      "path": "internal/gui/androidhost_backup_test.go",
+      "sha256": "2eac00371c8a50a0d4ed8d856e1e5c1c3de9b6360a355c3b469ad49478aef3e7"
     }
   ]
 }

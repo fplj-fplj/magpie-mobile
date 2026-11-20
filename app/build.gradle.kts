@@ -16,9 +16,9 @@ android {
         applicationId = "cc.fplj.magpiemobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 63
-        versionName = "0.1.62-chat-session-clipboard-fixes"
-        buildConfigField("String", "CORE_VERSION", "\"0.1.3781-androidhost.2\"")
+        versionCode = 64
+        versionName = "0.1.63-browser-backup-bridge"
+        buildConfigField("String", "CORE_VERSION", "\"0.1.3781-androidhost.3\"")
         buildConfigField("String", "GIT_SHA", "\"" + (System.getenv("GITHUB_SHA")?.take(8) ?: "local") + "\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters.add(magpieTestAbi ?: "arm64-v8a") }

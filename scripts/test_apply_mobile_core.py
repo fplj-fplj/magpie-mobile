@@ -265,6 +265,7 @@ class ApplyMobileCoreTests(unittest.TestCase):
             "internal/gui/web.go", "internal/gui/api.go", "internal/gui/update.go",
             "internal/cli/web_cli.go", "internal/provider/provider.go", "internal/gui/gatewaymode.go",
             "internal/plugin/host.go", "internal/plugin/store.go",
+            "internal/gui/backup.go", "internal/gui/assets/syncfiles.js",
         })
         for overlay in manifest["overlays"]:
             data = (root / "overlay" / overlay["path"]).read_bytes()
@@ -278,10 +279,45 @@ class ApplyMobileCoreTests(unittest.TestCase):
         for exception in ("ownCallback", "corsPreflight", "keyPageOpen", "imageTokenAsked", "oidcExchange", "proveAsked"):
             self.assertRegex(inserts, "!mobilepolicy.Enabled.*" + exception)
         tests = [(root / "overlay" / o["path"]).read_text() for o in manifest["overlays"] if o["path"].endswith("_test.go")]
-        self.assertEqual(len(tests), 14)
+        self.assertEqual(len(tests), 15)
         constraints = {"//go:build mobile", "//go:build mobile || androidhost", "//go:build androidhost"}
         self.assertTrue(all(t.splitlines()[0] in constraints for t in tests))
         self.assertGreaterEqual(sum(t.count("func TestMobile") for t in tests), 10)
+
+    def test_androidhost_backup_download_patch_and_platform_flags_are_packaged(self):
+        root = patcher.DEFAULT_PATCH_ROOT
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        patches = {p["path"]: p for p in manifest["patches"]}
+        for path in ("internal/gui/api.go", "internal/gui/backup.go", "internal/gui/assets/syncfiles.js"):
+            self.assertRegex(patches[path]["sha256"], "^[0-9a-f]{64}$")
+            self.assertRegex(patches[path]["resultSha256"], "^[0-9a-f]{64}$")
+        boot = "\n".join(r["new"] for r in patches["internal/gui/api.go"]["replacements"])
+        self.assertIn("mobilepolicy.AndroidHost && isWeb(w)", boot)
+        self.assertIn('boot["androidHost"] = true', boot)
+        for build, enabled in (("androidhost", "true"), ("mobile", "false"), ("desktop", "false")):
+            policy = (root / "overlay/internal/mobilepolicy" / ("enabled_" + build + ".go")).read_text()
+            self.assertIn("const AndroidHost = " + enabled, policy)
+        backup = "\n".join(r["new"] for r in patches["internal/gui/backup.go"]["replacements"])
+        self.assertIn('in.Sink == "app"', backup)
+        self.assertIn('filename="magpie.magpie-backup"', backup)
+        self.assertIn('"application/octet-stream"', backup)
+        self.assertIn('"no-store"', backup)
+        self.assertIn("rw.Write(data)", backup)
+        page = "\n".join(r["new"] for r in patches["internal/gui/assets/syncfiles.js"]["replacements"])
+        for guard in ('window.bootPrefs?.androidHost === true', 'credentials: "same-origin"',
+                      'mode: "same-origin"', 'redirect: "error"', 'cache: "no-store"',
+                      '!response.ok', 'response.blob()', '!blob.size', 'if (go.disabled) return;',
+                      'URL.revokeObjectURL(url)',
+                      '!ed.isConnected || document.visibilityState !== "visible"',
+                      'node = node.parentElement', 'if (node.hidden) return false;',
+                      'ed.replaceChildren(download, error);', 'download.onclick = trySave;',
+                      'if (androidHostBackupFormActive(ed)) trySave();'):
+            self.assertIn(guard, page)
+        tests = (root / "overlay/internal/gui/androidhost_backup_test.go").read_text()
+        self.assertIn("backup.Open(w.Body.Bytes(), androidBackupTestPass)", tests)
+        self.assertIn('"/api/backup/import"', tests)
+        self.assertIn('fs.ReadFile(staticFS(), "app.js")', tests)
+        self.assertIn('exec.Command(node, "-e", androidBackupBrowserHarness)', tests)
 
 
 if __name__ == "__main__":

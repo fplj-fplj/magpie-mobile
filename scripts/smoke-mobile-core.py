@@ -27,7 +27,7 @@ def is_listening(p):
     except OSError: return False
 
 args=argparse.ArgumentParser();args.add_argument('--exe',required=True);args.add_argument('--full-admin',action='store_true');args.add_argument('--evidence');opts=args.parse_args()
-core_version='0.1.3781-androidhost.2' if opts.full_admin else '0.1.3781-mobile.1'
+core_version='0.1.3781-androidhost.3' if opts.full_admin else '0.1.3781-mobile.1'
 exe=Path(opts.exe).resolve();assert exe.is_file()
 with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
     root=Path(temporary)

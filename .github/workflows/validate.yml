@@ -48,6 +48,11 @@ jobs:
           go-version-file: build-tmp/upstream/go.mod
           cache-dependency-path: build-tmp/upstream/go.sum
 
+      - name: Prepare Node for the embedded browser module regression
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Check actual startup manifest contract
         run: |
           python3 scripts/check-startup-contract.py
@@ -90,6 +95,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           set -euo pipefail
+          node --version
           go test -tags nogui ./internal/access -count=1 -timeout=3m
           go test -json -tags nogui,mobile ./internal/gateway ./internal/gui ./internal/cli ./internal/provider -run '^TestMobile' -count=1 -timeout=3m | tee ../mobile-go-tests.jsonl
           go test -json -tags nogui,androidhost ./internal/gateway ./internal/gui ./internal/cli ./internal/provider ./internal/plugin -run '^Test(AndroidHost|Mobile)' -count=1 -timeout=3m | tee ../androidhost-go-tests.jsonl
@@ -102,7 +108,7 @@ jobs:
           set -euo pipefail
           go build -trimpath -tags nogui,mobile -ldflags '-s -w -X main.version=0.1.3781-mobile.1' -o ../magpie-mobile-host .
           python3 ../../scripts/smoke-mobile-core.py --exe ../magpie-mobile-host --evidence ../mobile-chat-profile.json
-          go build -trimpath -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.2' -o ../magpie-full-host .
+          go build -trimpath -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.3' -o ../magpie-full-host .
           python3 ../../scripts/smoke-mobile-core.py --exe ../magpie-full-host --full-admin --evidence ../androidhost-chat-profile.json
 
       - name: Verify real model directory TLS and pin boundaries

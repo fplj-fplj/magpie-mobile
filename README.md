@@ -2,6 +2,10 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
+## 当前源码候选：0.1.63-browser-backup-bridge（待 Actions 与真实浏览器验收）
+
+- **备份文件桥接候选**：Android 宿主的官方网页导出改为接收官方加密文件并交给浏览器下载，提供复用同一份密文的下载重试；空目标的桌面导出继续使用原路径行为。新增 Go 加密往返与实际网页模块的 Node 回归，尚待本提交 Actions 执行。外部浏览器真实下载和系统文件选择器重新导入仍未验收，暂不发布 Release；原生 SAF 占位入口仍未接入。详见 [0.1.63 开发与验收计划](docs/bugfixes-0.1.63.md)。
+
 ## 当前已验证版本：0.1.62-chat-session-clipboard-fixes
 
 - **本轮已验证修复**：删除非当前会话或重命名当前会话时保留聊天旧页、草稿、失败预览与已加载历史范围；删除已提交而读取失败时撤销旧发送上下文，跨会话恢复只使用目标自己的草稿。原生密钥和含密钥 cURL 的复制核对连接轮次并设置敏感标记，提供商字段的系统 Copy/Cut 也携带该标记。修复提供商页面 ART 崩溃及启动前取消的忙碌状态收尾，并加固同提交验证与完整附件发布门禁。最终 `9097163` 的 JVM 1,127 项、Android 23 项及完整核心／插件验收通过；正式 APK 已分别从 Release 和正式 artifact 下载并逐字节比对，固定签名、载荷、tag、Latest 与四项附件均已核对。详见 [0.1.62 验收记录](docs/bugfixes-0.1.62.md)。
@@ -34,6 +38,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/bugfixes-0.1.63.md](docs/bugfixes-0.1.63.md) | 官方加密备份的浏览器下载桥接候选；真实文件往返验收待完成 |
 | [docs/bugfixes-0.1.62.md](docs/bugfixes-0.1.62.md) | 聊天分页与跨会话草稿隔离、系统敏感剪贴板及完整验收／正式发布 |
 | [docs/bugfixes-0.1.61.md](docs/bugfixes-0.1.61.md) | 插件连续保存、紧凑会话菜单、密钥连接隔离与完整验收／正式发布 |
 | [docs/bugfixes-0.1.60.md](docs/bugfixes-0.1.60.md) | 已保存启用／目录摘要、草稿文案与十项 Android 用例及正式发布 |

@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from powercontext_fixture import PowerContextFixture
 
-CORE_VERSION = "0.1.3781-androidhost.2"
+CORE_VERSION = "0.1.3781-androidhost.3"
 VENDOR_KEY = "synthetic-provider-key-never-real"
 COMMUNITY_NPM = [
     "@magpie-community/tools-calc@0.1.0",
