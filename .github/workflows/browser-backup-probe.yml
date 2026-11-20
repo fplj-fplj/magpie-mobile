@@ -1,0 +1,141 @@
+name: Browser backup environment probe
+
+# Environment-only probe on an isolated branch; never builds or publishes the app.
+on:
+  workflow_dispatch:
+  push:
+    branches: [browser-backup-probe]
+    paths:
+      - .github/workflows/browser-backup-probe.yml
+      - scripts/browser-backup-probe.py
+
+permissions:
+  contents: read
+
+jobs:
+  browser-environment:
+    name: API 35 browser / ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [google_apis, google_apis_playstore]
+    env:
+      PROBE_TARGET: ${{ matrix.target }}
+      # Outside checkout: checkout's cleanup must not erase the seeded report.
+      PROBE_OUTPUT: ${{ runner.temp }}/magpie-browser-probe/${{ matrix.target }}
+    steps:
+      - name: Seed a report before checkout or emulator setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime, json, os
+          from pathlib import Path
+          output = Path(os.environ["PROBE_OUTPUT"])
+          output.mkdir(parents=True, exist_ok=True)
+          report = {
+              "schemaVersion": 1,
+              "probeKind": "fresh-emulator-independent-browser",
+              "status": "not_started",
+              "browserAvailable": False,
+              "defaultActionViewReady": False,
+              "independentBrowserForeground": False,
+              "filePickerHandlersPresent": False,
+              "availabilityReason": "emulator_or_probe_not_started",
+              "requestedImage": {
+                  "apiLevel": 35, "arch": "x86_64",
+                  "target": os.environ["PROBE_TARGET"], "profile": "pixel_6",
+              },
+              "startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "workflow": {
+                  "sha": os.environ.get("GITHUB_SHA"),
+                  "runId": os.environ.get("GITHUB_RUN_ID"),
+                  "runAttempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              },
+              "scope": "Environment discovery only; no backup, download, or import acceptance claim.",
+          }
+          (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Check out only the probe branch
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Require KVM access
+        id: kvm
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm
+          sudo chmod 666 /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+
+      - name: Inspect a fresh image with a real external browser
+        id: emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: ${{ matrix.target }}
+          profile: pixel_6
+          avd-name: browser-probe-${{ matrix.target }}
+          force-avd-creation: true
+          emulator-port: 5554
+          emulator-boot-timeout: 600
+          disable-linux-hw-accel: false
+          disable-animations: true
+          emulator-options: -accel on -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-back none
+          script: python3 scripts/browser-backup-probe.py --target "$PROBE_TARGET" --output "$PROBE_OUTPUT" --serial emulator-5554
+
+      - name: Finalize machine readable outcome even after setup failure
+        if: always()
+        shell: bash
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          KVM_OUTCOME: ${{ steps.kvm.outcome }}
+          EMULATOR_OUTCOME: ${{ steps.emulator.outcome }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime, json, os
+          from pathlib import Path
+          output = Path(os.environ["PROBE_OUTPUT"])
+          output.mkdir(parents=True, exist_ok=True)
+          path = output / "report.json"
+          try:
+              report = json.loads(path.read_text(encoding="utf-8"))
+          except (OSError, ValueError):
+              report = {"schemaVersion": 1, "status": "report_missing_or_invalid", "browserAvailable": False,
+                        "availabilityReason": "probe_report_missing_or_invalid", "target": os.environ["PROBE_TARGET"]}
+          report.setdefault("workflow", {}).update({
+              "checkoutOutcome": os.environ["CHECKOUT_OUTCOME"],
+              "kvmOutcome": os.environ["KVM_OUTCOME"],
+              "emulatorOutcome": os.environ["EMULATOR_OUTCOME"],
+          })
+          if report.get("status") == "not_started":
+              report["status"] = "setup_failed_or_cancelled"
+          elif report.get("status") == "running":
+              report.update(status="probe_interrupted", browserAvailable=False,
+                            availabilityReason="probe_interrupted_before_conclusion")
+          report["workflowFinishedAt"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+          path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
+              summary.write("### Browser probe: " + os.environ["PROBE_TARGET"] + "\n\n")
+              summary.write("- Browser available: `" + str(report.get("browserAvailable", False)).lower() + "`\n")
+              summary.write("- Reason: `" + str(report.get("availabilityReason", "unknown")) + "`\n")
+              summary.write("- Scope: environment only; backup Blob/download/import are not validated.\n")
+          PY
+
+      - name: Always upload credential free probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-environment-${{ matrix.target }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ env.PROBE_OUTPUT }}/
+          if-no-files-found: error
+          retention-days: 7
