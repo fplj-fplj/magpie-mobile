@@ -176,7 +176,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gradle :app:assembleDebug :app:assembleDebugAndroidTest -PmagpieTestAbi=x86_64 --no-daemon --stacktrace --build-cache
+          # Compressing the Go/Bun ELF payloads exhausted the default 2 GiB heap.
+          # This pre-emulator packaging process is bounded independently of the AVD.
+          gradle :app:assembleDebug :app:assembleDebugAndroidTest -PmagpieTestAbi=x86_64 -Dorg.gradle.jvmargs=-Xmx4g --max-workers=2 --no-daemon --stacktrace --build-cache
           python3 scripts/runtimeprobe.py --apk app/build/outputs/apk/debug/app-debug.apk --abi x86_64 | tee "$BROWSER_ACCEPTANCE_OUTPUT/payloads/android-runtime-probe.txt"
           sha256sum app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk > "$BROWSER_ACCEPTANCE_OUTPUT/payloads/test-apks.sha256"
 
