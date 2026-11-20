@@ -37,6 +37,10 @@ Python patch fixture 同时核对新增补丁与平台常量的打包约束。Go
 
 同次 Android 报告为 23 项中 1 项失败，错误日志为空：`OfficialPluginsInstrumentedTest` 仍断言旧核心 `androidhost.2`，实际安装载荷已为 `androidhost.3`，导致该项后续插件集成未执行。现已精确更新本次安装测试的预期版本；旧版本解析 fixture 保留。必须在修订提交上重跑完整 Validation，不能把该次 Android 任务计为通过。
 
+修订 `bea57ef70e46f287931c670b5e949e8bab54a29c` 的 Validation `44796417575` 中，regression 任务通过；Android 实际 Go／Bun 插件运行证据为 PASS，23 项中 22 项通过、1 项失败，无跳过，AndroidRuntime 错误日志为空。失败发生在 `ProviderPanelInstrumentedTest` 的初始列表等待：语义读取经 Espresso idle 进入绘制时出现 `performMeasureAndLayout called during measure layout`，尚未打开密钥编辑器或执行复制。该测试和提供商页面从已验证的 0.1.62 源码未变，前一轮同项完整通过；现有栈不足以确定底层触发器，不能归因为备份或剪贴板缺陷。
+
+本次仅收敛测试同步：启用行的有界等待不再嵌套 Compose 的 frame-advancing `waitUntil` 与已自行同步的语义读取，改用墙钟超时；先确认唯一启用行，再断言只发起一次 GET。仍不捕获、重试或忽略布局异常，产品 UI 与断言强度不变。此调整须在新源码提交的完整 Actions 上验证，未将一次重跑成功视为底层触发器已修复。
+
 ## 真实 Android 浏览器验收门槛
 
 独立分支 `browser-backup-probe` 的环境探针只调查 API35 x86_64 官方 `google_apis`／`google_apis_playstore` 镜像：真实 HTTP handler、独立浏览器前台、无凭据 loopback 页面、截图、UI hierarchy、浏览器与 DocumentsUI 版本。它不安装产品 App，不执行备份，因此不能代替下面的往返验收。

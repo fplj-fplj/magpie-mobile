@@ -2,6 +2,7 @@ package cc.fplj.magpiemobile
 
 import android.content.ClipData
 import android.content.ClipDescription
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
@@ -457,8 +458,8 @@ class ProviderPanelInstrumentedTest {
         }
         try {
             if (awaitList) {
-                compose.waitUntil(10_000) { peer.listCount == 1 }
                 awaitEnabled(ROW)
+                assertEquals("The enabled initial list must come from one GET", 1, peer.listCount)
             }
             block {
                 // Dashboard's ON_RESUME awaits invalidation before publishing the return.
@@ -488,10 +489,17 @@ class ProviderPanelInstrumentedTest {
     }
 
     private fun awaitEnabled(tag: String) {
-        compose.waitUntil(10_000) {
-            compose.onAllNodesWithTag(tag).fetchSemanticsNodes().singleOrNull()
-                ?.config?.contains(SemanticsProperties.Disabled) == false
+        // Semantics reads already synchronize with Compose/Espresso. Keep the
+        // polling deadline outside Compose's frame-advancing waitUntil to avoid
+        // nesting two idle/frame drivers while the first HTTP list is laid out.
+        // Any layout/idling exception still fails immediately; none is retried.
+        val deadline = SystemClock.uptimeMillis() + 10_000
+        while (SystemClock.uptimeMillis() < deadline) {
+            val node = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().singleOrNull()
+            if (node != null && !node.config.contains(SemanticsProperties.Disabled)) return
+            SystemClock.sleep(25)
         }
+        throw AssertionError("Timed out waiting for one enabled provider control: $tag")
     }
 
     private fun awaitText(text: String) {
