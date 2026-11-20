@@ -31,7 +31,8 @@ class GatewayServiceReporterTest {
     }
 
     @Test fun startingAndRunningTailRefreshesDoNotRepeatLifecycleOrReadyMetrics() {
-        val owner = GatewayRuntime.attach()
+        val lease = checkNotNull(GatewayRuntime.tryClaimStart())
+        val owner = lease.owner
         val effects = Effects()
         val reporter = GatewayServiceReporter(owner, effects)
         reporter.report(Status(Phase.STARTING, "starting", outputTail = "first startup output\n"))
@@ -61,7 +62,8 @@ class GatewayServiceReporterTest {
     }
 
     @Test fun restartCountDistinguishesAttemptsWhileSamePhaseOutputStaysDiagnosticOnly() {
-        val owner = GatewayRuntime.attach()
+        val lease = checkNotNull(GatewayRuntime.tryClaimStart())
+        val owner = lease.owner
         val effects = Effects()
         val reporter = GatewayServiceReporter(owner, effects)
         reporter.report(Status(Phase.STARTING, "first start"))
@@ -88,11 +90,14 @@ class GatewayServiceReporterTest {
     }
 
     @Test fun staleOwnerReportsStopAndRetirementHaveNoEffectsOnTheNewService() {
-        val old = GatewayRuntime.attach()
+        val old = checkNotNull(GatewayRuntime.tryClaimStart())
         val effects = Effects()
-        val reporter = GatewayServiceReporter(old, effects)
-        val current = GatewayRuntime.attach()
-        GatewayRuntime.publish(current, Status(Phase.RUNNING, "new service", outputTail = "new output\n"))
+        val reporter = GatewayServiceReporter(old.owner, effects)
+        assertTrue(GatewayRuntime.beginCleanup(old.owner))
+        assertTrue(GatewayRuntime.cleanupCompleted(old))
+        assertTrue(GatewayRuntime.requestStart())
+        val current = checkNotNull(GatewayRuntime.tryClaimStart())
+        GatewayRuntime.publish(current.owner, Status(Phase.RUNNING, "new service", outputTail = "new output\n"))
         val before = GatewayRuntime.status.value
         assertNull(reporter.report(Status(Phase.FAILED, "old failure", outputTail = "old output\n", exitCode = 137)))
         assertFalse(reporter.requestStop())
@@ -111,7 +116,8 @@ class GatewayServiceReporterTest {
     }
 
     @Test fun stopBarrierRetainsFinalDiagnosticsWithoutLateLifecycleEffectsOrEarlyRestart() {
-        val owner = GatewayRuntime.attach()
+        val lease = checkNotNull(GatewayRuntime.tryClaimStart())
+        val owner = lease.owner
         val effects = Effects()
         val reporter = GatewayServiceReporter(owner, effects)
         reporter.report(Status(Phase.RUNNING, "ready", outputTail = "before stop\n"))
@@ -127,6 +133,15 @@ class GatewayServiceReporterTest {
         assertEquals(137, GatewayRuntime.status.value.exitCode)
         assertTrue(GatewayRuntime.stopping.value)
         assertFalse(GatewayRuntime.requestStart())
+        val finalEvidence = GatewayRuntime.status.value
+        repeat(8) {
+            assertTrue(reporter.requestStop())
+            assertEquals(owner, GatewayRuntime.requestStop())
+            assertNull(GatewayRuntime.tryClaimStart())
+            assertFalse(GatewayRuntime.cleanupCompleted(ServiceLease(owner)))
+            assertTrue(GatewayRuntime.stopping.value)
+            assertEquals(finalEvidence, GatewayRuntime.status.value)
+        }
         assertEquals(1, effects.suspends.get())
         assertEquals(1, effects.connects.get())
         assertEquals(1, effects.readies.get())
@@ -134,7 +149,7 @@ class GatewayServiceReporterTest {
         assertEquals(1, effects.notifications.size)
         assertEquals(0, effects.stops.get())
         assertTrue(effects.audits.isEmpty())
-        GatewayRuntime.cleanupCompleted(owner)
+        assertTrue(GatewayRuntime.cleanupCompleted(lease))
         assertEquals(Phase.STOPPED, GatewayRuntime.status.value.phase)
         assertEquals("final output\n", GatewayRuntime.status.value.outputTail)
         assertEquals(137, GatewayRuntime.status.value.exitCode)
@@ -147,7 +162,8 @@ class GatewayServiceReporterTest {
     }
 
     @Test fun anExternalRuntimeStopAlsoRejectsReportsBeforeServiceRetirementRuns() {
-        val owner = GatewayRuntime.attach()
+        val lease = checkNotNull(GatewayRuntime.tryClaimStart())
+        val owner = lease.owner
         val effects = Effects()
         val reporter = GatewayServiceReporter(owner, effects)
         GatewayRuntime.requestStop() // MainActivity can place the barrier before onDestroy.
@@ -158,11 +174,12 @@ class GatewayServiceReporterTest {
         assertTrue(effects.logs.isEmpty())
         assertTrue(effects.notifications.isEmpty())
         assertEquals("last output\n", GatewayRuntime.status.value.outputTail)
-        GatewayRuntime.cleanupCompleted(owner)
+        GatewayRuntime.cleanupCompleted(lease)
     }
 
     @Test fun failedLifecycleAuditsAndStopsOnceWhileRetirementKeepsReasonAndFinalEvidence() {
-        val owner = GatewayRuntime.attach()
+        val lease = checkNotNull(GatewayRuntime.tryClaimStart())
+        val owner = lease.owner
         val effects = Effects()
         val reporter = GatewayServiceReporter(owner, effects)
         reporter.report(Status(Phase.FAILED, "startup timeout", outputTail = "failure output\n", exitCode = 23))
@@ -172,7 +189,7 @@ class GatewayServiceReporterTest {
         assertTrue(reporter.retire { disconnects.incrementAndGet() })
         assertTrue(GatewayRuntime.stopping.value)
         assertNull(reporter.report(Status(Phase.STOPPED, "cleanup stopped", outputTail = "final output\n", exitCode = 23)))
-        GatewayRuntime.cleanupCompleted(owner)
+        GatewayRuntime.cleanupCompleted(lease)
         assertEquals(Phase.FAILED, GatewayRuntime.status.value.phase)
         assertEquals("startup timeout", GatewayRuntime.status.value.message)
         assertEquals("final output\n", GatewayRuntime.status.value.outputTail)
@@ -189,8 +206,10 @@ class GatewayServiceReporterTest {
         val directory = Files.createTempDirectory("magpie-reporter-audit").toFile()
         try {
             val auditor = PostMortemAuditor(directory)
-            for (exitCode in listOf<Int?>(23, 137, null)) {
-                val owner = GatewayRuntime.attach()
+            for ((index, exitCode) in listOf<Int?>(23, 137, null).withIndex()) {
+                if (index > 0) assertTrue(GatewayRuntime.requestStart())
+                val lease = checkNotNull(GatewayRuntime.tryClaimStart())
+                val owner = lease.owner
                 val effects = Effects(auditor)
                 val reporter = GatewayServiceReporter(owner, effects)
                 val secret = "sk-NmBMmXsNb7RwSwK9sIuCuEc5QWxy"
@@ -211,12 +230,16 @@ class GatewayServiceReporterTest {
                 reporter.report(Status(Phase.FAILED, "process exited", outputTail = "tail only\n", exitCode = exitCode))
                 assertEquals(before, directory.resolve(PostMortemAuditor.AUDIT_FILE_NAME).readText())
                 assertEquals(1, effects.audits.size)
+                assertFalse(GatewayRuntime.requestStart())
+                assertTrue(GatewayRuntime.beginCleanup(owner))
+                assertTrue(GatewayRuntime.cleanupCompleted(lease))
             }
         } finally { directory.deleteRecursively() }
     }
 
     @Test fun concurrentStopWaitsForAcceptedReportWithoutLateConnectAndFinalReportNeedsNoMain() {
-        val owner = GatewayRuntime.attach()
+        val lease = checkNotNull(GatewayRuntime.tryClaimStart())
+        val owner = lease.owner
         val enteredConnect = CountDownLatch(1)
         val releaseConnect = CountDownLatch(1)
         val stopStarted = CountDownLatch(1)
@@ -257,7 +280,7 @@ class GatewayServiceReporterTest {
             assertEquals("final\n", GatewayRuntime.status.value.outputTail)
             assertEquals(23, GatewayRuntime.status.value.exitCode)
             assertTrue(GatewayRuntime.stopping.value)
-            GatewayRuntime.cleanupCompleted(owner)
+            GatewayRuntime.cleanupCompleted(lease)
         } finally {
             releaseConnect.countDown()
             reporting.join(5000)

@@ -48,6 +48,11 @@ class OfficialPluginsInstrumentedTest {
     private val device = UiDevice.getInstance(instrumentation)
 
     @Test fun officialPluginsExecuteInInstalledAndroidApk() {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            instrumentation.uiAutomation.grantRuntimePermission(
+                context.packageName, android.Manifest.permission.POST_NOTIFICATIONS,
+            )
+        }
         val artifacts = File(context.getExternalFilesDir(null), "plugin-runtime").apply { mkdirs() }
         val fixtures = File(context.filesDir, "runtime-fixtures").apply { mkdirs() }
         val responseMarker = File(context.filesDir, "runtime-hook-response.jsonl")
@@ -725,6 +730,13 @@ class OfficialPluginsInstrumentedTest {
                     val stoppedLease = NativeCoreSession.gatewayRequest(stoppedOwner)
                     val stoppedProviderLease = NativeCoreSession.providerRequest(stoppedProviderSession)
                     val stoppedPluginLease = NativeCoreSession.pluginRequest(stoppedProviderSession)
+                    val notificationStop = requireNotNull(
+                        context.getSystemService(android.app.NotificationManager::class.java)
+                            .activeNotifications.single { it.id == 41 }.notification.actions
+                            .single { it.title.toString() == "停止网关" }.actionIntent,
+                    )
+                    val stopPreferences = cc.fplj.magpiemobile.preferences.AppUiPreferences.open(context)
+                    val beforeStopRevision = stopPreferences.state.value.value.intentRevision
                     try {
                         stoppedLease.ensureCurrent()
                         stoppedProviderLease.ensureCurrent()
@@ -760,6 +772,11 @@ class OfficialPluginsInstrumentedTest {
                         stoppedPluginLease.close()
                     }
                     assertTrue(device.takeScreenshot(File(artifacts, "gateway-off-after-toggle.png")))
+                    await("original UI STOP intent persisted before notification replays") {
+                        stopPreferences.state.value.value.intentRevision > beforeStopRevision &&
+                            stopPreferences.state.value.value.gatewayIntent == cc.fplj.magpiemobile.preferences.GatewayIntent.STOP
+                    }
+                    verifyStopReplayCleanup(scenario, notificationStop, artifacts)
                     verifyRealProcessExitDiagnostics(artifacts)
                     File(artifacts, "result.txt").writeText("PASS: real Android Go+Bun provider login, tool execution, middleware, async hooks, nonstream and live SSE\n")
                 } finally {
@@ -803,6 +820,112 @@ class OfficialPluginsInstrumentedTest {
                     }
                 }
             }
+        }
+    }
+
+    /** Real Android STOP deliveries against a controlled, still-owned late launch; no core hooks. */
+    private fun verifyStopReplayCleanup(
+        scenario: ActivityScenario<MainActivity>,
+        notificationStop: android.app.PendingIntent,
+        artifacts: File,
+    ) {
+        fun serviceAbsent(): Boolean = context.getSystemService(android.app.ActivityManager::class.java)
+            .getRunningServices(100).none { it.service.className == GatewayService::class.java.name }
+        await("actual gateway Service destruction before controlled cleanup") { serviceAbsent() }
+        assertTrue(GatewayRuntime.requestStart())
+        val lease = requireNotNull(GatewayRuntime.tryClaimStart())
+        val owner = lease.owner
+        val releaseLaunch = CountDownLatch(1)
+        val launchEntered = CountDownLatch(1)
+        val launches = AtomicInteger()
+        val reporter = GatewayServiceReporter(owner, object : GatewayServiceEffects {
+            override fun ready() = Unit
+            override fun connect() = Unit
+            override fun suspend() = Unit
+            override fun audit(status: GatewayEngineController.Status) = Unit
+            override fun log(status: GatewayEngineController.Status) = Unit
+            override fun notify(status: GatewayEngineController.Status) = Unit
+            override fun stopSelf() = Unit
+        })
+        val controller = GatewayEngineController(
+            launch = {
+                launches.incrementAndGet()
+                launchEntered.countDown()
+                // A real ProcessBuilder can return after cancellation. Hold that boundary without
+                // letting the controller's stop interrupt masquerade as completed cleanup.
+                val deadline = SystemClock.elapsedRealtime() + 300_000
+                while (releaseLaunch.count != 0L) {
+                    val remaining = deadline - SystemClock.elapsedRealtime()
+                    check(remaining > 0) { "controlled launch gate timed out" }
+                    try { releaseLaunch.await(remaining, TimeUnit.MILLISECONDS) }
+                    catch (_: InterruptedException) { /* release only through the test gate */ }
+                }
+                ProcessBuilder("/system/bin/sh", "-c", "exit 23").start()
+            },
+            ready = { false }, report = { reporter.report(it) }, pollIntervalMs = 10,
+            supervisor = EngineSupervisor(maxAutoRestart = 0),
+        )
+        val evidence = StringBuilder()
+        try {
+            assertTrue(controller.start())
+            assertTrue(launchEntered.await(10, TimeUnit.SECONDS))
+            GatewayRuntime.publish(owner, GatewayRuntime.status.value.copy(outputTail = "controlled-cleanup-marker\n"))
+            assertTrue(reporter.requestStop())
+            assertTrue(reporter.retire { NativeCoreSession.disconnect(owner) })
+            controller.stop()
+            assertFalse(controller.awaitStopped(0))
+            val waiting = GatewayRuntime.status.value
+            val nativeBefore = NativeCoreSession.status.value
+            val preferences = cc.fplj.magpiemobile.preferences.AppUiPreferences.open(context)
+            await("loaded intent revision before STOP replay") { preferences.state.value.ready }
+            repeat(3) { index ->
+                val revision = preferences.state.value.value.intentRevision
+                notificationStop.send()
+                // This persisted revision proves the real Service handled this exact STOP,
+                // rather than observing the already-absent Service before Binder delivered it.
+                await("notification STOP replay $index processed") {
+                    preferences.state.value.value.intentRevision > revision &&
+                        preferences.state.value.value.gatewayIntent == cc.fplj.magpiemobile.preferences.GatewayIntent.STOP
+                }
+                await("STOP-only Service destroyed after replay $index") { serviceAbsent() }
+                assertTrue(GatewayRuntime.isCurrent(owner))
+                assertTrue(GatewayRuntime.stopping.value)
+                assertFalse(GatewayRuntime.requestStart())
+                assertNull(GatewayRuntime.tryClaimStart())
+                assertFalse(controller.awaitStopped(0))
+                assertEquals(waiting, GatewayRuntime.status.value)
+                assertEquals(nativeBefore, NativeCoreSession.status.value)
+                assertEquals(1, launches.get())
+                evidence.append("PASS: captured real notification STOP replay $index reached a new Android Service and persisted its intent; original lease, diagnostics, Native state and cleanup barrier preserved\n")
+            }
+            assertFalse("test requires an actually absent Android Service", context.stopService(Intent(context, GatewayService::class.java)))
+            scenario.onActivity { it.stopGateway() }
+            assertTrue(GatewayRuntime.stopping.value)
+            assertTrue(GatewayRuntime.isCurrent(owner))
+            assertFalse(GatewayRuntime.requestStart())
+            assertFalse(controller.awaitStopped(0))
+            assertEquals(waiting, GatewayRuntime.status.value)
+            evidence.append("PASS: actual Activity stop callback with no Android Service did not complete the outstanding controlled worker\n")
+            releaseLaunch.countDown()
+            assertTrue("late real Android shell process cleanup timed out", controller.awaitStopped(10_000))
+            assertTrue("only the actual lease may complete cleanup", GatewayRuntime.cleanupCompleted(lease))
+            assertFalse(GatewayRuntime.stopping.value)
+            assertFalse(GatewayRuntime.isCurrent(owner))
+            assertEquals(GatewayEngineController.Phase.STOPPED, GatewayRuntime.status.value.phase)
+            assertEquals("controlled-cleanup-marker\n", GatewayRuntime.status.value.outputTail)
+            assertNotNull(GatewayRuntime.status.value.exitCode)
+            assertTrue(GatewayRuntime.requestStart())
+            assertEquals(1, launches.get())
+            GatewayRuntime.requestStop() // Cancel the pending start; do not launch another core.
+            evidence.append("PASS: released late ProcessBuilder launch exited and worker completed; exact lease alone reopened explicit start, with final marker and observed process exit code\n")
+            File(artifacts, "gateway-stop-replay-cleanup.txt").writeText(evidence.toString())
+        } finally {
+            releaseLaunch.countDown()
+            reporter.retire { NativeCoreSession.disconnect(owner) }
+            controller.stop()
+            assertTrue("controlled cleanup must finish before teardown", controller.awaitStopped(10_000))
+            GatewayRuntime.cleanupCompleted(lease)
+            GatewayRuntime.requestStop()
         }
     }
 
@@ -850,7 +973,8 @@ class OfficialPluginsInstrumentedTest {
         try {
             for (code in listOf(23, 137)) {
                 assertTrue(GatewayRuntime.requestStart())
-                val owner = GatewayRuntime.attach()
+                val lease = requireNotNull(GatewayRuntime.tryClaimStart())
+                val owner = lease.owner
                 val reporter = GatewayServiceReporter(owner, object : GatewayServiceEffects {
                     override fun ready() = Unit
                     override fun connect() = Unit
@@ -885,7 +1009,7 @@ class OfficialPluginsInstrumentedTest {
                     reporter.retire { }
                     controller.stop()
                     assertTrue(controller.awaitStopped(10_000))
-                    GatewayRuntime.cleanupCompleted(owner)
+                    GatewayRuntime.cleanupCompleted(lease)
                 }
             }
             File(artifacts, "gateway-exit-diagnostics.txt").writeText(evidence.toString())

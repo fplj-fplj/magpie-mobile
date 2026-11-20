@@ -5,6 +5,9 @@ import cc.fplj.magpiemobile.core.SecretRedactor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/** A Service keeps this exact instance until its controller has actually finished cleanup. */
+internal class ServiceLease internal constructor(val owner: Long)
+
 /** Service owns the engine. Activity and healthz observe the same immutable status. */
 object GatewayRuntime {
     private val mutableStatus = MutableStateFlow(
@@ -12,21 +15,28 @@ object GatewayRuntime {
     )
     val status = mutableStatus.asStateFlow()
     private var generation = 0L
+    private var activeLease: ServiceLease? = null
     private val mutableStopping = MutableStateFlow(false)
     val stopping = mutableStopping.asStateFlow()
     private var stopRequested = false
 
+    /** Only a verified fresh START may claim the pending intent; cleanup keeps its lease. */
     @Synchronized
-    fun attach(): Long {
+    internal fun tryClaimStart(): ServiceLease? {
+        if (activeLease != null || mutableStopping.value || stopRequested ||
+            mutableStatus.value.phase != GatewayEngineController.Phase.STARTING
+        ) return null
         generation += 1
+        val lease = ServiceLease(generation)
+        activeLease = lease
         mutableStatus.value = GatewayEngineController.Status(
             GatewayEngineController.Phase.STARTING, "前台服务已创建，正在检查载荷…",
         )
-        return generation
+        return lease
     }
 
     @Synchronized
-    fun isCurrent(owner: Long): Boolean = owner == generation
+    fun isCurrent(owner: Long): Boolean = activeLease?.owner == owner
 
     /** Returns a safe accepted lifecycle snapshot; rejected events can only merge final diagnostics. */
     @Synchronized
@@ -35,7 +45,7 @@ object GatewayRuntime {
         status: GatewayEngineController.Status,
         allowLifecycle: Boolean = true,
     ): GatewayEngineController.Status? {
-        if (owner != generation) return null
+        if (activeLease?.owner != owner) return null
         val safe = status.copy(
             message = SecretRedactor.redactDiagnostic(status.message),
             outputTail = SecretRedactor.redactDiagnostic(status.outputTail).takeLast(MAX_OUTPUT_TAIL),
@@ -56,7 +66,7 @@ object GatewayRuntime {
 
     @Synchronized
     fun requestStart(): Boolean {
-        if (mutableStopping.value) return false
+        if (activeLease != null || mutableStopping.value) return false
         val phase = mutableStatus.value.phase
         if (phase == GatewayEngineController.Phase.RUNNING ||
             phase == GatewayEngineController.Phase.STARTING ||
@@ -71,14 +81,26 @@ object GatewayRuntime {
     @Synchronized
     fun requestStop(): Long {
         stopRequested = true
-        beginCleanup(generation)
+        val lease = activeLease
+        if (lease != null) {
+            beginCleanup(lease.owner)
+        } else {
+            // No Service owns a process or late launch. A stopService(false) result is not
+            // cleanup proof when a lease exists, so only this atomic no-owner case settles here.
+            mutableStopping.value = false
+            if (mutableStatus.value.phase != GatewayEngineController.Phase.FAILED) {
+                mutableStatus.value = mutableStatus.value.copy(
+                    phase = GatewayEngineController.Phase.STOPPED, message = "网关已停止",
+                )
+            }
+        }
         return generation
     }
 
     /** Service retirement must not turn an abnormal exit into an explicit user stop. */
     @Synchronized
     fun beginCleanup(owner: Long): Boolean {
-        if (owner != generation) return false
+        if (activeLease?.owner != owner) return false
         mutableStopping.value = true
         if (mutableStatus.value.phase != GatewayEngineController.Phase.FAILED) {
             mutableStatus.value = mutableStatus.value.copy(message = "正在停止并回收进程…")
@@ -89,14 +111,17 @@ object GatewayRuntime {
     @Synchronized
     fun mustStop(): Boolean = stopRequested
 
+    /** Completion is proof from the owning Service, never an Android stopService result. */
     @Synchronized
-    fun cleanupCompleted(owner: Long) {
-        if (owner != generation) return
+    internal fun cleanupCompleted(lease: ServiceLease): Boolean {
+        if (activeLease !== lease) return false
         val failed = mutableStatus.value.phase == GatewayEngineController.Phase.FAILED
+        activeLease = null
         mutableStopping.value = false
         if (!failed) mutableStatus.value = mutableStatus.value.copy(
             phase = GatewayEngineController.Phase.STOPPED, message = "网关已停止（进程清理完成）",
         )
+        return true
     }
 
     @Synchronized
@@ -107,9 +132,11 @@ object GatewayRuntime {
         )
     }
 
+    /** Test reset only; production must retire and complete the actual Service lease. */
     @Synchronized
     fun stoppedWithoutService() {
         mutableStopping.value = false; stopRequested = true
+        activeLease = null
         generation += 1
         mutableStatus.value = mutableStatus.value.copy(
             phase = GatewayEngineController.Phase.STOPPED, message = "网关已停止",

@@ -25,18 +25,37 @@ import java.net.Socket
 /** A foreground owner, with process lifecycle handled by the regression-tested controller. */
 class GatewayService : Service() {
     private var controller: GatewayEngineController? = null
-    private var owner = 0L
-    private lateinit var reporter: GatewayServiceReporter
+    private var lease: ServiceLease? = null
+    private var reporter: GatewayServiceReporter? = null
     @Volatile private var foregroundReady = false
+    private var foregroundFailure: Exception? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val adminKey = ByteArray(32).also(java.security.SecureRandom()::nextBytes)
         .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
 
     override fun onCreate() {
         super.onCreate()
-        owner = GatewayRuntime.attach()
-        NativeCoreSession.attach(owner, adminKey)
-        reporter = GatewayServiceReporter(owner, object : GatewayServiceEffects {
+        // Android requires foreground promotion promptly, before any payload or controller work.
+        // A Service created only for STOP/replay must never claim the preceding run's cleanup.
+        try {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Magpie 网关", NotificationManager.IMPORTANCE_LOW),
+            )
+            val notification = notification("正在处理网关请求…")
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            foregroundReady = true
+        } catch (e: Exception) {
+            // Publish only if onStartCommand later proves this is an authorized fresh START.
+            foregroundFailure = e
+        }
+    }
+
+    private fun createReporter(owner: Long): GatewayServiceReporter =
+        GatewayServiceReporter(owner, object : GatewayServiceEffects {
             override fun ready() = cc.fplj.magpiemobile.core.StartupBenchmark.recordGatewayReady()
             override fun connect() = NativeCoreSession.connect(owner, filesDir)
             override fun suspend() = NativeCoreSession.suspend(owner)
@@ -64,24 +83,6 @@ class GatewayService : Service() {
                 }
             }
         })
-        try {
-            getSystemService(NotificationManager::class.java).createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Magpie 网关", NotificationManager.IMPORTANCE_LOW),
-            )
-            val notification = notification("正在启动网关…")
-            if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
-            foregroundReady = true
-        } catch (e: Exception) {
-            report(GatewayEngineController.Status(
-                GatewayEngineController.Phase.FAILED,
-                "前台服务启动失败：" + (e.message ?: e.javaClass.simpleName),
-            ))
-        }
-    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val decision = GatewayActionPolicy.decide(
@@ -95,14 +96,11 @@ class GatewayService : Service() {
         when (decision.operation) {
             GatewayActionPolicy.Operation.STOP -> {
                 // Stop immediately; no preference await or persistence retry may delay shutdown.
-                reporter.requestStop()
+                val currentReporter = reporter
+                if (currentReporter != null) currentReporter.requestStop() else GatewayRuntime.requestStop()
                 // Never acquire/wait for the controller while holding the report/retirement lock.
                 controller?.stop()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                try {
-                    getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
-                } catch (_: Exception) {}
-                stopSelf()
+                stopThisService()
                 if (decision.recordStopIntent) {
                     try {
                         // This only enqueues a process-owned FIFO write; it does not wait for disk.
@@ -114,17 +112,34 @@ class GatewayService : Service() {
                 return START_NOT_STICKY
             }
             GatewayActionPolicy.Operation.STOP_SELF -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                try {
-                    getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
-                } catch (_: Exception) {}
-                stopSelf()
-                return START_NOT_STICKY
+                // A real requested START still owns its foreground failure diagnosis. All other
+                // rejected commands remain ownerless, including null, unknown and replay START.
+                if (intent?.action != ACTION_START || flags != 0) {
+                    stopThisService()
+                    return START_NOT_STICKY
+                }
             }
             GatewayActionPolicy.Operation.KEEP_RUNNING -> return START_NOT_STICKY
             GatewayActionPolicy.Operation.START -> Unit
         }
-        controller = GatewayEngineController(
+        val claimed = GatewayRuntime.tryClaimStart()
+        if (claimed == null) {
+            stopThisService()
+            return START_NOT_STICKY
+        }
+        lease = claimed
+        NativeCoreSession.attach(claimed.owner, adminKey)
+        reporter = createReporter(claimed.owner)
+        if (!foregroundReady) {
+            val detail = foregroundFailure?.let { it.message ?: it.javaClass.simpleName } ?: "前台服务未就绪"
+            report(GatewayEngineController.Status(
+                GatewayEngineController.Phase.FAILED,
+                "前台服务启动失败：$detail",
+            ))
+            stopThisService()
+            return START_NOT_STICKY
+        }
+        val created = GatewayEngineController(
             launch = {
                 val layout = EnginePaths.buildLayout(applicationInfo.nativeLibraryDir, filesDir, cacheDir)
                 val expectedArch = PayloadVerifier.Architecture.fromSupportedAbi(Build.SUPPORTED_ABIS)
@@ -152,12 +167,28 @@ class GatewayService : Service() {
             },
             ready = { listening(EngineCommand.DEFAULT_GATEWAY_PORT) && listening(EngineCommand.DEFAULT_ADMIN_PORT) },
             report = ::report,
-        ).also { it.start() }
+        )
+        // Keep the cleanup owner reachable even when start synchronously reports a failure.
+        controller = created
+        created.start()
         return START_NOT_STICKY
     }
 
     private fun report(status: GatewayEngineController.Status) {
-        reporter.report(status)
+        reporter?.report(status)
+    }
+
+    private fun removeForegroundNotification() {
+        foregroundReady = false
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        try {
+            getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+        } catch (_: Exception) {}
+    }
+
+    private fun stopThisService() {
+        removeForegroundNotification()
+        stopSelf()
     }
 
     private fun notification(message: String): Notification {
@@ -176,24 +207,20 @@ class GatewayService : Service() {
 
     override fun onDestroy() {
         // Preserve startup failures on screen; stopping a failed service must not overwrite FAILED.
+        val stoppedLease = lease
         val stoppedController = controller
-        reporter.retire { NativeCoreSession.disconnect(owner) }
-        // Reports may still merge final diagnostics; they cannot reconnect or run effects now.
-        stoppedController?.stop()
-        val stoppedOwner = owner
-        Thread({
-            if (stoppedController == null || stoppedController.awaitStopped(6000)) GatewayRuntime.cleanupCompleted(stoppedOwner)
-            else {
-                // Keep restart disabled until the owned worker has actually finished.
-                while (!stoppedController.awaitStopped(6000)) { if (!GatewayRuntime.isCurrent(stoppedOwner)) return@Thread }
-                GatewayRuntime.cleanupCompleted(stoppedOwner)
-            }
-        }, "MagpieStopCleanup").apply { isDaemon = true; start() }
-        foregroundReady = false
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        try {
-            getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
-        } catch (_: Exception) {}
+        if (stoppedLease != null) {
+            reporter?.retire { NativeCoreSession.disconnect(stoppedLease.owner) }
+            // Reports may still merge final diagnostics; they cannot reconnect or run effects now.
+            stoppedController?.stop()
+            Thread({
+                while (stoppedController != null && !stoppedController.awaitStopped(6000)) {
+                    if (!GatewayRuntime.isCurrent(stoppedLease.owner)) return@Thread
+                }
+                GatewayRuntime.cleanupCompleted(stoppedLease)
+            }, "MagpieStopCleanup").apply { isDaemon = true; start() }
+        }
+        removeForegroundNotification()
         super.onDestroy()
     }
 
