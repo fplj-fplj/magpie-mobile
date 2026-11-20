@@ -16,6 +16,6 @@
 
 ## 验证状态
 
-本机只进行了源码与差异静态审查及 `git diff --check`；未运行 Gradle、Kotlin/JVM、Go 或 Android 编译／测试。**GitHub Actions 尚未验证，本候选尚不能标记为可用或发布。** 完整 Validation、签名构建候选、实际测试报告和 APK 载荷核查均通过后，再补录实际结果并决定是否正式发布。
+本机只进行了源码与差异静态审查及 `git diff --check`；未运行 Gradle、Kotlin/JVM、Go 或 Android 编译／测试。提交 `a3e9a4a089327231e7f8989bcb1885f11333de0b` 的 [Validation run 44715579488](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44715579488) 已结束并失败，失败步骤为 “Run core and app JVM regression tests”。当前环境无法读取该步骤日志或报告 artifact，具体失败用例尚未确认；没有签名候选验收，也没有发布 Release。**本候选尚不能标记为可用。** 获取失败详情、修正后对更新提交完成全套 Validation 和签名构建产物核查，再决定是否正式发布。
 
 版本候选：`0.1.62-chat-session-clipboard-fixes`，versionCode 63，备份 metadata appVersion `0.1.62`；核心继续使用 `0.1.3781-androidhost.2`。
