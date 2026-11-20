@@ -54,6 +54,7 @@ class ProviderPanelInstrumentedTest {
             val first = peer.holdNextEdit(400)
             val second = peer.holdNextEdit(200)
             withPanel(peer) {
+                assertProviderSummary("启用 1 / 目录 1")
                 openEditor()
                 compose.onNodeWithText("高级").performClick()
                 compose.onNodeWithText("手动补充模型 ID").performScrollTo().performClick()
@@ -109,6 +110,7 @@ class ProviderPanelInstrumentedTest {
     @Test fun externalRevisionsWhileEditorIsOpenPreserveDraftAndTriggerOneFreshListAfterClose() {
         ProviderPanelHttpPeer().use { peer ->
             withPanel(peer) { returnedFromExternalEditor ->
+                assertProviderSummary("启用 1 / 目录 1")
                 openEditor()
                 compose.onNodeWithTag("provider-name").performTextReplacement("Unsaved provider draft")
                 peer.externalRename("External provider edit")
@@ -153,6 +155,7 @@ class ProviderPanelInstrumentedTest {
                 compose.waitUntil(10_000) { peer.listCount == 2 }
                 awaitText("External while GET was held")
                 awaitEnabled(ROW)
+                assertProviderSummary("启用 1 / 目录 1")
                 compose.onNodeWithText("External while GET was held").assertIsDisplayed()
                 compose.onNodeWithTag(ROW).assertIsEnabled()
                 compose.waitForIdle()
@@ -170,6 +173,7 @@ class ProviderPanelInstrumentedTest {
             discoveryModels = listOf(DIRECTORY_ONLY),
         ).use { peer ->
             withPanel(peer) {
+                assertProviderSummary("启用 2 / 目录 3")
                 openEditor()
                 enterUnsavedManualModel(peer, expectedAutomaticSelection = DIRECTORY_ONLY)
                 openConnectivityDialog()
@@ -198,6 +202,10 @@ class ProviderPanelInstrumentedTest {
                 compose.onNode(inConnectivityDialog("开始测试")).assertIsEnabled()
                 assertEquals(1, peer.listCount)
                 assertTrue("Changing a test model must not save the editor draft", peer.editRequests.isEmpty())
+                compose.onNode(inConnectivityDialog("关闭")).performClick()
+                compose.onNodeWithContentDescription("返回提供商列表").performClick()
+                awaitEditorClosed()
+                assertProviderSummary("启用 2 / 目录 3")
                 peer.assertHealthy()
                 // Do not start inference here: installed-Go instrumentation covers execution.
             }
@@ -212,10 +220,15 @@ class ProviderPanelInstrumentedTest {
             discoveryModels = listOf(DIRECTORY_ONLY),
         ).use { peer ->
             withPanel(peer) {
+                assertProviderSummary("启用 0 / 目录 1")
                 openEditor()
                 enterUnsavedManualModel(peer, expectedAutomaticSelection = "")
                 openConnectivityDialog()
                 assertNoSavedModelsCanBeTested(peer)
+                compose.onNode(inConnectivityDialog("关闭")).performClick()
+                compose.onNodeWithContentDescription("返回提供商列表").performClick()
+                awaitEditorClosed()
+                assertProviderSummary("启用 0 / 目录 1")
             }
         }
     }
@@ -229,10 +242,80 @@ class ProviderPanelInstrumentedTest {
             discoveryModels = listOf(DIRECTORY_ONLY),
         ).use { peer ->
             withPanel(peer) {
+                assertProviderSummary("启用 0 / 目录 1")
                 openEditor()
                 enterUnsavedManualModel(peer, expectedAutomaticSelection = DIRECTORY_ONLY)
                 openConnectivityDialog()
                 assertNoSavedModelsCanBeTested(peer)
+                compose.onNode(inConnectivityDialog("关闭")).performClick()
+                compose.onNodeWithContentDescription("返回提供商列表").performClick()
+                awaitEditorClosed()
+                assertProviderSummary("启用 0 / 目录 1")
+            }
+        }
+    }
+
+    @Test fun implicitAllUsesSavedExposedCountWhenTwentyFourOfTwentyFiveModelsAreEnabled() {
+        val models = (0 until 25).associate { index ->
+            "implicit-${index.toString().padStart(2, '0')}" to (index < 24)
+        }
+        ProviderPanelHttpPeer(
+            savedModels = emptyList(),
+            listedModels = models,
+            discoveryModels = listOf(DIRECTORY_ONLY),
+        ).use { peer ->
+            withPanel(peer) {
+                assertProviderSummary("启用 24 / 目录 25")
+                openEditor()
+                compose.waitUntil(10_000) { peer.modelDirectoryCount == 1 }
+                openConnectivityDialog()
+                compose.onNode(inConnectivityDialog("implicit-00")).assertIsDisplayed()
+                compose.onNode(inConnectivityDialog("开始测试")).assertIsEnabled()
+                assertEquals(1, peer.listCount)
+                assertTrue(peer.editRequests.isEmpty())
+                peer.assertHealthy()
+            }
+        }
+    }
+
+    @Test fun explicitChosenDoesNotOverrideSavedOnFlagsInProviderSummaryOrConnectivityCandidates() {
+        ProviderPanelHttpPeer(
+            savedModels = listOf(AUTO_FIRST),
+            listedModels = linkedMapOf(AUTO_FIRST to false, AUTO_SECOND to true),
+            discoveryModels = listOf(DIRECTORY_ONLY),
+        ).use { peer ->
+            withPanel(peer) {
+                assertProviderSummary("启用 1 / 目录 2")
+                openEditor()
+                compose.waitUntil(10_000) { peer.modelDirectoryCount == 1 }
+                openConnectivityDialog()
+                compose.onNode(inConnectivityDialog(AUTO_SECOND)).assertIsDisplayed()
+                compose.onNode(inConnectivityDialog("开始测试")).assertIsEnabled()
+                compose.onNode(inConnectivityDialog(AUTO_FIRST)).assertDoesNotExist()
+                assertEquals(1, peer.listCount)
+                assertTrue(peer.editRequests.isEmpty())
+                peer.assertHealthy()
+            }
+        }
+    }
+
+    @Test fun notReadyProviderShowsNotReadyAndCannotBeTestedDespiteEnabledMetadata() {
+        ProviderPanelHttpPeer(
+            listedModels = linkedMapOf(AUTO_FIRST to true),
+            ready = false,
+            discoveryModels = listOf(DIRECTORY_ONLY),
+        ).use { peer ->
+            withPanel(peer) {
+                assertProviderSummary("启用 0 / 目录 1")
+                assertProviderStatus("未就绪")
+                openEditor()
+                compose.waitUntil(10_000) { peer.modelDirectoryCount == 1 }
+                openConnectivityDialog()
+                compose.onNode(inConnectivityDialog(NO_SAVED_MODELS)).assertIsDisplayed()
+                compose.onNode(inConnectivityDialog("开始测试")).assertIsNotEnabled()
+                assertEquals(1, peer.listCount)
+                assertTrue(peer.editRequests.isEmpty())
+                peer.assertHealthy()
             }
         }
     }
@@ -256,6 +339,14 @@ class ProviderPanelInstrumentedTest {
             compose.onAllNodesWithTag("provider-connectivity-dialog").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithTag("provider-connectivity-dialog").assertIsDisplayed()
+    }
+
+    private fun assertProviderSummary(summary: String) {
+        compose.onNode(hasText(summary) and hasAnyAncestor(hasTestTag(ROW))).assertIsDisplayed()
+    }
+
+    private fun assertProviderStatus(status: String) {
+        compose.onNode(hasText(status) and hasAnyAncestor(hasTestTag(ROW))).assertIsDisplayed()
     }
 
     private fun assertNoSavedModelsCanBeTested(peer: ProviderPanelHttpPeer) {

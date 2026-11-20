@@ -21,6 +21,7 @@ internal class ProviderPanelHttpPeer(
     savedModels: List<String> = listOf("saved-model"),
     noModels: Boolean = false,
     off: Boolean = false,
+    private val ready: Boolean = true,
     private val listedModels: Map<String, Boolean>? = null,
     private val discoveryModels: List<String> = listOf("saved-model"),
 ) : Closeable {
@@ -168,7 +169,7 @@ internal class ProviderPanelHttpPeer(
 
     private fun listBody(value: Canonical): String = JSONObject().put("providers", JSONArray().put(JSONObject()
         .put("id", ID).put("name", value.name).put("chat", CHAT_URL).put("preset", "")
-        .put("baseAPI", "chat").put("ready", true).put("off", value.off).put("noModels", value.noModels)
+        .put("baseAPI", "chat").put("ready", ready).put("off", value.off).put("noModels", value.noModels)
         .put("key", keyMetadata()).put("chosen", JSONArray(value.models))
         .put("models", JSONArray((listedModels ?: value.models.associateWith { true }).map { (id, on) ->
             JSONObject().put("id", id).put("name", id).put("on", on)

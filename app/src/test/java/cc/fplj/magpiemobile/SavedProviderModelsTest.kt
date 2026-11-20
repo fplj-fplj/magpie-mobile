@@ -14,16 +14,22 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Real management parsing feeds the same saved-list projection used by ProvidersPanel. */
-class ProviderConnectivityModelsTest {
+/** Real management parsing feeds the shared projection used by provider rows and model tests. */
+class SavedProviderModelsTest {
     @Test fun implicitAllUsesExposedModelsEvenWhenChosenIsEmpty() {
         val saved = savedProvider(listOf("exposed-a" to true, "directory-only" to false, "exposed-b" to true))
 
         assertEquals(emptyList<String>(), saved.chosen)
-        assertEquals(listOf("exposed-a", "exposed-b"), providerConnectivityModelIds(saved))
+        assertTrue(saved.ready)
+        assertFalse(saved.off)
+        assertFalse(saved.noModels)
+        assertEquals(3, saved.models.size)
+        assertEquals(listOf("exposed-a", "exposed-b"), savedEnabledProviderModelIds(saved))
     }
 
     @Test fun explicitPicksDoNotOverrideExposureFlagsOrCoreModelOrder() {
@@ -32,26 +38,36 @@ class ProviderConnectivityModelsTest {
             chosen = listOf("listed-first", "unsupported-api", "listed-second", "not-in-listing"),
         )
 
-        assertEquals(listOf("listed-second", "listed-first"), providerConnectivityModelIds(saved))
+        assertEquals(4, saved.chosen.size)
+        assertEquals(3, saved.models.size)
+        assertEquals(listOf("listed-second", "listed-first"), savedEnabledProviderModelIds(saved))
     }
 
-    @Test fun disabledUnreadyOrSelectNoneCannotOfferCandidatesEvenIfModelFlagsAreOn() {
+    @Test fun disabledUnreadyOrSelectNoneHaveNoEnabledModelsEvenIfDirectoryFlagsAreOn() {
         for ((off, noModels, ready) in listOf(
             Triple(true, false, true), Triple(false, true, true), Triple(false, false, false),
+            Triple(true, true, true), Triple(true, false, false), Triple(false, true, false),
+            Triple(true, true, false),
         )) {
             val saved = savedProvider(listOf("still-listed" to true), chosen = listOf("still-listed"),
                 off = off, noModels = noModels, ready = ready)
 
-            assertEquals(emptyList<String>(), providerConnectivityModelIds(saved))
+            assertEquals(off, saved.off)
+            assertEquals(noModels, saved.noModels)
+            assertEquals(ready, saved.ready)
+            assertEquals(1, saved.models.size)
+            assertTrue(saved.models.single().on)
+            assertEquals(listOf("still-listed"), saved.chosen)
+            assertEquals(emptyList<String>(), savedEnabledProviderModelIds(saved))
         }
     }
 
     @Test fun missingProviderEmptyListingAndUnexposedPicksNeverFallBackToChosen() {
-        assertEquals(emptyList<String>(), providerConnectivityModelIds(null))
-        assertEquals(emptyList<String>(), providerConnectivityModelIds(
+        assertEquals(emptyList<String>(), savedEnabledProviderModelIds(null))
+        assertEquals(emptyList<String>(), savedEnabledProviderModelIds(
             savedProvider(emptyList(), chosen = listOf("saved-but-unexposed")),
         ))
-        assertEquals(emptyList<String>(), providerConnectivityModelIds(
+        assertEquals(emptyList<String>(), savedEnabledProviderModelIds(
             savedProvider(listOf("directory-only" to false), chosen = listOf("directory-only")),
         ))
     }
@@ -62,16 +78,17 @@ class ProviderConnectivityModelsTest {
             chosen = listOf("two", "two", "one"),
         )
 
-        assertEquals(listOf("one", "two"), providerConnectivityModelIds(saved))
+        assertEquals(3, saved.models.size)
+        assertEquals(listOf("one", "two"), savedEnabledProviderModelIds(saved))
     }
 
     @Test fun emptyOrBlankManagementIdsAreRejectedBeforeTheyCanBecomeCandidates() {
         for (invalidId in listOf("", " ", "\t")) {
             assertThrows(ManagementProtocolException::class.java) {
-                providerConnectivityModelIds(savedProvider(listOf(invalidId to true)))
+                savedEnabledProviderModelIds(savedProvider(listOf(invalidId to true)))
             }
             assertThrows(ManagementProtocolException::class.java) {
-                providerConnectivityModelIds(savedProvider(listOf("valid" to true), chosen = listOf(invalidId)))
+                savedEnabledProviderModelIds(savedProvider(listOf("valid" to true), chosen = listOf(invalidId)))
             }
         }
     }
@@ -84,7 +101,7 @@ class ProviderConnectivityModelsTest {
             val saved = savedProvider(models)
 
             assertEquals(size, saved.models.size)
-            assertEquals(models.take(24).map { it.first }, providerConnectivityModelIds(saved))
+            assertEquals(models.take(24).map { it.first }, savedEnabledProviderModelIds(saved))
         }
     }
 
@@ -96,14 +113,14 @@ class ProviderConnectivityModelsTest {
         val saved = savedProvider(models)
 
         assertEquals(27, saved.models.size)
-        assertEquals((1..24).map { "exposed-$it" }, providerConnectivityModelIds(saved))
+        assertEquals((1..24).map { "exposed-$it" }, savedEnabledProviderModelIds(saved))
     }
 
     @Test fun explicitPicksBeyondTwentyFourAreNotArtificiallyTruncated() {
         val ids = (1..30).map { "picked-$it" }
         val saved = savedProvider(ids.map { it to true }, chosen = ids)
 
-        assertEquals(ids, providerConnectivityModelIds(saved))
+        assertEquals(ids, savedEnabledProviderModelIds(saved))
     }
 
     private fun savedProvider(
@@ -134,7 +151,7 @@ class ProviderConnectivityModelsTest {
         }.toString()
         ListingPeer(body).use { peer ->
             val client = ProviderManagementClient(
-                ManagerCredential.fromKey("connectivity-models-synthetic-key", peer.port),
+                ManagerCredential.fromKey("saved-provider-models-synthetic-key", peer.port),
                 baseUrl = "http://127.0.0.1:${peer.port}",
             )
             return client.getProviders().providers.single()
@@ -146,7 +163,7 @@ class ProviderConnectivityModelsTest {
         private val failure = AtomicReference<Throwable?>()
         @Volatile private var active: Socket? = null
         val port: Int = listener.localPort
-        private val worker = thread(isDaemon = true, name = "provider-connectivity-models-listing") {
+        private val worker = thread(isDaemon = true, name = "saved-provider-models-listing") {
             try {
                 listener.accept().use { socket ->
                     active = socket

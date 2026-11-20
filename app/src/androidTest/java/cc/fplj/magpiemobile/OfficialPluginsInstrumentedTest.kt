@@ -385,11 +385,11 @@ class OfficialPluginsInstrumentedTest {
                         dismissEmulatorLauncherAnr()
                         device.hasObject(By.text("提供商"))
                     }
-                    prepareImplicitProviderModels(upstream, browserCookie)
+                    val implicitFixture = prepareImplicitProviderModels(upstream, browserCookie)
                     device.findObject(By.text("提供商")).click()
                     await("provider list visible") { device.hasObject(By.text("模型提供商")) }
                     await("saved provider visible") {
-                        if (device.hasObject(By.text("Android runtime"))) true
+                        if (device.hasObject(By.res("provider-row:android-runtime"))) true
                         else {
                             device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
                                 device.displayWidth / 2, device.displayHeight / 3, 20)
@@ -398,7 +398,7 @@ class OfficialPluginsInstrumentedTest {
                     }
                     val savedProviderRow = By.res("provider-row:android-runtime")
                     await("saved provider row actionable") { device.hasObject(savedProviderRow) }
-                    refreshProviderRow("0 / 1 模型")
+                    refreshProviderRow(implicitFixture.markerName, "启用 1 / 目录 1")
                     device.findObject(savedProviderRow).click()
                     val connectivityEntry = By.res("provider-connectivity-entry")
                     await("saved provider connectivity entry") { device.hasObject(connectivityEntry) }
@@ -472,7 +472,7 @@ class OfficialPluginsInstrumentedTest {
                     }
                     device.findObject(By.desc("返回提供商列表")).click()
                     await("implicit provider editor closed") { !device.hasObject(By.res("provider-editor-surface")) }
-                    verifyDisabledProviderModels(artifacts, browserCookie, auth)
+                    verifyDisabledProviderModels(artifacts, browserCookie, auth, implicitFixture)
                     await("provider add button visible") {
                         if (device.hasObject(By.text("添加"))) true
                         else {
@@ -1689,10 +1689,15 @@ class OfficialPluginsInstrumentedTest {
     private fun Rect.isFullyWithin(displayWidth: Int, displayHeight: Int): Boolean =
         left >= 0 && top >= 0 && right <= displayWidth && bottom <= displayHeight
 
+    private data class ImplicitProviderFixture(
+        val originalName: String,
+        val markerName: String,
+    )
+
     /** Use the real official editor API: the native empty-selection save intentionally means none. */
-    private fun saveOfficialProviderModels(cookie: String, noModels: Boolean) {
+    private fun saveOfficialProviderModels(cookie: String, noModels: Boolean, name: String? = null) {
         val saved = NativeCoreSession.providerClient().editable("android-runtime")
-        val body = JSONObject().put("id", saved.id).put("name", saved.name)
+        val body = JSONObject().put("id", saved.id).put("name", name ?: saved.name)
             .put("chat", saved.chatUrl).put("models", JSONArray()).put("noModels", noModels)
         assertEquals("official editor save", 200,
             http("http://127.0.0.1:3430/api/provider/save", "", body.toString(), cookie).first)
@@ -1702,8 +1707,10 @@ class OfficialPluginsInstrumentedTest {
         assertTrue("official empty-key save must retain the existing credential", actual.keySet)
     }
 
-    private fun prepareImplicitProviderModels(upstream: LocalUpstream, cookie: String) {
-        saveOfficialProviderModels(cookie, noModels = false)
+    private fun prepareImplicitProviderModels(upstream: LocalUpstream, cookie: String): ImplicitProviderFixture {
+        val originalName = NativeCoreSession.providerClient().editable("android-runtime").name
+        val markerName = "runtime-implicit-${SystemClock.elapsedRealtime()}"
+        saveOfficialProviderModels(cookie, noModels = false, name = markerName)
         val requestsBefore = upstream.modelRequests.get()
         // Same-key official saves do not refetch. Persist a real vendor catalog without picks.
         assertEquals("official model catalog refetch", 200,
@@ -1712,16 +1719,18 @@ class OfficialPluginsInstrumentedTest {
         assertTrue("official refetch must reach the actual upstream", upstream.modelRequests.get() > requestsBefore)
         val client = NativeCoreSession.providerClient()
         val editable = client.editable("android-runtime")
+        assertEquals(markerName, editable.name)
         assertTrue(editable.modelIds.isEmpty())
         assertFalse(editable.noModels)
         val listed = client.getProviders().providers.single { it.id == editable.id }
         assertTrue(listed.chosen.isEmpty())
         assertTrue(listed.ready && !listed.off && !listed.noModels)
         assertEquals(listOf("fake-echo"), listed.models.filter { it.on }.map { it.id })
+        return ImplicitProviderFixture(originalName, markerName)
     }
 
     /** Wait for a visibly fresh Panel summary; opening only a fresh editable snapshot is insufficient. */
-    private fun refreshProviderRow(expectedTag: String) {
+    private fun refreshProviderRow(expectedName: String, expectedTag: String) {
         // TextButton exposes its label on a child text node; that child is not clickable.
         val refresh = By.text("刷新").enabled(true)
         await("provider refresh visible") {
@@ -1732,9 +1741,11 @@ class OfficialPluginsInstrumentedTest {
             }
         }
         device.findObject(refresh).click()
-        await("provider list refreshed to $expectedTag") {
+        await("provider list refreshed to $expectedName / $expectedTag") {
             val row = device.findObject(By.res("provider-row:android-runtime"))
-            if (row?.isEnabled == true && row.findObject(By.text(expectedTag)) != null) true else {
+            if (row?.isEnabled == true && row.findObject(By.text(expectedName)) != null &&
+                row.findObject(By.text(expectedTag)) != null
+            ) true else {
                 device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
                     device.displayWidth / 2, device.displayHeight / 3, 20)
                 false
@@ -1753,7 +1764,12 @@ class OfficialPluginsInstrumentedTest {
         }
     }
 
-    private fun verifyDisabledProviderModels(artifacts: File, cookie: String, auth: String) {
+    private fun verifyDisabledProviderModels(
+        artifacts: File,
+        cookie: String,
+        auth: String,
+        fixture: ImplicitProviderFixture,
+    ) {
         // This separate Dialog window exposes visible text to UiAutomator. Its Compose-only
         // test tag is used by Panel tests and is not inherited as an Android resource ID.
         val dialog = By.text("测试连接")
@@ -1766,7 +1782,7 @@ class OfficialPluginsInstrumentedTest {
             assertEquals(listOf("fake-echo"), listed.models.map { it.id })
             assertTrue(listed.models.none { it.on })
             assertFalse("select-none must remove the actual gateway route", runtimeProviderRoutePresent(auth))
-            refreshProviderRow("模型已禁用")
+            refreshProviderRow(fixture.markerName, "启用 0 / 目录 1")
             device.findObject(By.res("provider-row:android-runtime")).click()
             await("disabled provider connectivity entry") { device.hasObject(By.res("provider-connectivity-entry")) }
             device.findObject(By.res("provider-connectivity-entry")).click()
@@ -1793,12 +1809,17 @@ class OfficialPluginsInstrumentedTest {
                 if (device.hasObject(editorBack)) device.findObject(editorBack).click()
                 await("disabled provider editor closed") { !device.hasObject(By.res("provider-editor-surface")) }
                 val client = NativeCoreSession.providerClient()
-                val draft = ProviderEditDraft(client.editable("android-runtime"), modelIds = listOf("fake-echo"))
+                val draft = ProviderEditDraft(
+                    client.editable("android-runtime"),
+                    name = fixture.originalName,
+                    modelIds = listOf("fake-echo"),
+                )
                 try { client.edit(draft) } finally { draft.clearSecret() }
                 assertEquals(listOf("fake-echo"), client.editable("android-runtime").modelIds)
                 assertFalse(client.editable("android-runtime").noModels)
+                assertEquals(fixture.originalName, client.editable("android-runtime").name)
                 assertTrue("restoring explicit picks must restore the gateway route", runtimeProviderRoutePresent(auth))
-                refreshProviderRow("已启用")
+                refreshProviderRow(fixture.originalName, "启用 1 / 目录 1")
             } catch (cleanupFailure: Throwable) {
                 val original = primaryFailure
                 if (original == null) throw cleanupFailure

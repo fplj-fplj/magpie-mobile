@@ -1,3 +1,12 @@
+## Magpie-Mobile 0.1.60-provider-model-summary（提供商模型摘要）
+
+- 提供商列表改用已保存 `models[].on` 的实际启用集合，显示“启用 E / 目录 D”；自动选择模型不再显示 `0 / 1` 的错误摘要。
+- 停用、明确禁用和未就绪提供商的状态与可测试条件保持一致，目录数量仍来自完整管理目录，不重复施加模型数量限制。
+- 编辑页把当前输入明确标为草稿和“保存后生效”，避免把未保存选择写成已启用；连通测试继续只使用已保存模型。
+- 新增真实 loopback 管理响应和原生 ProviderPanel 覆盖，验证 implicit-all、24/25 目录、显式选择与 `on` 不一致及未就绪状态。JVM、Android、Go 和发布状态待 GitHub Actions 验证后补录。
+
+保持暖纸色、RikkaHub 页面结构、霞鹜文楷屏幕阅读版与官方插件机制。本地仅静态检查，编译与运行回归交给 GitHub Actions；完整验证与同提交签名候选通过后才发布 Release。versionCode 61；备份 appVersion `0.1.60`；核心保持 `0.1.3781-androidhost.2`。
+
 ## Magpie-Mobile 0.1.59-provider-auto-models（自动选择模型的连通测试）
 
 - 原生连通测试识别官方自动选择模型配置：候选来自已保存列表的实际 `models[].on`，不再因显式 `chosen` 为空误报无模型。

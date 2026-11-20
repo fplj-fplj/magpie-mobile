@@ -668,7 +668,7 @@ fun ProvidersPanel(
                                 title = "模型目录",
                                 supporting = if (discoveryLoading) "正在读取提供商返回的模型目录…"
                                 else if (discoveryError.isNotEmpty()) discoveryError
-                                else "已选择 ${selected.size} 个模型，可在下一步调整。",
+                                else "当前草稿选择 ${selected.size} 个模型，保存后生效。",
                             ) {
                                 Surface(
                                     color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -683,7 +683,7 @@ fun ProvidersPanel(
                                         AppIcon(AppSymbol.MODELS)
                                         Column(Modifier.weight(1f)) {
                                             Text(
-                                                "${selected.size} 个模型已启用",
+                                                "将启用 ${selected.size} 个模型",
                                                 style = MaterialTheme.typography.titleSmall,
                                             )
                                             Text(
@@ -707,7 +707,7 @@ fun ProvidersPanel(
                                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text("选择模型", style = MaterialTheme.typography.headlineSmall)
                                     Text(
-                                        "${selected.size} 已启用 · ${modelOptions.size} 可发现",
+                                        "将启用 ${selected.size} · ${modelOptions.size} 可发现",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -721,7 +721,7 @@ fun ProvidersPanel(
                                 displayName = when {
                                     selected.isEmpty() -> "选择要启用的模型"
                                     selected.size == 1 -> selected.single()
-                                    else -> "已选择 ${selected.size} 个模型"
+                                    else -> "当前选择 ${selected.size} 个模型"
                                 },
                                 enabled = !busy,
                                 onClick = { modelPickerOpen = true },
@@ -732,12 +732,12 @@ fun ProvidersPanel(
                                     .semantics { testTagsAsResourceId = true },
                             )
                             ProviderFormGroup(
-                                title = "已启用模型",
+                                title = "当前选择的模型",
                                 supporting = when {
                                     discoveryLoading -> "正在读取提供商返回的模型目录…"
                                     discoveryError.isNotEmpty() -> discoveryError
-                                    selected.isEmpty() -> "当前没有启用的模型。"
-                                    else -> "点选卡片可快速停用模型；完整目录在上方模型面板中。"
+                                    selected.isEmpty() -> "当前草稿未选择模型。"
+                                    else -> "点选卡片调整模型；保存后生效。"
                                 },
                             ) {
                                 if (selected.isEmpty()) {
@@ -899,7 +899,7 @@ fun ProvidersPanel(
                             owner = sessionKey?.owner,
                             providerId = snapshot?.id,
                             providerName = name.ifBlank { "提供商" },
-                            testModels = providerConnectivityModelIds(
+                            testModels = savedEnabledProviderModelIds(
                                 providers?.providers?.firstOrNull { it.id == snapshot?.id },
                             ),
                             modifier = Modifier.weight(1f),

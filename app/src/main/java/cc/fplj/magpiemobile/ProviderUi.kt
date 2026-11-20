@@ -99,13 +99,14 @@ internal fun ProviderRow(
                             when {
                                 provider.off -> "已停用"
                                 provider.noModels -> "模型已禁用"
+                                !provider.ready -> "未就绪"
                                 else -> "已启用"
                             },
-                            tone = if (provider.off || provider.noModels) ProviderTagTone.Warning
+                            tone = if (provider.off || provider.noModels || !provider.ready) ProviderTagTone.Warning
                             else ProviderTagTone.Success,
                         )
                         ProviderTag(
-                            "${provider.chosen.size} / ${provider.models.size} 模型",
+                            "启用 ${savedEnabledProviderModelIds(provider).size} / 目录 ${provider.models.size}",
                             tone = ProviderTagTone.Info,
                         )
                     }
