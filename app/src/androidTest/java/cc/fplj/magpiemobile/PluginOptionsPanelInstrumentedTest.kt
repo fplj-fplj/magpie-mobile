@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
@@ -128,6 +129,9 @@ class PluginOptionsPanelInstrumentedTest {
                 awaitRequest(rejected, peer, 1)
                 rejected.release.countDown()
                 awaitReady(vm, A)
+                assertTrue("The actual HTTP 400 must remain a definite rejection", vm.state.value.error.contains("HTTP 400"))
+                assertEquals(A, peer.options())
+                peer.assertHealthy()
                 assertOptions(B)
                 assertEquals(1, peer.writes.size)
 
@@ -203,10 +207,17 @@ class PluginOptionsPanelInstrumentedTest {
     }
 
     private fun awaitReady(vm: PluginManagementViewModel, expected: String) {
-        compose.waitUntil(10_000) {
+        try {
+            compose.waitUntil(10_000) {
+                val state = vm.state.value
+                !state.busy && !state.loading && !state.pending &&
+                    state.snapshot.entries.singleOrNull()?.options?.toString() == expected
+            }
+        } catch (timeout: ComposeTimeoutException) {
             val state = vm.state.value
-            !state.busy && !state.loading && !state.pending &&
-                state.snapshot.entries.singleOrNull()?.options?.toString() == expected
+            throw AssertionError("Options state did not settle: busy=${state.busy}, loading=${state.loading}, " +
+                "pending=${state.pending}, error=${state.error}, " +
+                "options=${state.snapshot.entries.singleOrNull()?.options}, expected=$expected", timeout)
         }
         compose.waitForIdle()
     }

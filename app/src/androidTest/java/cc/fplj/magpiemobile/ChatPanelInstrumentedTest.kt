@@ -17,12 +17,15 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import cc.fplj.magpiemobile.core.SessionRecord
 import cc.fplj.magpiemobile.data.ChatDatabase
@@ -122,7 +125,14 @@ class ChatPanelInstrumentedTest {
             device.executeShellCommand("settings put secure show_ime_with_hard_keyboard 1")
             withPanel(landscape = false) { model, _ ->
                 compose.onNodeWithTag("chat-conversation-menu").assertDoesNotExist()
-                compose.onNodeWithTag("chat-draft").performClick()
+                dismissEmulatorLauncherAnr()
+                awaitFixtureWindowFocus()
+                compose.onNodeWithTag("chat-draft").assertIsDisplayed()
+                checkNotNull(device.findObject(By.res("chat-draft"))) {
+                    "The real draft field must be accessible before requesting the system IME"
+                }.click()
+                awaitNativeIme()
+                compose.onNodeWithTag("chat-draft")
                     .performTextReplacement("键盘打开时保留的草稿")
                 compose.waitUntil(10_000) {
                     compose.onAllNodesWithTag("chat-conversation-menu").fetchSemanticsNodes().isNotEmpty()
@@ -149,11 +159,14 @@ class ChatPanelInstrumentedTest {
         landscape: Boolean = true,
         block: (ChatViewModel, ChatRepository) -> Unit,
     ) {
+        dismissEmulatorLauncherAnr()
         if (landscape) device.setOrientationLeft() else device.setOrientationNatural()
         compose.waitUntil(10_000) {
+            dismissEmulatorLauncherAnr()
             compose.activity.resources.configuration.orientation == if (landscape)
                 Configuration.ORIENTATION_LANDSCAPE else Configuration.ORIENTATION_PORTRAIT
         }
+        awaitFixtureWindowFocus()
         val configuration = compose.activity.resources.configuration
         assertTrue("Fixture must exercise the real compact height", if (landscape)
             configuration.screenHeightDp < 520 else configuration.screenHeightDp >= 520)
@@ -230,15 +243,67 @@ class ChatPanelInstrumentedTest {
         compose.onNodeWithTag("chat-new-conversation").assertIsDisplayed()
     }
 
+    private fun dismissEmulatorLauncherAnr() {
+        // API35's Pixel Launcher can ANR during first boot; leave any app ANR as a failure.
+        if (device.hasObject(By.text("Pixel Launcher isn't responding"))) {
+            checkNotNull(device.findObject(By.text("Close app"))) {
+                "The identified Pixel Launcher ANR must offer its Close app action"
+            }.click()
+            device.waitForIdle()
+            assertFalse(device.hasObject(By.text("Pixel Launcher isn't responding")))
+        }
+    }
+
+    private fun awaitFixtureWindowFocus() {
+        compose.waitUntil(10_000) {
+            dismissEmulatorLauncherAnr()
+            var focused = false
+            compose.activityRule.scenario.onActivity { activity ->
+                focused = activity.hasWindowFocus()
+            }
+            focused
+        }
+    }
+
+    private fun awaitNativeIme() {
+        var visible = false
+        var bottom = 0
+        try {
+            compose.waitUntil(10_000) {
+                dismissEmulatorLauncherAnr()
+                compose.activityRule.scenario.onActivity { activity ->
+                    val insets = ViewCompat.getRootWindowInsets(activity.window.decorView)
+                    visible = insets?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                    bottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+                }
+                visible && bottom > 0
+            }
+        } finally {
+            val evidence = File(artifactDirectory(), "chat-conversation-menu-keyboard-ime.txt")
+            evidence.writeText("imeVisible=$visible\nimeBottom=$bottom\n")
+            exportArtifact(evidence)
+        }
+        assertTrue("The real system IME must be visible with a positive bottom inset",
+            visible && bottom > 0)
+    }
+
     private fun screenshot(name: String) {
+        dismissEmulatorLauncherAnr()
         compose.waitForIdle()
-        val artifacts = File(instrumentation.targetContext.getExternalFilesDir(null), "plugin-runtime")
+        val image = File(artifactDirectory(), name)
+        assertTrue(device.takeScreenshot(image))
+        exportArtifact(image)
+    }
+
+    private fun artifactDirectory() =
+        File(instrumentation.targetContext.getExternalFilesDir(null), "plugin-runtime")
             .apply { mkdirs() }
-        assertTrue(device.takeScreenshot(File(artifacts, name)))
-        // Export each image independently of the order of the installed-core test class.
-        val exported = "/data/local/tmp/magpie-plugin-runtime/$name"
+
+    private fun exportArtifact(file: File) {
+        // Export each artifact independently of the order of the installed-core test class.
+        val exported = "/data/local/tmp/magpie-plugin-runtime/${file.name}"
         device.executeShellCommand("mkdir -p /data/local/tmp/magpie-plugin-runtime")
-        device.executeShellCommand("cp ${File(artifacts, name).absolutePath} $exported")
+        device.executeShellCommand("cp ${file.absolutePath} $exported")
         assertEquals(exported, device.executeShellCommand("ls $exported").trim())
     }
 

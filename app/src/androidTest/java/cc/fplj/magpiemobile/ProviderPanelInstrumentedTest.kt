@@ -1,5 +1,6 @@
 package cc.fplj.magpiemobile
 
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,6 +35,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
 import cc.fplj.magpiemobile.theme.MagpieTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -336,6 +340,20 @@ class ProviderPanelInstrumentedTest {
     }
 
     private fun openConnectivityDialog() {
+        // Text replacement can finish while Android is still moving the editor for the IME.
+        // Wait for an actual user-style keyboard dismissal before tapping the next entry.
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val device = UiDevice.getInstance(instrumentation)
+        if (device.hasObject(By.text("Pixel Launcher isn't responding"))) {
+            device.findObject(By.text("Close app"))?.click()
+            device.waitForIdle()
+        }
+        fun keyboardVisible() = instrumentation.uiAutomation.windows.any {
+            it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD
+        }
+        if (keyboardVisible()) device.pressBack()
+        compose.waitUntil(10_000) { !keyboardVisible() }
+        compose.waitForIdle()
         compose.onNodeWithTag("provider-connectivity-entry").assertIsEnabled().performClick()
         compose.waitUntil(10_000) {
             compose.onAllNodesWithTag("provider-connectivity-dialog").fetchSemanticsNodes().isNotEmpty()
