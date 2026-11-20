@@ -1,6 +1,7 @@
 package cc.fplj.magpiemobile.core
 
 import java.time.Duration
+import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
@@ -24,8 +25,9 @@ class ProviderModelDiscoveryTest {
     private lateinit var api: ProviderApiFixture
     @BeforeEach fun start() { api = ProviderApiFixture() }
     @AfterEach fun stop() { api.close() }
+    private val pin = "0123456789abcdef".repeat(4)
     private fun request(key: String = "", url: String = "api.example", id: String? = null, revision: String? = null,
-        local: Boolean = false) = ProviderModelDiscoveryRequest(url, key, id, revision, local)
+        local: Boolean = false, pin: String? = null) = ProviderModelDiscoveryRequest(url, key, id, revision, local, pin)
     private fun catalog(base: String = "https://api.example/v1", rows: JsonArray = JsonArray(listOf(buildJsonObject {
         put("id", "raw/model-id"); put("name", "Model name")
     }))) = buildJsonObject { put("baseUrl", base); put("models", rows) }.toString()
@@ -109,6 +111,52 @@ class ProviderModelDiscoveryTest {
         assertFailsWith<IllegalArgumentException> { request(revision = "a".repeat(64)) }
         assertFailsWith<IllegalArgumentException> { request(id = "custom-api", revision = "bad") }
     }
+    @Test fun discoveryPinDistinguishesMissingExplicitEmptyAndNormalizedValue() {
+        // The original five positional arguments keep their meaning; absence is not a clear.
+        val original = ProviderModelDiscoveryRequest("api.example", "", "custom-api", api.revision, false).requestBody()
+        assertEquals(setOf("chat", "id", "revision"), original.keys)
+        assertFalse(request(pin = null).requestBody().containsKey("serverPin"))
+        for (empty in listOf("", "   ")) {
+            val body = request(pin = empty).requestBody()
+            assertEquals(setOf("chat", "serverPin"), body.keys)
+            assertEquals(JsonPrimitive(""), body["serverPin"])
+            assertTrue(body["serverPin"] != JsonNull)
+        }
+        val temporary = request(key = ProviderApiFixture.API_KEY, id = "custom-api", revision = api.revision, pin = " $pin ")
+        assertEquals(setOf("chat", "key", "id", "revision", "serverPin"), temporary.requestBody().keys)
+        assertEquals(JsonPrimitive(pin), temporary.requestBody()["serverPin"])
+        assertFalse(temporary.toString().contains(pin))
+        assertFalse(temporary.toString().contains(ProviderApiFixture.API_KEY))
+        assertFalse(mapOf("request" to temporary).toString().contains(pin))
+    }
+    @Test fun discoveryPinRejectsNonLowercaseSha256AndControlsWithoutEchoingInput() {
+        for (invalid in listOf("a".repeat(63), "a".repeat(65), "A".repeat(64), "g".repeat(64),
+            "ab:".repeat(21) + "a", "密".repeat(64), "$pin\n", "$pin\r", "$pin\u0000")) {
+            val error = assertFailsWith<IllegalArgumentException> { request(key = ProviderApiFixture.API_KEY, pin = invalid) }
+            assertFalse(error.stackTraceToString().contains(invalid))
+            assertFalse(error.stackTraceToString().contains(ProviderApiFixture.API_KEY))
+            assertNull(error.cause)
+        }
+        assertTrue(api.requests.isEmpty())
+    }
+    @Test fun invalidPinHintKeepsSystemTlsValidationExplicitWithoutEchoingPin() {
+        val invalid = "A".repeat(64)
+        val error = assertFailsWith<IllegalArgumentException> { request(pin = invalid) }
+        assertEquals("服务器证书指纹须为 64 位小写十六进制（SHA-256），留空使用系统TLS证书校验", error.message)
+        assertFalse(error.message!!.contains("不校验"))
+        assertFalse(error.stackTraceToString().contains(invalid))
+    }
+    @Test fun nonemptyPinRejectsHttpEvenWithExplicitLoopbackOptIn() {
+        for (url in listOf("http://127.0.0.1:9000", "http://[::1]:9000")) {
+            val error = assertFailsWith<IllegalArgumentException> { request(url = url, local = true, pin = pin) }
+            assertEquals("服务器证书指纹仅适用于HTTPS模型目录", error.message)
+            assertFalse(error.stackTraceToString().contains(pin))
+            assertNull(error.cause)
+            assertFalse(request(url = url, local = true, pin = null).requestBody().containsKey("serverPin"))
+            assertEquals(JsonPrimitive(""), request(url = url, local = true, pin = "").requestBody()["serverPin"])
+        }
+        assertTrue(api.requests.isEmpty())
+    }
     @Test fun requestSecretIsSeparateFromFormValueAndClearIsNotAWriteDraftConsume() {
         val formKey = ProviderApiFixture.API_KEY
         val temporary = request(key = formKey)
@@ -159,14 +207,58 @@ class ProviderModelDiscoveryTest {
         assertFalse(found.toString().contains(formKey))
         assertEquals(0, api.createRequests.get())
     }
+    @Test fun optionalPinOnlyEntersBoundedReadonlyRpcBodyAndNeverWritesConfiguration() {
+        val before = api.canonical
+        for (requestedPin in listOf<String?>(null, "", " $pin ")) {
+            val temporary = request(key = ProviderApiFixture.API_KEY, pin = requestedPin)
+            val found = api.client().discoverModels(temporary)
+            val rpc = api.requests.last { it.path.endsWith("/models") }
+            val body = Json.parseToJsonElement(rpc.body).jsonObject
+            if (requestedPin == null) assertFalse(body.containsKey("serverPin"))
+            else assertEquals(JsonPrimitive(requestedPin.trim()), body["serverPin"])
+            assertEquals(if (requestedPin == null) setOf("chat", "key") else setOf("chat", "key", "serverPin"), body.keys)
+            assertEquals("POST", rpc.method)
+            assertEquals(api.credential.cookieHeader(), rpc.cookie)
+            assertNull(rpc.query)
+            assertNull(rpc.authorization)
+            assertNull(rpc.origin)
+            assertEquals(rpc.body.toByteArray(Charsets.UTF_8).size.toString(), rpc.contentLength)
+            assertNull(rpc.transferEncoding)
+            assertFalse(temporary.requestBody().containsKey("key"))
+            assertFalse(found.toString().contains(pin))
+            assertFalse(found.toString().contains(ProviderApiFixture.API_KEY))
+        }
+        assertEquals(3, api.modelRequests.get())
+        assertEquals(0, api.createRequests.get())
+        assertEquals(0, api.editRequests.get())
+        assertEquals(before, api.canonical)
+    }
     @Test fun missingDiscoveryCapabilityAllowsNoRpcAndPreservesExistingWriteDraft() {
         api.capabilitiesBody = JsonObject(Json.parseToJsonElement(ProviderApiFixture.CAPABILITIES).jsonObject - "providerModelDiscovery").toString()
         val write = ProviderCreateDraft("new-provider", "Name", "api.example", ProviderApiFixture.API_KEY, emptyList())
-        val failure = assertFailsWith<ProviderModelDiscoveryException> { api.client().discoverModels(request(key = ProviderApiFixture.API_KEY)) }
+        val temporary = request(key = ProviderApiFixture.API_KEY, pin = pin)
+        val failure = assertFailsWith<ProviderModelDiscoveryException> { api.client().discoverModels(temporary) }
         assertEquals(ProviderModelDiscoveryFailure.UNSUPPORTED, failure.failure)
         assertEquals(0, api.modelRequests.get())
+        assertFalse(temporary.requestBody().containsKey("key"))
         assertTrue(write.requestBody().containsKey("key"))
         write.submissionBody() // directory attempts cannot consume a separate write object
+    }
+    @Test fun localRequestFailureAndPreflightCancellationStillClearTemporarySecretWithoutRpc() {
+        val invalid = request(key = "synthetic invalid key", pin = pin)
+        val error = assertFailsWith<ProviderModelDiscoveryException> { api.client().discoverModels(invalid) }
+        assertEquals(ProviderModelDiscoveryFailure.INVALID_REQUEST, error.failure)
+        assertTrue(error.message!!.contains("证书指纹"))
+        assertFalse(error.stackTraceToString().contains("synthetic invalid key"))
+        assertFalse(invalid.requestBody().containsKey("key"))
+        assertEquals(JsonPrimitive(pin), invalid.requestBody()["serverPin"])
+
+        val cancelled = request(key = ProviderApiFixture.API_KEY, pin = pin)
+        val client = ProviderManagementClient(api.credential, api.baseUrl, ensureActive = { throw CancellationException() })
+        assertFailsWith<CancellationException> { client.discoverModels(cancelled) }
+        assertFalse(cancelled.requestBody().containsKey("key"))
+        assertEquals(JsonPrimitive(pin), cancelled.requestBody()["serverPin"])
+        assertTrue(api.requests.isEmpty())
     }
     @Test fun duplicatesAndOptionalNamesKeepValidRawIdsAndDoNotInventModels() {
         val opaqueId = "a".repeat(64)
@@ -213,6 +305,64 @@ class ProviderModelDiscoveryTest {
         api.modelsOverride = catalog("https://api.example")
         assertEquals("https://api.example", api.client().discoverModels(request()).baseUrl)
     }
+    @Test fun submittedPinCannotRelaxReturnedOriginUrlShapeOrRootV1CandidateBoundary() {
+        val before = api.canonical
+        val rejected = listOf(
+            "https://other.example/custom/v1", "http://api.example/custom/v1", "https://api.example:8443/custom/v1",
+            "https://user@api.example/custom/v1", "https://api.example/custom/v1?pin=$pin",
+            "https://api.example/custom/v1#fragment", "https://api.example/custom/%76%31",
+            "https://api.example/v1", "https://api.example/custom/v1/v1", "https://api.example/custom/other",
+        )
+        for (base in rejected) {
+            api.modelsOverride = catalog(base)
+            val temporary = request(key = ProviderApiFixture.API_KEY, url = "https://api.example/custom/v1", pin = pin)
+            val error = assertFailsWith<ProviderModelDiscoveryException> { api.client().discoverModels(temporary) }
+            assertEquals(ProviderModelDiscoveryFailure.INVALID_RESPONSE, error.failure)
+            assertNull(error.cause)
+            assertFalse(error.stackTraceToString().contains(pin))
+            assertFalse(temporary.requestBody().containsKey("key"))
+        }
+        for ((url, allowed) in listOf(
+            "https://api.example/custom/v1" to listOf("https://api.example/custom/v1", "https://api.example/custom"),
+            "https://api.example/chat/completions" to listOf("https://api.example", "https://api.example/v1"),
+        )) {
+            for (base in allowed) {
+                api.modelsOverride = catalog(base)
+                assertEquals(base, api.client().discoverModels(request(url = url, pin = pin)).baseUrl)
+            }
+        }
+        assertEquals(rejected.size + 4, api.modelRequests.get())
+        assertEquals(0, api.createRequests.get())
+        assertEquals(0, api.editRequests.get())
+        assertEquals(before, api.canonical)
+    }
+    @Test fun tlsPinFailureUsesWhitelistedTransportHeaderAndFixedSafeMessageWithoutReplay() {
+        val upstreamHost = "private-model-service.example"
+        val certificate = "-----BEGIN CERTIFICATE----- synthetic-private-certificate"
+        val before = api.canonical
+        api.modelsHook = { exchange, _ ->
+            exchange.responseHeaders.add("X-Magpie-Mobile-Error-Code", "provider_models_tls_pin")
+            api.respond(exchange, 502, "$upstreamHost $certificate $pin " + ProviderApiFixture.API_KEY)
+        }
+        val temporary = request(key = ProviderApiFixture.API_KEY, pin = pin)
+        val error = assertFailsWith<ProviderModelDiscoveryException> { api.client().discoverModels(temporary) }
+        assertEquals(ProviderModelDiscoveryFailure.TLS_PIN, error.failure)
+        assertEquals(502, error.httpCode)
+        assertEquals("模型目录TLS证书指纹校验失败（HTTP502）；请核对证书指纹，配置未修改", error.message)
+        assertNull(error.cause)
+        for (sensitive in listOf(upstreamHost, certificate, pin, ProviderApiFixture.API_KEY)) {
+            assertFalse(error.stackTraceToString().contains(sensitive))
+            assertFalse(error.toString().contains(sensitive))
+        }
+        assertFalse(temporary.requestBody().containsKey("key"))
+        assertEquals(JsonPrimitive(pin), temporary.requestBody()["serverPin"])
+        assertEquals(1, api.modelRequests.get())
+        assertEquals(1, api.requests.count { it.path == "/api/mobile/capabilities" })
+        assertTrue(api.requests.all { it.path in setOf("/api/mobile/capabilities", "/api/mobile/providers/models") })
+        assertEquals(0, api.createRequests.get())
+        assertEquals(0, api.editRequests.get())
+        assertEquals(before, api.canonical)
+    }
     @Test fun status401403429404405409504HaveSpecificSafeReadonlyMessages() {
         val cases = listOf(401 to ProviderModelDiscoveryFailure.KEY_OR_PERMISSION, 403 to ProviderModelDiscoveryFailure.KEY_OR_PERMISSION,
             429 to ProviderModelDiscoveryFailure.RATE_LIMITED, 404 to ProviderModelDiscoveryFailure.NO_CATALOG,
@@ -247,11 +397,12 @@ class ProviderModelDiscoveryTest {
             assertEquals(status, error.httpCode)
         }
         api.modelsHook = { exchange, _ -> exchange.close() }
-        val temporary = request(key = ProviderApiFixture.API_KEY)
+        val temporary = request(key = ProviderApiFixture.API_KEY, pin = pin)
         val error = assertFailsWith<ProviderModelDiscoveryException> { api.client().discoverModels(temporary) }
         assertEquals(ProviderModelDiscoveryFailure.NETWORK_OR_RESPONSE, error.failure)
         assertNull(error.httpCode)
         assertFalse(temporary.requestBody().containsKey("key"))
+        assertEquals(JsonPrimitive(pin), temporary.requestBody()["serverPin"])
         assertEquals(4, api.modelRequests.get())
     }
     @Test fun actualReadTimeoutClearsOnlyRequestAndDoesNotRetry() {
@@ -261,13 +412,14 @@ class ProviderModelDiscoveryTest {
         api.modelsHook = { exchange, _ ->
             try { release.await(3, TimeUnit.SECONDS); api.respond(exchange, 200, catalog()) } finally { done.countDown() }
         }
-        val temporary = request(key = formKey)
+        val temporary = request(key = formKey, pin = pin)
         try {
             val error = assertFailsWith<ProviderModelDiscoveryException> { api.client(Duration.ofMillis(100)).discoverModels(temporary) }
             assertEquals(ProviderModelDiscoveryFailure.NETWORK_OR_RESPONSE, error.failure)
             assertEquals(1, api.modelRequests.get())
             assertEquals(ProviderApiFixture.API_KEY, formKey)
             assertFalse(temporary.requestBody().containsKey("key"))
+            assertEquals(JsonPrimitive(pin), temporary.requestBody()["serverPin"])
         } finally { release.countDown(); assertTrue(done.await(2, TimeUnit.SECONDS)) }
     }
     @Test fun readonlyRedirectsNeverFollowOrLeakManagerCookieOrKeyToAnotherPort() {
@@ -277,8 +429,10 @@ class ProviderModelDiscoveryTest {
                     exchange.responseHeaders.add("Location", target.baseUrl + "/api/mobile/providers/models")
                     api.respond(exchange, status, "redirect " + ProviderApiFixture.API_KEY)
                 }
-                val error = assertFailsWith<ProviderModelDiscoveryException> { api.client().discoverModels(request(key = ProviderApiFixture.API_KEY)) }
+                val temporary = request(key = ProviderApiFixture.API_KEY, pin = pin)
+                val error = assertFailsWith<ProviderModelDiscoveryException> { api.client().discoverModels(temporary) }
                 assertEquals(status, error.httpCode)
+                assertFalse(temporary.requestBody().containsKey("key"))
             }
             assertTrue(target.requests.isEmpty())
             assertEquals(4, api.modelRequests.get())
@@ -310,6 +464,7 @@ class ProviderModelDiscoveryTest {
         val cases = listOf(
             "provider_models_dns" to ProviderModelDiscoveryFailure.DNS_FAILURE,
             "provider_models_tls_certificate" to ProviderModelDiscoveryFailure.TLS_CERTIFICATE,
+            "provider_models_tls_pin" to ProviderModelDiscoveryFailure.TLS_PIN,
             "provider_models_invalid" to ProviderModelDiscoveryFailure.INVALID_RESPONSE,
             "provider_models_redirect_rejected" to ProviderModelDiscoveryFailure.REDIRECT_REJECTED,
         )
@@ -324,12 +479,19 @@ class ProviderModelDiscoveryTest {
         }
     }
     @Test fun arbitraryErrorHeaderCannotLeakOrChangeClassification() {
-        api.modelsHook = { exchange, _ ->
-            exchange.responseHeaders.add("X-Magpie-Mobile-Error-Code", ProviderApiFixture.API_KEY)
-            api.respond(exchange, 502, ProviderApiFixture.API_KEY)
+        for (header in listOf(ProviderApiFixture.API_KEY, "provider_models_tls_pin $pin", "provider_models_tls_pin;$pin")) {
+            api.modelsHook = { exchange, _ ->
+                exchange.responseHeaders.add("X-Magpie-Mobile-Error-Code", header)
+                api.respond(exchange, 502, "$pin " + ProviderApiFixture.API_KEY)
+            }
+            val temporary = request(key = ProviderApiFixture.API_KEY, pin = pin)
+            val error = assertFailsWith<ProviderModelDiscoveryException> { api.client().discoverModels(temporary) }
+            assertEquals(ProviderModelDiscoveryFailure.NETWORK_OR_RESPONSE, error.failure)
+            assertFalse(error.stackTraceToString().contains(ProviderApiFixture.API_KEY))
+            assertFalse(error.stackTraceToString().contains(pin))
+            assertNull(error.cause)
+            assertFalse(temporary.requestBody().containsKey("key"))
         }
-        val error = assertFailsWith<ProviderModelDiscoveryException> { api.client().discoverModels(request()) }
-        assertEquals(ProviderModelDiscoveryFailure.NETWORK_OR_RESPONSE, error.failure)
-        assertFalse(error.stackTraceToString().contains(ProviderApiFixture.API_KEY))
+        assertEquals(3, api.modelRequests.get())
     }
 }

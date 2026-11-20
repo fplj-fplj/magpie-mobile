@@ -48,6 +48,24 @@ class ProviderEditorPolicy(
  * again would incorrectly turn it into /v1.
  */
 internal object ProviderCatalogSyncPolicy {
+    /** Empty explicitly selects normal system TLS validation; null means invalid input. */
+    fun normalizedServerPin(value: String): String? {
+        if (value.any { it.isISOControl() }) return null
+        val pin = value.trim()
+        return pin.takeIf {
+            it.isEmpty() || (it.length == 64 && it.all { digit -> digit in '0'..'9' || digit in 'a'..'f' })
+        }
+    }
+
+    fun serverPinError(baseUrl: String, value: String): String? {
+        val pin = normalizedServerPin(value)
+            ?: return "证书指纹须为 64 位小写十六进制；留空使用系统 TLS 证书校验。"
+        if (pin.isNotEmpty() && normalizeCatalogBase(baseUrl)?.startsWith("http://") == true) {
+            return "HTTP 地址不能使用 TLS 证书指纹；请改用 HTTPS，或清空指纹后使用本机 HTTP。"
+        }
+        return null
+    }
+
     fun requestIsCurrent(
         requestedSequence: Long,
         currentSequence: Long,
@@ -57,6 +75,8 @@ internal object ProviderCatalogSyncPolicy {
         currentKeyFingerprint: String,
         requestedLocalHttp: Boolean,
         currentLocalHttp: Boolean,
+        requestedServerPin: String,
+        currentServerPin: String,
         requestedProviderId: String?,
         currentProviderId: String?,
         requestedRevision: String?,
@@ -67,10 +87,12 @@ internal object ProviderCatalogSyncPolicy {
         if (!editorOpen || !sessionCurrent || requestedSequence != currentSequence ||
             requestedKeyFingerprint != currentKeyFingerprint ||
             requestedLocalHttp != currentLocalHttp ||
+            requestedServerPin != normalizedServerPin(currentServerPin) ||
             requestedProviderId != currentProviderId ||
             requestedRevision != currentRevision
         ) return false
         val current = normalizeCatalogBase(currentBaseUrl) ?: return false
+        if (requestedServerPin.isNotEmpty() && current.startsWith("http://")) return false
         return requestedCanonicalBaseUrl == current
     }
 

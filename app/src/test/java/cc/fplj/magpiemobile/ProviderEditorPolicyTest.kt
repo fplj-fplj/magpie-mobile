@@ -76,6 +76,118 @@ class ProviderEditorPolicyTest {
         assertFalse(requestIsCurrent(editorOpen = false))
         assertFalse(requestIsCurrent(sessionCurrent = false))
     }
+    @Test fun catalogPinNormalizationKeepsExplicitSystemTlsAndRejectsMalformedPins() {
+        val pin = "a9".repeat(32)
+        assertEquals("", ProviderCatalogSyncPolicy.normalizedServerPin(""))
+        assertEquals("", ProviderCatalogSyncPolicy.normalizedServerPin("  "))
+        assertEquals(pin, ProviderCatalogSyncPolicy.normalizedServerPin("  $pin  "))
+        for (invalid in listOf("a".repeat(63), "a".repeat(65), "A".repeat(64), "g".repeat(64), "$pin\n", "\t$pin")) {
+            assertNull(ProviderCatalogSyncPolicy.normalizedServerPin(invalid))
+            assertTrue(ProviderCatalogSyncPolicy.serverPinError("https://api.example/v1", invalid) != null)
+        }
+        assertNull(ProviderCatalogSyncPolicy.serverPinError("https://api.example/v1", ""))
+        assertNull(ProviderCatalogSyncPolicy.serverPinError("https://api.example/v1", pin))
+    }
+    @Test fun httpCatalogRejectsEveryNonemptyPinAndAllowsExplicitEmptyPin() {
+        val pin = "ab".repeat(32)
+        for (base in listOf("http://127.0.0.1:3425/v1", "http://[::1]:3425/v1")) {
+            assertTrue(ProviderCatalogSyncPolicy.serverPinError(base, pin)?.contains("HTTP") == true)
+            assertNull(ProviderCatalogSyncPolicy.serverPinError(base, ""))
+            assertFalse(requestIsCurrent(
+                requestedBaseUrl = base,
+                requestedLocalHttp = true,
+                requestedServerPin = pin,
+            ))
+            assertTrue(requestIsCurrent(
+                requestedBaseUrl = base,
+                requestedLocalHttp = true,
+                requestedServerPin = "",
+            ))
+        }
+    }
+    @Test fun canonicalPinMatchesOnlyTheVisibleTlsChoiceBeforeEffectRestarts() {
+        val pin = "ab".repeat(32)
+        assertTrue(requestIsCurrent(requestedServerPin = pin, currentServerPin = " $pin "))
+        assertTrue(requestIsCurrent(requestedServerPin = "", currentServerPin = ""))
+        assertFalse(requestIsCurrent(requestedServerPin = pin, currentServerPin = ""))
+        assertFalse(requestIsCurrent(requestedServerPin = "", currentServerPin = pin))
+        assertFalse(requestIsCurrent(requestedServerPin = pin, currentServerPin = "cd".repeat(32)))
+        assertFalse(requestIsCurrent(requestedServerPin = pin, currentServerPin = pin.uppercase()))
+        assertFalse(requestIsCurrent(requestedServerPin = "", currentServerPin = "\n"))
+    }
+    @Test fun pinChangeRejectsOldSuccessErrorAndBaseAdoptionBeforeRecomposition() {
+        val requestedPin = "ab".repeat(32)
+        for (currentPin in listOf("", "cd".repeat(32), "invalid")) {
+            val selection = ProviderEditorPolicy(true)
+            selection.applyCatalog(listOf("current-model"))
+            var error = "current error"
+            val oldRequestCurrent = requestIsCurrent(
+                requestedServerPin = requestedPin,
+                currentServerPin = currentPin,
+                // The effect has not restarted and cannot help invalidate this callback yet.
+                requestedSequence = 7,
+                currentSequence = 7,
+            )
+
+            if (oldRequestCurrent) selection.applyCatalog(listOf("stale-model"))
+            if (oldRequestCurrent) error = "stale failure"
+
+            assertFalse(oldRequestCurrent)
+            assertEquals(listOf("current-model"), selection.visibleIds())
+            assertEquals(listOf("current-model"), selection.selectedIds())
+            assertEquals("current error", error)
+            assertNull(ProviderCatalogSyncPolicy.adoptedBaseUrl(
+                requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/v1"),
+                currentBaseUrl = "https://api.example/v1",
+                returnedBaseUrl = "https://api.example",
+                requestStillCurrent = oldRequestCurrent,
+                alreadyAdopted = false,
+            ))
+        }
+    }
+    @Test fun changingThenRestoringPinCannotReviveTheInvalidatedSequence() {
+        val pin = "ab".repeat(32)
+        // Each onValueChange fences synchronously, even if both edits precede recomposition.
+        assertFalse(requestIsCurrent(
+            requestedServerPin = pin,
+            currentServerPin = pin,
+            requestedSequence = 7,
+            currentSequence = 9,
+        ))
+        assertTrue(requestIsCurrent(
+            requestedServerPin = pin,
+            currentServerPin = pin,
+            requestedSequence = 9,
+            currentSequence = 9,
+        ))
+    }
+    @Test fun replacementPinRequestCanApplyItsCatalogErrorAndCanonicalBase() {
+        val previousPin = "ab".repeat(32)
+        for (currentPin in listOf("", "cd".repeat(32))) {
+            assertFalse(requestIsCurrent(requestedServerPin = previousPin, currentServerPin = currentPin))
+            val selection = ProviderEditorPolicy(true)
+            var error = ""
+            val replacementCurrent = requestIsCurrent(
+                requestedServerPin = currentPin,
+                currentServerPin = currentPin,
+                requestedSequence = 8,
+                currentSequence = 8,
+            )
+            if (replacementCurrent) selection.applyCatalog(listOf("replacement-model"))
+            if (replacementCurrent) error = "replacement failure"
+
+            assertTrue(replacementCurrent)
+            assertEquals(listOf("replacement-model"), selection.selectedIds())
+            assertEquals("replacement failure", error)
+            assertEquals("https://api.example/chat/completions", ProviderCatalogSyncPolicy.adoptedBaseUrl(
+                requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/v1"),
+                currentBaseUrl = "https://api.example/v1",
+                returnedBaseUrl = "https://api.example",
+                requestStillCurrent = replacementCurrent,
+                alreadyAdopted = false,
+            ))
+        }
+    }
     @Test fun currentCatalogFallbackAdoptsCanonicalV1BaseOnce() {
         val adopted = ProviderCatalogSyncPolicy.adoptedBaseUrl(
             requestedCanonicalBaseUrl = ProviderBaseUrl.normalize("https://api.example/chat/completions"),
@@ -245,6 +357,8 @@ class ProviderEditorPolicyTest {
         currentKeyFingerprint: String = requestedKeyFingerprint,
         requestedLocalHttp: Boolean = false,
         currentLocalHttp: Boolean = requestedLocalHttp,
+        requestedServerPin: String = "",
+        currentServerPin: String = requestedServerPin,
         requestedProviderId: String? = "provider-a",
         currentProviderId: String? = requestedProviderId,
         requestedRevision: String? = "a".repeat(64),
@@ -262,6 +376,8 @@ class ProviderEditorPolicyTest {
         currentKeyFingerprint = currentKeyFingerprint,
         requestedLocalHttp = requestedLocalHttp,
         currentLocalHttp = currentLocalHttp,
+        requestedServerPin = requestedServerPin,
+        currentServerPin = currentServerPin,
         requestedProviderId = requestedProviderId,
         currentProviderId = currentProviderId,
         requestedRevision = requestedRevision,

@@ -155,7 +155,7 @@ internal fun providerApiKey(raw: String, allowBlank: Boolean): String {
 internal fun providerServerPin(raw: String): String {
     require(raw.none { it.isISOControl() }) { "服务器证书指纹格式无效" }
     val pin = raw.trim()
-    require(pin.isEmpty() || (pin.length == 64 && pin.all { it in '0'..'9' || it in 'a'..'f' })) { "服务器证书指纹须为 64 位小写十六进制（SHA-256），留空表示不校验" }
+    require(pin.isEmpty() || (pin.length == 64 && pin.all { it in '0'..'9' || it in 'a'..'f' })) { "服务器证书指纹须为 64 位小写十六进制（SHA-256），留空使用系统TLS证书校验" }
     return pin
 }
 

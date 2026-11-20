@@ -337,7 +337,7 @@ class ManagementProtocolException : ManagementException("管理响应格式无�
 class ManagementCapabilitiesMismatch : ManagementException("核心移动安全能力不兼容；拒绝注册密钥")
 
 internal fun safeModelErrorCode(value: String?): String? = value?.takeIf { it in setOf(
-    "provider_models_dns", "provider_models_tls_certificate", "provider_models_unavailable",
+    "provider_models_dns", "provider_models_tls_certificate", "provider_models_tls_pin", "provider_models_unavailable",
     "provider_models_timeout", "provider_models_invalid", "provider_models_too_large",
     "provider_models_sensitive_content", "provider_models_redirect_rejected", "provider_models_upstream_error",
     "provider_models_key_required", "provider_models_forbidden", "provider_models_not_found",

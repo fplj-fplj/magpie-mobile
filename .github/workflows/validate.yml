@@ -103,6 +103,13 @@ jobs:
           go build -trimpath -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.2' -o ../magpie-full-host .
           python3 ../../scripts/smoke-mobile-core.py --exe ../magpie-full-host --full-admin
 
+      - name: Verify real model directory TLS and pin boundaries
+        run: |
+          set -euo pipefail
+          printf '\n127.0.0.1 catalog.magpie.test\n' | sudo tee -a /etc/hosts > /dev/null
+          python3 scripts/smoke-model-discovery-tls.py --exe build-tmp/magpie-mobile-host --evidence build-tmp/mobile-discovery-tls.json
+          python3 scripts/smoke-model-discovery-tls.py --exe build-tmp/magpie-full-host --evidence build-tmp/androidhost-discovery-tls.json
+
       - name: Fetch hash-pinned Linux Bun for plugin integration
         run: bash scripts/fetch-host-bun.sh
 
@@ -129,6 +136,8 @@ jobs:
             build-tmp/androidhost-go-tests.jsonl
             build-tmp/official-plugin-smoke.txt
             build-tmp/plugin-host-race.txt
+            build-tmp/mobile-discovery-tls.json
+            build-tmp/androidhost-discovery-tls.json
           if-no-files-found: warn
 
   runtime-emulator:

@@ -28,6 +28,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/bugfixes-0.1.55.md](docs/bugfixes-0.1.55.md) | 模型目录证书指纹、三态请求与真实核心 TLS 验收 |
 | [docs/bugfixes-0.1.54.md](docs/bugfixes-0.1.54.md) | 运行中安全日志、停止后最终诊断与实际退出码 |
 | [docs/bugfixes-0.1.53.md](docs/bugfixes-0.1.53.md) | 聊天与模型目录完整连接轮次、实际取消与 Room 收尾 |
 | [docs/bugfixes-0.1.52.md](docs/bugfixes-0.1.52.md) | 插件完整会话、实际请求取消、延迟登录取消及恢复记录边界 |

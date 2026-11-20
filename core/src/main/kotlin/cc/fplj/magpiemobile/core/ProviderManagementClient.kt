@@ -114,6 +114,7 @@ class ProviderManagementClient(
         val specific = when (error.safeErrorCode) {
             "provider_models_dns" -> ProviderModelDiscoveryFailure.DNS_FAILURE
             "provider_models_tls_certificate" -> ProviderModelDiscoveryFailure.TLS_CERTIFICATE
+            "provider_models_tls_pin" -> ProviderModelDiscoveryFailure.TLS_PIN
             "provider_models_invalid" -> ProviderModelDiscoveryFailure.INVALID_RESPONSE
             "provider_models_too_large" -> ProviderModelDiscoveryFailure.RESPONSE_TOO_LARGE
             "provider_models_sensitive_content" -> ProviderModelDiscoveryFailure.SENSITIVE_CONTENT

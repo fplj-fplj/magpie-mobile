@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 func TestMobileModelsDiscoveryHTTPAuthAndNoVendorPOST(t *testing.T) {
@@ -59,4 +61,70 @@ func TestMobileModelsDiscoveryHTTPFixedErrorAndCORS(t *testing.T) {
 		if w.Code != 403 || calls.Load() != 1 { t.Fatal("discovery bypassed original CORS") }
 		vendor.Close()
 	}
+}
+
+func TestMobileModelsDiscoveryHTTPServerPinStrictJSON(t *testing.T) {
+	const manager = "pin-discovery-management-key-982374"
+	key := "directory-pin-private-"+t.Name()
+	var calls atomic.Int64
+	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Method != "GET" || r.Header.Get("Cookie") != "" || r.Header.Get("Authorization") != "Bearer "+key { t.Error("pin decode changed vendor credential boundary") }
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer vendor.Close()
+	h := webHandler("3430", manager, 0, nil, mobileAPI(http.NotFoundHandler()))
+	call := func(payload string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "http://127.0.0.1:3430/api/mobile/providers/models", strings.NewReader(payload))
+		r.AddCookie(&http.Cookie{Name: "magpie_web_3430", Value: manager})
+		w := httptest.NewRecorder(); h.ServeHTTP(w, r); return w
+	}
+	chat, _ := json.Marshal(vendor.URL+"/v1")
+	encodedKey, _ := json.Marshal(key)
+	prefix := `{"chat":`+string(chat)+`,"key":`+string(encodedKey)
+	// Missing and explicit empty pin are both valid JSON contracts. An empty
+	// draft pin deliberately selects ordinary TLS (or allowed loopback HTTP).
+	for _, payload := range []string{prefix+`}`, prefix+`,"serverPin":""}`} {
+		if result := call(payload); result.Code != 200 { t.Fatal("supported empty/omitted serverPin rejected") }
+	}
+	if calls.Load() != 2 { t.Fatal("valid pin JSON did not perform one read per request") }
+	pin := strings.Repeat("a", 64)
+	for _, field := range []string{
+		`"serverPin":null`, `"serverPin":"","serverPin":""`, `"ServerPin":""`, `"serverpin":""`,
+		`"serverPin":1`, `"serverPin":true`, `"serverPin":{}`, `"serverPin":[]`,
+		`"serverPin":"","unknown":true`, `"serverPin":"`+pin+`"`,
+		`"serverPin":"`+strings.ToUpper(pin)+`"`, `"serverPin":" `+pin+`"`,
+	} {
+		result := call(prefix+`,`+field+`}`)
+		if result.Code != 400 || calls.Load() != 2 { t.Fatal("invalid pin JSON contacted vendor or bypassed strict decoder") }
+		if strings.Contains(result.Body.String(), pin) || strings.Contains(result.Body.String(), key) || strings.Contains(result.Body.String(), vendor.URL) { t.Fatal("pin JSON error leaked private fields") }
+	}
+	for _, payload := range []string{prefix+`,"serverPin":""} {}`, `{"chat":null,"serverPin":""}`, `{"chat":`+string(chat)+`,"key":null,"serverPin":""}`} {
+		if call(payload).Code != 400 || calls.Load() != 2 { t.Fatal("pin route accepted null or trailing JSON") }
+	}
+}
+
+func TestMobileModelsDiscoveryHTTPServerPinExactFieldDecode(t *testing.T) {
+	// TLS networking is exercised with the provider's production transport
+	// factory and the whole exported-RPC host smoke; this checks exact JSON
+	// presence semantics without opening a second transport policy in GUI.
+	pin := strings.Repeat("ab", 32)
+	for _, entry := range []struct { payload string; omitted bool; pin string }{
+		{`{"chat":"https://models.pin.test/v1"}`, true, ""},
+		{`{"chat":"https://models.pin.test/v1","serverPin":""}`, false, ""},
+		{`{"chat":"https://models.pin.test/v1","serverPin":"`+pin+`"}`, false, pin},
+	} {
+		var in provider.MobileModelDiscoveryRequest
+		r := httptest.NewRequest("POST", "http://127.0.0.1:3430/api/mobile/providers/models", strings.NewReader(entry.payload))
+		if err := mobileProviderDecode(httptest.NewRecorder(), r, &in, []string{"chat", "key", "id", "revision", "serverPin"}); err != nil { t.Fatal("valid draft pin did not decode") }
+		if (in.ServerPin == nil) != entry.omitted || in.ServerPin != nil && *in.ServerPin != entry.pin { t.Fatal("decoder conflated omitted/clear/replacement pin") }
+	}
+}
+
+func TestMobileModelsDiscoveryHTTPTLSPinErrorProjection(t *testing.T) {
+	w := httptest.NewRecorder()
+	mobileProviderFailure(w, &provider.MobileProviderModelsError{Status: 502, Code: "provider_models_tls_pin", Message: "model directory TLS certificate pin verification failed"})
+	if w.Code != 502 || w.Header().Get("X-Magpie-Mobile-Error-Code") != "provider_models_tls_pin" || strings.Contains(w.Body.String(), "models.pin.test") { t.Fatal("pin failure lost its fixed public status or code") }
+	var body struct { Error struct { Code, Message string } }
+	if json.Unmarshal(w.Body.Bytes(), &body) != nil || body.Error.Code != "provider_models_tls_pin" || body.Error.Message != "model directory TLS certificate pin verification failed" { t.Fatal("pin failure JSON contract differs") }
 }

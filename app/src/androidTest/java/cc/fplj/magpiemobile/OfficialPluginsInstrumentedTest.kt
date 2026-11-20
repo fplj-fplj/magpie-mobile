@@ -31,6 +31,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
@@ -122,6 +123,7 @@ class OfficialPluginsInstrumentedTest {
                     verifyPendingPluginLoginCancellation(upstream, artifacts, pid)
                     NativeCoreSession.providerClient().create(ProviderCreateDraft("android-runtime", "Android runtime",
                         upstream.base + "/v1", "synthetic-upstream-key", listOf("fake-echo"), allowLoopbackHttp = true))
+                    verifyModelDiscoveryPinContract(upstream, artifacts, browserCookie)
                     val capabilityReport = ProviderModelCapabilityClient(NativeCoreSession.gatewayConfig())
                         .run("android-runtime", "fake-echo")
                     assertNotNull("saved provider route missing", capabilityReport.route)
@@ -491,6 +493,33 @@ class OfficialPluginsInstrumentedTest {
                     device.findObject(By.text("高级")).click()
                     await("provider save button visible") { device.hasObject(By.text("保存连接")) }
                     device.waitForIdle()
+                    val pinField = By.res("provider-server-pin").enabled(true)
+                    await("provider TLS pin field visible") {
+                        if (device.hasObject(pinField)) true
+                        else {
+                            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
+                                device.displayWidth / 2, device.displayHeight / 3, 20)
+                            false
+                        }
+                    }
+                    device.findObject(pinField).click()
+                    device.findObject(pinField).text = "not-a-certificate-pin"
+                    scenario.onActivity { activity ->
+                        activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                            .hideSoftInputFromWindow(activity.window.decorView.windowToken, 0)
+                    }
+                    await("invalid pin inline hint") {
+                        device.hasObject(By.text("证书指纹须为 64 位小写十六进制；留空使用系统 TLS 证书校验。"))
+                    }
+                    assertTrue(device.takeScreenshot(File(artifacts, "provider-invalid-pin.png")))
+                    device.findObject(pinField).clear()
+                    scenario.onActivity { activity ->
+                        activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                            .hideSoftInputFromWindow(activity.window.decorView.windowToken, 0)
+                    }
+                    await("empty pin keeps normal TLS hint") {
+                        device.hasObject(By.text("可选 · 64 位小写十六进制；留空使用系统 TLS 证书校验。"))
+                    }
                     assertTrue(device.takeScreenshot(File(artifacts, "provider-editor-advanced.png")))
                     val footerBounds = requireNotNull(uiBounds("provider-editor-footer"))
                     val saveBounds = requireNotNull(uiBounds("provider-save"))
@@ -1262,6 +1291,33 @@ class OfficialPluginsInstrumentedTest {
     private fun Rect.isFullyWithin(displayWidth: Int, displayHeight: Int): Boolean =
         left >= 0 && top >= 0 && right <= displayWidth && bottom <= displayHeight
 
+    private fun verifyModelDiscoveryPinContract(upstream: LocalUpstream, artifacts: File, cookie: String) {
+        val client = NativeCoreSession.providerClient()
+        val snapshot = client.editable("android-runtime")
+        val catalog = client.discoverModels(ProviderModelDiscoveryRequest(
+            upstream.base + "/v1", providerId = snapshot.id, revision = snapshot.revision,
+            allowLoopbackHttp = true, serverPin = "",
+        ))
+        assertEquals(listOf("fake-echo"), catalog.models.map { it.id })
+        val before = upstream.modelRequests.get()
+        for (pin in listOf("not-a-pin", "a".repeat(64))) {
+            // Exercise the APK's real Go strict decoder/validation too: the Kotlin DTO
+            // deliberately refuses HTTP+pin before it can emit this unsafe request.
+            val body = JSONObject().put("chat", upstream.base + "/v1")
+                .put("id", snapshot.id).put("revision", snapshot.revision).put("serverPin", pin)
+            assertEquals(400, http("http://127.0.0.1:3430/api/mobile/providers/models", "", body.toString(), cookie).first)
+        }
+        assertEquals("invalid pin / HTTP+pin reached the actual upstream", before, upstream.modelRequests.get())
+        assertEquals("read-only pin validation changed provider revision", snapshot.revision,
+            client.editable("android-runtime").revision)
+        File(artifacts, "provider-discovery-pin-contract.txt").writeText(
+            "realInstalledGoRPC=true\nexplicitEmptyPinCatalog=true\n" +
+                "malformedPinRejected=true\nhttpWithPinRejected=true\n" +
+                "invalidRequestsReachedUpstream=0\nproviderRevisionUnchanged=true\n" +
+                "TLSHandshakeMatrix=hostValidationOnly\n",
+        )
+    }
+
     private fun http(url: String, key: String, body: String? = null, cookie: String? = null): Pair<Int, String> {
         val connection = URL(url).openConnection(Proxy.NO_PROXY) as HttpURLConnection
         try {
@@ -1289,6 +1345,7 @@ class OfficialPluginsInstrumentedTest {
         private val executor = Executors.newCachedThreadPool()
         private val sockets = CopyOnWriteArrayList<Socket>()
         val requests = CopyOnWriteArrayList<String>()
+        val modelRequests = AtomicInteger()
         val signInGateReached = CountDownLatch(1)
         val releaseSignInGate = CountDownLatch(1)
         val chatGateReached = CountDownLatch(1)
@@ -1345,7 +1402,11 @@ class OfficialPluginsInstrumentedTest {
                 json("{}")
                 return
             }
-            if (first.startsWith("GET")) { json("{\"data\":[{\"id\":\"fake-echo\"}]}"); return }
+            if (first.startsWith("GET")) {
+                if (first.startsWith("GET /models ") || first.startsWith("GET /v1/models ")) modelRequests.incrementAndGet()
+                json("{\"data\":[{\"id\":\"fake-echo\"}]}")
+                return
+            }
             val body = JSONObject(raw)
             if (body.has("tools")) {
                 json(JSONObject().put("id", "tool-probe").put("model", "fake-echo")

@@ -37,7 +37,7 @@ func mobileProviderServe(w http.ResponseWriter, r *http.Request) bool {
 	switch r.URL.Path {
 	case "/api/mobile/providers/models":
 		var in provider.MobileModelDiscoveryRequest
-		err = mobileProviderDecode(w, r, &in, []string{"chat", "key", "id", "revision"})
+		err = mobileProviderDecode(w, r, &in, []string{"chat", "key", "id", "revision", "serverPin"})
 		if err != nil { mobileProviderFailure(w, err); return true }
 		catalog, err := provider.MobileDiscoverModels(r.Context(), in)
 		if err != nil { mobileProviderFailure(w, err); return true }

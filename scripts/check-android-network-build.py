@@ -13,4 +13,10 @@ assert 'SSL_CERT_DIR' in service
 assert '/apex/com.android.conscrypt/cacerts:/system/etc/security/cacerts' in service
 source=(root / 'patches/mobile/overlay/internal/provider/mobile_discovery.go').read_text()
 assert 'InsecureSkipVerify: true' not in source and 'MinVersion: tls.VersionTLS12' in source
-print('PASS: Android Bionic DNS, system/APEX trust directories, TLS verification retained')
+assert source.count('InsecureSkipVerify = true') == 1, 'Only the explicit exact-pin verifier may replace system TLS'
+pin_factory = source.split('func mobileDiscoveryTransportFor(', 1)[1].split('\nfunc MobileDiscoverModels(', 1)[0]
+assert 'if pin != "" {' in pin_factory and 'VerifyConnection = func(cs tls.ConnectionState) error' in pin_factory
+assert 'netproxy.CertSHA256(cs.PeerCertificates[0])' in pin_factory and 'if got != pin' in pin_factory
+assert 'len(cs.PeerCertificates) == 0' in pin_factory and 'PinMismatchError' in pin_factory
+assert 'mobileDiscoveryTransportFor(pin, network)' in source and 'provider_models_tls_pin' in source
+print('PASS: Android Bionic DNS, system/APEX trust, ordinary TLS and explicit exact-leaf pin verifier retained')

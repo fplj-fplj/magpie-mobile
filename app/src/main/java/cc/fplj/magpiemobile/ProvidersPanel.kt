@@ -192,6 +192,8 @@ fun ProvidersPanel(
         old.scheme != next.scheme || old.host != next.host || port(old) != port(next)
     }
     val keyFingerprint = remember(key) { providerKeyFingerprint(key) }
+    val normalizedServerPin = ProviderCatalogSyncPolicy.normalizedServerPin(serverPin)
+    val serverPinError = ProviderCatalogSyncPolicy.serverPinError(baseUrl, serverPin)
     val modelPickerEntries = remember(modelOptions, selected, busy, name) {
         (modelOptions.map { it.id } + selected)
             .distinct()
@@ -215,10 +217,12 @@ fun ProvidersPanel(
         selectionMutation++
         manualText = selected.joinToString("\n")
     }
-    LaunchedEffect(open, normalized, keyFingerprint, localHttp, sessionKey, snapshot?.revision, retryCatalog) {
+    LaunchedEffect(open, normalized, keyFingerprint, localHttp, normalizedServerPin, sessionKey, snapshot?.revision, retryCatalog) {
         val sequence = ++catalogSequence
-        discoveryLoading = false; discoveryDone = false; discoveryError = ""
-        if (!open || !enabled || sessionKey == null || normalized.isEmpty() || newOriginNeedsKey) return@LaunchedEffect
+        discoveryLoading = false; discoveryDone = false; discoveryError = serverPinError.orEmpty()
+        if (!open || !enabled || sessionKey == null || normalized.isEmpty() || newOriginNeedsKey ||
+            normalizedServerPin == null || serverPinError != null
+        ) return@LaunchedEffect
         if (snapshot == null) {
             if (!nameTouched) name = ProviderBaseUrl.suggestName(baseUrl)
             if (!idTouched) {
@@ -229,40 +233,44 @@ fun ProvidersPanel(
                 id = suggestion
             }
         }
+        val requestedCanonicalBaseUrl = normalized
+        val requestedKeyFingerprint = keyFingerprint
+        val requestedLocalHttp = localHttp
+        val requestedServerPin = normalizedServerPin
+        val requestedProviderId = snapshot?.id
+        val requestedRevision = snapshot?.revision
+        val requestedBaseForm = baseUrl
+        val requestedKey = key
+        fun requestIsCurrent(): Boolean = ProviderCatalogSyncPolicy.requestIsCurrent(
+            requestedSequence = sequence,
+            currentSequence = catalogSequence,
+            requestedCanonicalBaseUrl = requestedCanonicalBaseUrl,
+            currentBaseUrl = baseUrl,
+            requestedKeyFingerprint = requestedKeyFingerprint,
+            currentKeyFingerprint = providerKeyFingerprint(key),
+            requestedLocalHttp = requestedLocalHttp,
+            currentLocalHttp = localHttp,
+            requestedServerPin = requestedServerPin,
+            currentServerPin = serverPin,
+            requestedProviderId = requestedProviderId,
+            currentProviderId = snapshot?.id,
+            requestedRevision = requestedRevision,
+            currentRevision = snapshot?.revision,
+            editorOpen = open,
+            sessionCurrent = latestEnabled && sessionKey == NativeCoreSession.providerSessionKey(),
+        )
         discoveryLoading = true
-        delay(1000) // settle URL/credential changes; old requests cannot apply to this generation
         try {
-            val requestedCanonicalBaseUrl = runCatching { ProviderBaseUrl.normalize(baseUrl) }.getOrNull()
-                ?: return@LaunchedEffect
-            if (requestedCanonicalBaseUrl != normalized) return@LaunchedEffect
-            val requestedKeyFingerprint = providerKeyFingerprint(key)
-            val requestedLocalHttp = localHttp
-            val requestedProviderId = snapshot?.id
-            val requestedRevision = snapshot?.revision
-            val requestedBaseForm = baseUrl
-            val requestedKey = key
+            delay(1000) // settle URL/credential/pin changes; stale requests never reach the client
+            if (!requestIsCurrent()) return@LaunchedEffect
             val catalog = withProviderRequest(sessionKey) { client ->
                 val activeRequest = ProviderModelDiscoveryRequest(
                     requestedBaseForm, requestedKey, requestedProviderId, requestedRevision, requestedLocalHttp,
+                    serverPin = requestedServerPin,
                 )
                 try { client.discoverModels(activeRequest) } finally { activeRequest.clearSecret() }
             }
-            val requestStillCurrent = ProviderCatalogSyncPolicy.requestIsCurrent(
-                requestedSequence = sequence,
-                currentSequence = catalogSequence,
-                requestedCanonicalBaseUrl = requestedCanonicalBaseUrl,
-                currentBaseUrl = baseUrl,
-                requestedKeyFingerprint = requestedKeyFingerprint,
-                currentKeyFingerprint = providerKeyFingerprint(key),
-                requestedLocalHttp = requestedLocalHttp,
-                currentLocalHttp = localHttp,
-                requestedProviderId = requestedProviderId,
-                currentProviderId = snapshot?.id,
-                requestedRevision = requestedRevision,
-                currentRevision = snapshot?.revision,
-                editorOpen = open,
-                sessionCurrent = latestEnabled && sessionKey == NativeCoreSession.providerSessionKey(),
-            )
+            val requestStillCurrent = requestIsCurrent()
             if (requestStillCurrent) {
                 ProviderCatalogSyncPolicy.adoptedBaseUrl(
                     requestedCanonicalBaseUrl = requestedCanonicalBaseUrl,
@@ -280,9 +288,7 @@ fun ProvidersPanel(
             }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
-            if (sequence == catalogSequence && latestEnabled && open &&
-                sessionKey == NativeCoreSession.providerSessionKey()
-            ) discoveryError = if (e is ProviderModelDiscoveryException) e.message ?: "无法读取模型目录" else "目录读取失败，请重试读取；没有修改配置。"
+            if (requestIsCurrent()) discoveryError = if (e is ProviderModelDiscoveryException) e.message ?: "无法读取模型目录" else "目录读取失败，请重试读取；没有修改配置。"
         } finally { if (sequence == catalogSequence) discoveryLoading = false }
     }
     fun submit() {
@@ -770,12 +776,25 @@ fun ProvidersPanel(
                             ) {
                                 OutlinedTextField(
                                     value = serverPin,
-                                    onValueChange = { serverPin = it },
+                                    onValueChange = { nextPin ->
+                                        if (!busy && serverPin != nextPin) {
+                                            // Fence callbacks now, before LaunchedEffect can recompose/cancel.
+                                            ++catalogSequence
+                                            discoveryLoading = false; discoveryDone = false; discoveryError = ""
+                                            serverPin = nextPin
+                                            // Also restart after equivalent or changed-then-restored pin edits.
+                                            retryCatalog++
+                                        }
+                                    },
                                     enabled = !busy,
                                     singleLine = true,
                                     label = { Text("服务器证书 SHA-256 指纹") },
-                                    supportingText = { Text("可选 · 64 位小写十六进制") },
-                                    modifier = Modifier.fillMaxWidth(),
+                                    isError = serverPinError != null,
+                                    supportingText = { Text(serverPinError ?: "可选 · 64 位小写十六进制；留空使用系统 TLS 证书校验。") },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("provider-server-pin")
+                                        .semantics { testTagsAsResourceId = true },
                                 )
                             }
                         }

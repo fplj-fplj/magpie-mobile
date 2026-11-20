@@ -245,13 +245,13 @@ class ApplyMobileCoreTests(unittest.TestCase):
     def test_read_only_model_discovery_guards_are_packaged(self):
         root = patcher.DEFAULT_PATCH_ROOT
         source = (root / "overlay/internal/provider/mobile_discovery.go").read_text(encoding="utf-8")
-        for guard in ("http.MethodGet", "mobileModelsTimeout = 8 * time.Second", "mobileModelsBytes = 2 << 20", "mobileModelsCount = 1000", "http.ErrUseLastResponse", "mobileCanonical()", "hmac.Equal", "oldOrigin != newOrigin", "http.StatusNotFound && index+1 < len(bases)", "io.LimitReader(response.Body, mobileModelsBytes+1)", "mobileModelsContainKey", "DisableCompression: true"):
+        for guard in ("http.MethodGet", "mobileModelsTimeout = 8 * time.Second", "mobileModelsBytes = 2 << 20", "mobileModelsCount = 1000", "http.ErrUseLastResponse", "mobileCanonical()", "hmac.Equal", "oldOrigin != origin", "in.ServerPin == nil && oldOrigin == origin", "mobileDiscoveryCredentials(ctx, in)", "VerifyConnection = func(cs tls.ConnectionState) error", "netproxy.CertSHA256(cs.PeerCertificates[0])", "provider_models_tls_pin", "http.StatusNotFound && index+1 < len(bases)", "io.LimitReader(response.Body, mobileModelsBytes+1)", "mobileModelsContainKey", "DisableCompression: true"):
             self.assertIn(guard, source)
         for unsafe in ("http.MethodPost", "MobileEditProvider(", "MobileCreateProvider(", "mobileWrite(", "Save(", "Test(", "Detect("):
             self.assertNotIn(unsafe, source)
         routes = (root / "overlay/internal/gui/mobile_providers.go").read_text(encoding="utf-8")
         self.assertIn("/api/mobile/providers/models", routes)
-        self.assertIn("[]string{\"chat\", \"key\", \"id\", \"revision\"}", routes)
+        self.assertIn("[]string{\"chat\", \"key\", \"id\", \"revision\", \"serverPin\"}", routes)
         policy = (root / "overlay/internal/gui/mobile_policy.go").read_text(encoding="utf-8")
         self.assertIn("providerModelDiscovery", policy)
 
@@ -278,7 +278,7 @@ class ApplyMobileCoreTests(unittest.TestCase):
         for exception in ("ownCallback", "corsPreflight", "keyPageOpen", "imageTokenAsked", "oidcExchange", "proveAsked"):
             self.assertRegex(inserts, "!mobilepolicy.Enabled.*" + exception)
         tests = [(root / "overlay" / o["path"]).read_text() for o in manifest["overlays"] if o["path"].endswith("_test.go")]
-        self.assertEqual(len(tests), 13)
+        self.assertEqual(len(tests), 14)
         constraints = {"//go:build mobile", "//go:build mobile || androidhost", "//go:build androidhost"}
         self.assertTrue(all(t.splitlines()[0] in constraints for t in tests))
         self.assertGreaterEqual(sum(t.count("func TestMobile") for t in tests), 10)

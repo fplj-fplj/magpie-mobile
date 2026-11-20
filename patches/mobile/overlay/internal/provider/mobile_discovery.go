@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/mobilepolicy"
+	"github.com/yetone/magpie/internal/netproxy"
 )
 
 const mobileModelsTimeout = 8 * time.Second
@@ -30,6 +31,7 @@ type MobileModelDiscoveryRequest struct {
 	Key *string `json:"key,omitempty"`
 	ID *string `json:"id,omitempty"`
 	Revision *string `json:"revision,omitempty"`
+	ServerPin *string `json:"serverPin,omitempty"`
 }
 
 type MobileModelSummary struct {
@@ -55,36 +57,42 @@ func mobileModelsError(status int, code, message string) error {
 	return &MobileProviderModelsError{status, code, message}
 }
 
-// Clone a validated stored key under the strict canonical lock, then release it
-// before the network request. No Provider fields/revision are changed. An
-// override key and chat are used for this read only and never sent back/saved.
-func mobileDiscoveryKey(ctx context.Context, in MobileModelDiscoveryRequest) (string, error) {
-	if (in.ID == nil) != (in.Revision == nil) { return "", ErrMobileProviderInvalid }
-	key := ""
+// Clone key and pin from the same revision under the canonical lock, then
+// release it before networking. Overrides apply only to this read. A missing
+// pin inherits only on the stored origin; an explicit empty pin uses system TLS.
+func mobileDiscoveryCredentials(ctx context.Context, in MobileModelDiscoveryRequest) (key, pin string, err error) {
+	if (in.ID == nil) != (in.Revision == nil) { return "", "", ErrMobileProviderInvalid }
+	origin, err := mobileModelsOrigin(in.Chat)
+	if err != nil { return "", "", err }
+	if in.ServerPin != nil { pin = *in.ServerPin }
+	if pin != "" && (len(pin) != 64 || strings.Trim(pin, "0123456789abcdef") != "") { return "", "", ErrMobileProviderInvalid }
 	if in.Key != nil && strings.TrimSpace(*in.Key) != "" {
-		var err error
-		key, err = mobileKey(*in.Key); if err != nil { return "", err }
+		key, err = mobileKey(*in.Key); if err != nil { return "", "", err }
 	}
-	if in.ID == nil { return key, nil }
-	if !mobileExistingID.MatchString(*in.ID) || len(*in.Revision) != 64 || strings.Trim(*in.Revision, "0123456789abcdef") != "" { return "", ErrMobileProviderInvalid }
-	err := mobileDiscoveryRead(ctx, func() error {
-		raw, f, err := mobileCanonical(); if err != nil { return err }
-		i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == *in.ID })
-		if i < 0 { return ErrMobileProviderMissing }
-		p := f.Providers[i]
-		if !mobileSupported(p) { return ErrMobileProviderUnsupported }
-		snapshot, err := mobileSnapshot(p, raw); if err != nil { return err }
-		if !hmac.Equal([]byte(*in.Revision), []byte(snapshot.Revision)) { return ErrMobileProviderRevision }
-		if key == "" {
-			oldOrigin, oldErr := mobileModelsOrigin(p.Chat)
-			newOrigin, newErr := mobileModelsOrigin(in.Chat)
-			if oldErr != nil || newErr != nil { return ErrMobileProviderInvalid }
-			if oldOrigin != newOrigin { return mobileModelsError(400, "provider_models_origin_changed", "changing provider origin requires an explicit API key for this read") }
-			key, err = mobileKey(p.Key)
-		}
-		return err
-	})
-	return key, err
+	if in.ID != nil {
+		if !mobileExistingID.MatchString(*in.ID) || len(*in.Revision) != 64 || strings.Trim(*in.Revision, "0123456789abcdef") != "" { return "", "", ErrMobileProviderInvalid }
+		err = mobileDiscoveryRead(ctx, func() error {
+			raw, f, err := mobileCanonical(); if err != nil { return err }
+			i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == *in.ID })
+			if i < 0 { return ErrMobileProviderMissing }
+			p := f.Providers[i]
+			if !mobileSupported(p) { return ErrMobileProviderUnsupported }
+			snapshot, err := mobileSnapshot(p, raw); if err != nil { return err }
+			if !hmac.Equal([]byte(*in.Revision), []byte(snapshot.Revision)) { return ErrMobileProviderRevision }
+			oldOrigin, err := mobileModelsOrigin(p.Chat)
+			if err != nil { return ErrMobileProviderInvalid }
+			if key == "" {
+				if oldOrigin != origin { return mobileModelsError(400, "provider_models_origin_changed", "changing provider origin requires an explicit API key for this read") }
+				key, err = mobileKey(p.Key)
+			}
+			if in.ServerPin == nil && oldOrigin == origin { pin = p.ServerPin }
+			return err
+		})
+		if err != nil { return "", "", err }
+	}
+	// Validate inherited pins too; never silently normalize or discard a pin.
+	if pin != "" && (len(pin) != 64 || strings.Trim(pin, "0123456789abcdef") != "" || !strings.HasPrefix(origin, "https://")) { return "", "", ErrMobileProviderInvalid }
+	return key, pin, nil
 }
 
 // Lookup shares the canonical mutex/file lock but respects this read deadline.
@@ -148,15 +156,46 @@ func mobileDiscoveryTransport() *http.Transport {
 	}
 }
 
+// The production factory owns all TLS, proxy and timeout policy. Tests may
+// supply only trust roots and dialing, without an RPC flag or mutable hook.
+type mobileDiscoveryNetwork struct {
+	rootCAs *x509.CertPool
+	dialContext func(context.Context, string, string) (net.Conn, error)
+}
+
+func mobileDiscoveryTransportFor(pin string, network mobileDiscoveryNetwork) *http.Transport {
+	transport := mobileDiscoveryTransport()
+	transport.TLSClientConfig.RootCAs = network.rootCAs
+	if network.dialContext != nil { transport.DialContext = network.dialContext }
+	if pin != "" {
+		// Match the official exact leaf pin semantics, including self-signed
+		// certificates. VerifyConnection always runs before any HTTP bytes.
+		transport.TLSClientConfig.InsecureSkipVerify = true
+		transport.TLSClientConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 || cs.PeerCertificates[0] == nil {
+				return &netproxy.PinMismatchError{Host: cs.ServerName, Want: pin}
+			}
+			got := netproxy.CertSHA256(cs.PeerCertificates[0])
+			if got != pin { return &netproxy.PinMismatchError{Host: cs.ServerName, Got: got, Want: pin} }
+			return nil
+		}
+	}
+	return transport
+}
+
 func MobileDiscoverModels(parent context.Context, in MobileModelDiscoveryRequest) (MobileModelCatalog, error) {
+	return mobileDiscoverModels(parent, in, mobileDiscoveryNetwork{})
+}
+
+func mobileDiscoverModels(parent context.Context, in MobileModelDiscoveryRequest, network mobileDiscoveryNetwork) (MobileModelCatalog, error) {
 	if !mobilepolicy.Enabled { return MobileModelCatalog{}, ErrMobileProviderUnsupported }
 	ctx, cancel := context.WithTimeout(parent, mobileModelsTimeout)
 	defer cancel()
 	bases, err := mobileDiscoveryBases(in.Chat); if err != nil { return MobileModelCatalog{}, err }
-	key, err := mobileDiscoveryKey(ctx, in); if err != nil { return MobileModelCatalog{}, err }
-	defer func() { key = ""; in.Key = nil }()
+	key, pin, err := mobileDiscoveryCredentials(ctx, in); if err != nil { return MobileModelCatalog{}, err }
+	defer func() { key = ""; in.Key = nil; in.ServerPin = nil }()
 	for _, base := range bases { if mobileModelsContainKey(base, key) { return MobileModelCatalog{}, ErrMobileProviderInvalid } }
-	transport := mobileDiscoveryTransport()
+	transport := mobileDiscoveryTransportFor(pin, network)
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: mobileModelsTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	for index, base := range bases {
@@ -196,6 +235,8 @@ func MobileDiscoverModels(parent context.Context, in MobileModelDiscoveryRequest
 }
 
 func mobileModelsNetworkError(ctx context.Context, err error) error {
+	var pinMismatch *netproxy.PinMismatchError
+	if errors.As(err, &pinMismatch) { return mobileModelsError(502, "provider_models_tls_pin", "model directory TLS certificate pin verification failed") }
 	var timeout net.Error
 	if ctx.Err() != nil || errors.As(err, &timeout) && timeout.Timeout() {
 		return mobileModelsError(504, "provider_models_timeout", "model directory read timed out")

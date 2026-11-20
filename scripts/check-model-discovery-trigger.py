@@ -12,4 +12,10 @@ assert 'withProviderRequest(sessionKey)' in s, 'Discovery must bind the full aut
 assert 'NativeCoreSession.providerClient()' not in s, 'Provider operations must not resolve replacement credentials in an IO worker'
 assert 'discoverModels(activeRequest)' in s, 'Automatic trigger must call read-only discovery'
 assert 'keyFingerprint' in s and 'catalogSequence' in s, 'Bind late responses to current credentials/generation'
+assert 'serverPin = requestedServerPin' in s, 'Discovery must use the visible captured draft pin, including empty'
+assert 'currentServerPin = serverPin' in s and 'normalizedServerPin, sessionKey' in s, 'Bind pin changes to request currentness'
+assert 'if (!requestIsCurrent()) return@LaunchedEffect' in s, 'Recheck draft pin after debounce and before RPC'
+assert 'if (requestIsCurrent()) discoveryError' in s, 'Late errors must pass the same pin fence as success'
+pin_input = s.split('value = serverPin,', 1)[1].split('enabled = !busy,', 1)[0]
+assert pin_input.index('++catalogSequence') < pin_input.index('serverPin = nextPin'), 'Fence callbacks in input event before recomposition'
 print('PASS: automatic model discovery does not wait for password-field blur')
