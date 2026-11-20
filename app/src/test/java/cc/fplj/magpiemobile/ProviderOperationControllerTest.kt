@@ -17,6 +17,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CompletableDeferred
@@ -31,6 +32,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -124,6 +128,127 @@ class ProviderOperationControllerTest {
                     io.scheduler.runCurrent()
                     ui.scheduler.runCurrent()
                 }
+            }
+        }
+    }
+
+    @Test fun changingOrClearingPinWhileCatalogIoIsQueuedCannotDispatchTheOldRequest() = runBlocking {
+        for (nextPin in listOf("", "cd".repeat(32))) {
+            assertQueuedCatalogPinChange(nextPin, restoreBeforeIo = false)
+        }
+    }
+
+    @Test fun restoringPinBeforeCatalogIoStartsCannotReviveTheOldSequence() = runBlocking {
+        for (nextPin in listOf("", "cd".repeat(32))) {
+            assertQueuedCatalogPinChange(nextPin, restoreBeforeIo = true)
+        }
+    }
+
+    private suspend fun assertQueuedCatalogPinChange(nextPin: String, restoreBeforeIo: Boolean) {
+        ManagementPeer().use { peer ->
+            val ui = StandardTestDispatcher()
+            val io = StandardTestDispatcher()
+            val scope = CoroutineScope(SupervisorJob() + ui)
+            val source = LeaseSource(peer)
+            val originalPin = "ab".repeat(32)
+            val currentPin = AtomicReference(originalPin)
+            val sequence = AtomicLong(7L)
+            val workerEntries = AtomicInteger()
+            val clientCalls = AtomicInteger()
+            val base = "https://api.example/v1"
+            val revision = "a".repeat(64)
+
+            fun requestIsCurrent(requestedSequence: Long, requestedPin: String): Boolean =
+                ProviderCatalogSyncPolicy.requestIsCurrent(
+                    requestedSequence = requestedSequence,
+                    currentSequence = sequence.get(),
+                    requestedCanonicalBaseUrl = base,
+                    currentBaseUrl = base,
+                    requestedKeyFingerprint = "same-form-key",
+                    currentKeyFingerprint = "same-form-key",
+                    requestedLocalHttp = false,
+                    currentLocalHttp = false,
+                    requestedServerPin = requestedPin,
+                    currentServerPin = currentPin.get(),
+                    requestedProviderId = "saved",
+                    currentProviderId = "saved",
+                    requestedRevision = revision,
+                    currentRevision = revision,
+                    editorOpen = true,
+                    sessionCurrent = true,
+                )
+
+            fun readCatalog(requestedSequence: Long, requestedPin: String) = scope.async {
+                // Match both production boundaries: the caller check and the
+                // second check inside the real helper's queued IO action.
+                check(requestIsCurrent(requestedSequence, requestedPin))
+                withProviderRequest(SESSION_A, source::acquire, io) { client ->
+                    workerEntries.incrementAndGet()
+                    if (!requestIsCurrent(requestedSequence, requestedPin)) {
+                        throw CancellationException("Model directory draft changed")
+                    }
+                    val discovery = ProviderModelDiscoveryRequest(
+                        base, "queued-catalog-synthetic-key", "saved", revision,
+                        serverPin = requestedPin,
+                    )
+                    clientCalls.incrementAndGet()
+                    try { client.discoverModels(discovery) } finally { discovery.clearSecret() }
+                }
+            }
+
+            try {
+                val oldRead = readCatalog(sequence.get(), originalPin)
+                ui.scheduler.runCurrent() // Capture the real lease, leaving its IO body queued.
+                assertEquals(1, source.leases.size)
+                assertEquals(0, workerEntries.get())
+                assertFalse(oldRead.isCompleted)
+
+                // These are the synchronous input-event mutations. Deliberately
+                // do not cancel/recompose the effect or change the core session.
+                sequence.incrementAndGet(); currentPin.set(nextPin)
+                if (restoreBeforeIo) {
+                    sequence.incrementAndGet(); currentPin.set(originalPin)
+                }
+                assertFalse(oldRead.isCancelled)
+                withTimeout(5000) {
+                    while (!oldRead.isCompleted) {
+                        io.scheduler.runCurrent(); ui.scheduler.runCurrent(); yield()
+                    }
+                    oldRead.join()
+                }
+
+                assertTrue(oldRead.isCancelled)
+                assertEquals(1, workerEntries.get())
+                assertEquals(0, clientCalls.get())
+                assertTrue("Stale pin dispatched capability or directory HTTP", peer.requests.isEmpty())
+                assertReleasedOnce(source)
+                assertCancelled(source.leases.single().control)
+
+                // A fresh request on the same unchanged core session must still
+                // reach the actual management peer using the replacement pin.
+                val expectedPin = currentPin.get()
+                val replacement = readCatalog(sequence.get(), expectedPin)
+                ui.scheduler.runCurrent()
+                assertEquals(2, source.leases.size)
+                val catalog = withTimeout(5000) {
+                    while (!replacement.isCompleted) {
+                        io.scheduler.runCurrent(); ui.scheduler.runCurrent(); yield()
+                    }
+                    replacement.await()
+                }
+                assertEquals(listOf("test-model"), catalog.models.map { it.id })
+                assertEquals(base, catalog.baseUrl)
+                assertEquals(2, workerEntries.get())
+                assertEquals(1, clientCalls.get())
+                assertEquals(listOf(CAPABILITIES_PATH, DISCOVERY_PATH), peer.requests.map { it.path })
+                assertEquals(expectedPin, peer.requests.single { it.path == DISCOVERY_PATH }.serverPin)
+                assertTrue(peer.workerFailure.get()?.toString(), peer.workerFailure.get() == null)
+                assertReleasedOnce(source)
+                source.leases.last().control.ensureActive()
+            } finally {
+                scope.cancel()
+                io.scheduler.runCurrent()
+                ui.scheduler.runCurrent()
             }
         }
     }
@@ -602,7 +727,11 @@ class ProviderOperationControllerTest {
                     }
                     val cookie = headers.lineSequence().firstOrNull { it.startsWith("Cookie:", true) }
                         ?.substringAfter(':')?.trim().orEmpty()
-                    requests += RecordedRequest(path, cookie)
+                    val serverPin = if (path == DISCOVERY_PATH) {
+                        val body = Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)) as JsonObject
+                        (body["serverPin"] as? JsonPrimitive)?.content
+                    } else null
+                    requests += RecordedRequest(path, cookie, serverPin)
                     val output = socket.getOutputStream()
                     if (path == silentPath) {
                         if (sendHeaders) {
@@ -624,6 +753,7 @@ class ProviderOperationControllerTest {
                             CAPABILITIES_PATH -> CAPABILITIES
                             LIST_PATH -> """{"providers":[]}"""
                             EDITABLE_PATH -> """{"id":"saved","revision":"${"a".repeat(64)}","name":"Saved provider","chat":"https://api.example/v1","models":["test-model"],"noModels":false,"key":{"set":true,"masked":"******","optional":false}}"""
+                            DISCOVERY_PATH -> """{"models":[{"id":"test-model","name":"Test model"}],"baseUrl":"https://api.example/v1"}"""
                             else -> throw AssertionError("Unexpected fixture request: $path")
                         }.toByteArray(Charsets.UTF_8)
                         output.write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
@@ -647,7 +777,7 @@ class ProviderOperationControllerTest {
         }
     }
 
-    private data class RecordedRequest(val path: String, val cookie: String) {
+    private data class RecordedRequest(val path: String, val cookie: String, val serverPin: String? = null) {
         override fun toString() = "RecordedRequest(path=$path,credentials=<redacted>)"
     }
 

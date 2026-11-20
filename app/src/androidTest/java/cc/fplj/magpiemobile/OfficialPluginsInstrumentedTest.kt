@@ -541,7 +541,9 @@ class OfficialPluginsInstrumentedTest {
                         "Provider save button is clipped by the system navigation area: save=$saveBounds",
                         saveBounds.bottom <= device.displayHeight - 24,
                     )
-                    device.pressBack()
+                    // The field may re-open the IME after clear(); use the real editor
+                    // navigation action so Back cannot be consumed by the keyboard.
+                    device.findObject(By.desc("返回提供商列表")).click()
                     await("provider editor closed") { !device.hasObject(By.text("保存连接")) }
                     device.findObject(By.text("聊天")).click()
                     await("chat model selector visible") { device.hasObject(By.res("chat-model-selector")) }

@@ -261,9 +261,11 @@ fun ProvidersPanel(
         )
         discoveryLoading = true
         try {
-            delay(1000) // settle URL/credential/pin changes; stale requests never reach the client
+            delay(1000) // settle URL/credential/pin changes before checking the current draft
             if (!requestIsCurrent()) return@LaunchedEffect
             val catalog = withProviderRequest(sessionKey) { client ->
+                // The IO worker may have waited while an input callback fenced this draft.
+                if (!requestIsCurrent()) throw CancellationException("Model directory draft changed")
                 val activeRequest = ProviderModelDiscoveryRequest(
                     requestedBaseForm, requestedKey, requestedProviderId, requestedRevision, requestedLocalHttp,
                     serverPin = requestedServerPin,

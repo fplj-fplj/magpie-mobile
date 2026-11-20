@@ -15,6 +15,8 @@ assert 'keyFingerprint' in s and 'catalogSequence' in s, 'Bind late responses to
 assert 'serverPin = requestedServerPin' in s, 'Discovery must use the visible captured draft pin, including empty'
 assert 'currentServerPin = serverPin' in s and 'normalizedServerPin, sessionKey' in s, 'Bind pin changes to request currentness'
 assert 'if (!requestIsCurrent()) return@LaunchedEffect' in s, 'Recheck draft pin after debounce and before RPC'
+worker = s.split('val catalog = withProviderRequest(sessionKey) { client ->', 1)[1].split('val requestStillCurrent', 1)[0]
+assert worker.index('if (!requestIsCurrent()) throw CancellationException') < worker.index('val activeRequest = ProviderModelDiscoveryRequest('), 'Queued IO must recheck draft pin before constructing/dispatching discovery'
 assert 'if (requestIsCurrent()) discoveryError' in s, 'Late errors must pass the same pin fence as success'
 pin_input = s.split('value = serverPin,', 1)[1].split('enabled = !busy,', 1)[0]
 assert pin_input.index('++catalogSequence') < pin_input.index('serverPin = nextPin'), 'Fence callbacks in input event before recomposition'
