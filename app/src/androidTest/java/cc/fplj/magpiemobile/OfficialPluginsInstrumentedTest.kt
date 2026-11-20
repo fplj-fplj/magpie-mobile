@@ -76,6 +76,17 @@ class OfficialPluginsInstrumentedTest {
                     device.findObject(power).click()
                     await("authenticated Android core startup", 120_000) { NativeCoreSession.status.value.ready }
                     await("gateway switch checked after startup") { device.findObject(power)?.isChecked == true }
+                    val liveKeySession = requireNotNull(NativeCoreSession.providerSessionKey())
+                    var copiedLiveKey = false
+                    assertTrue(NativeCoreSession.copyGatewayKeyIfCurrent(liveKeySession) {
+                        copiedLiveKey = it.isNotBlank()
+                    })
+                    assertTrue("current-session key copy did not read a bound gateway key", copiedLiveKey)
+                    var staleCallbackReached = false
+                    assertFalse(NativeCoreSession.copyGatewayKeyIfCurrent(
+                        liveKeySession.copy(epoch = liveKeySession.epoch + 1),
+                    ) { staleCallbackReached = true })
+                    assertFalse(staleCallbackReached)
                     assertTrue(device.takeScreenshot(File(artifacts, "gateway-on-landscape.png")))
                     device.setOrientationNatural()
                     await("portrait gateway after startup") { device.hasObject(power) && context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT }

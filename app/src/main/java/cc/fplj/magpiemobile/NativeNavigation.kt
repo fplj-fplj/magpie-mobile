@@ -277,8 +277,13 @@ fun Dashboard(
                                     if (running && !connection.ready && connection.phase != NativeCoreSession.Phase.CONNECTING)
                                         Button(onClick = onRetryCoreConnection) { Text("重新连接") }
                                 }
-                                GatewayEndpointCard(running && !stopping, clientReady,
-                                    if (clientReady) NativeCoreSession.currentGatewayKey() else null, shell.selectedModel)
+                                GatewayEndpointCard(
+                                    running && !stopping,
+                                    clientReady,
+                                    liveSession?.let(NativeCoreSession::maskedGatewayKeyFor),
+                                    shell.selectedModel,
+                                    expectedSession = liveSession,
+                                )
                             }
                             GatewaySection.KEYS -> GatewayKeysCard(clientReady, keysViewModel, visibleKeysState)
                             GatewaySection.USAGE -> {

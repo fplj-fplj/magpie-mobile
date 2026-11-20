@@ -211,6 +211,30 @@ object NativeCoreSession {
         binding?.takeIf { isRunningOwner(it) }?.config?.gatewayKey
     }
 
+    /** Return only a masked display value for the currently verified session. */
+    internal fun maskedGatewayKeyFor(expectedSession: ProviderSessionKey): String? = synchronized(lock) {
+        val current = binding ?: return@synchronized null
+        val config = current.config ?: return@synchronized null
+        if (providerSessions.current(current, config, isRunningOwner(current)) != expectedSession) {
+            return@synchronized null
+        }
+        config.gatewayKey.let { key ->
+            if (key.length > 20) key.take(16) + "…" + key.takeLast(4) else "已就绪"
+        }
+    }
+
+    /** Re-read and deliver a gateway key only while its complete verified epoch is still live. */
+    internal fun copyGatewayKeyIfCurrent(expectedSession: ProviderSessionKey, copy: (String) -> Unit): Boolean =
+        synchronized(lock) {
+            val current = binding ?: return@synchronized false
+            val config = current.config ?: return@synchronized false
+            if (providerSessions.current(current, config, isRunningOwner(current)) != expectedSession) {
+                return@synchronized false
+            }
+            copy(config.gatewayKey)
+            true
+        }
+
     fun managementClient(): cc.fplj.magpiemobile.core.CoreManagementClient = synchronized(lock) {
         val current = binding ?: error("请先启动网关")
         check(isRunningOwner(current) && current.config != null) { "核心安全连接尚未完成" }

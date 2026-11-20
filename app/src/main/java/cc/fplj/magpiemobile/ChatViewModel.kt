@@ -155,13 +155,16 @@ class ChatViewModel internal constructor(
             try {
                 withContext(dispatcher) { checkNotNull(repository).deleteConversation(id) }
                 drafts.remove(id)
-                // Deleted selection falls back to the newest live conversation automatically.
-                loadLatest(if (snapshot.selected?.id == id) null else snapshot.selected?.id)
                 if (snapshot.selected?.id == id) {
+                    // Deleted selection falls back to the newest live conversation automatically.
+                    loadLatest(null)
                     mutable.update {
                         it.copy(draft = drafts[it.selected?.id].orEmpty(), partial = "",
                             partialReasoning = "", notice = "")
                     }
+                } else {
+                    // Unrelated deletion changes history only; preserve the current message page.
+                    reloadConversationList(snapshot.conversations.size.coerceAtLeast(30))
                 }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { mutable.update { it.copy(notice = "会话删除失败；若该会话正在发送，请稍后重试。") } }
@@ -169,10 +172,12 @@ class ChatViewModel internal constructor(
         }
     }
 
-    private suspend fun reloadConversationList() {
+    private suspend fun reloadConversationList(visibleLimit: Int = 30) {
         val repo = checkNotNull(repository)
-        val list = withContext(dispatcher) { repo.conversations(limit = 31) }
-        mutable.update { it.copy(conversations = list.take(30), moreConversations = list.size > 30) }
+        val list = withContext(dispatcher) { repo.conversations(limit = visibleLimit + 1) }
+        mutable.update {
+            it.copy(conversations = list.take(visibleLimit), moreConversations = list.size > visibleLimit)
+        }
     }
 
     private fun changeSelection(id: String?, create: Boolean = false) {

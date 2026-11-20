@@ -23,11 +23,15 @@ import kotlinx.coroutines.withContext
 internal fun GatewayEndpointCard(
     running: Boolean,
     clientReady: Boolean,
-    currentGatewayKey: String?,
+    maskedGatewayKey: String?,
     defaultModel: String,
+    expectedSession: ProviderSessionKey? = null,
+    copyGatewayKeyIfCurrent: (ProviderSessionKey, (String) -> Unit) -> Boolean =
+        NativeCoreSession::copyGatewayKeyIfCurrent,
 ) {
     val clipboard = LocalClipboardManager.current
-    var notice by remember { mutableStateOf("") }
+    val sensitiveClipboard = rememberSensitiveClipboardManager()
+    var notice by remember(expectedSession, clientReady) { mutableStateOf("") }
     ContentCard {
             Text("网关接入与本地端点", style = MaterialTheme.typography.titleMedium)
             Text(
@@ -40,9 +44,8 @@ internal fun GatewayEndpointCard(
                 style = MaterialTheme.typography.bodySmall
             )
             if (running) {
-                if (clientReady && currentGatewayKey != null) {
-                    val masked = if (currentGatewayKey.length > 20) currentGatewayKey.take(16) + "…" + currentGatewayKey.takeLast(4) else "已就绪"
-                    Text("当前内置客户端 Key：" + masked + " (有效已就绪)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                if (clientReady && expectedSession != null && maskedGatewayKey != null) {
+                    Text("当前内置客户端 Key：$maskedGatewayKey (有效已就绪)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 } else {
                     Text("核心安全连接验证中，正在核对客户端密钥…", style = MaterialTheme.typography.labelSmall)
                 }
@@ -54,24 +57,29 @@ internal fun GatewayEndpointCard(
                         Text("复制 Base URL")
                     }
                     OutlinedButton(
-                        enabled = clientReady && currentGatewayKey != null,
+                        enabled = clientReady && expectedSession != null,
                         onClick = {
-                            if (currentGatewayKey != null) {
-                                clipboard.setText(AnnotatedString(currentGatewayKey))
-                                notice = "已复制当前网关 API Key 到剪贴板，可粘贴至第三方应用"
+                            val session = expectedSession ?: return@OutlinedButton
+                            val copied = copyGatewayKeyIfCurrent(session) { key ->
+                                sensitiveClipboard.setText(AnnotatedString(key))
                             }
+                            notice = if (copied) "已复制当前网关 API Key 到剪贴板，可粘贴至第三方应用"
+                            else "核心连接已变化，请重试"
                         }
                     ) {
                         Text("复制 API Key")
                     }
                     OutlinedButton(
-                        enabled = clientReady && currentGatewayKey != null,
+                        enabled = clientReady && expectedSession != null,
                         onClick = {
-                            val model = defaultModel.ifBlank { "default" }
-                            val effectiveKey = currentGatewayKey ?: "sk-magpie-key"
-                            val curlCmd = """curl -X POST http://127.0.0.1:3425/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer $effectiveKey" -d '{"model":"$model","messages":[{"role":"user","content":"Hello"}]}'"""
-                            clipboard.setText(AnnotatedString(curlCmd))
-                            notice = "已复制测试 cURL（内嵌有效网关 Key），终端粘贴回车即可测试"
+                            val session = expectedSession ?: return@OutlinedButton
+                            val copied = copyGatewayKeyIfCurrent(session) { key ->
+                                val model = defaultModel.ifBlank { "default" }
+                                val curlCmd = """curl -X POST http://127.0.0.1:3425/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer $key" -d '{"model":"$model","messages":[{"role":"user","content":"Hello"}]}'"""
+                                sensitiveClipboard.setText(AnnotatedString(curlCmd))
+                            }
+                            notice = if (copied) "已复制测试 cURL（内嵌有效网关 Key），终端粘贴回车即可测试"
+                            else "核心连接已变化，请重试"
                         }
                     ) {
                         Text("复制测试 cURL")
@@ -91,7 +99,7 @@ internal fun GatewayKeysCard(
     viewModel: GatewayKeysViewModel,
     keysState: GatewayKeysUiState,
 ) {
-    val clipboard = LocalClipboardManager.current
+    val clipboard = rememberSensitiveClipboardManager()
     var notice by remember(keysState.session, clientReady) { mutableStateOf("") }
     var newKeyName by remember(keysState.session, clientReady) { mutableStateOf("") }
     var editingKey by remember(keysState.session, clientReady) { mutableStateOf<RegisteredGatewayKey?>(null) }

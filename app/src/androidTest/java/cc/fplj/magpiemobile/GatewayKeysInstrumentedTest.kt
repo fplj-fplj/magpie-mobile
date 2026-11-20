@@ -1,5 +1,8 @@
 package cc.fplj.magpiemobile
 
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -35,6 +39,78 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class GatewayKeysInstrumentedTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun gatewayEndpointRejectsOldCallbackAndMarksCurrentKeyAndCurlSensitive() {
+        val clipboard = compose.activity.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        var liveSession = FIRST
+        val oldMaskedKey = "sk-synthetic-old-mask"
+        val currentKey = "sk-synthetic-current-key"
+        val copyForLiveSession: (ProviderSessionKey, (String) -> Unit) -> Boolean = { expected, copy ->
+            if (expected != liveSession) false else { copy(currentKey); true }
+        }
+
+        compose.setContent {
+            MagpieTheme(darkTheme = false) {
+                Surface(Modifier.fillMaxSize()) {
+                    GatewayEndpointCard(
+                        running = true,
+                        clientReady = true,
+                        maskedGatewayKey = "sk-synthetic-old-mask",
+                        defaultModel = "fake-echo",
+                        expectedSession = FIRST,
+                        copyGatewayKeyIfCurrent = copyForLiveSession,
+                    )
+                }
+            }
+        }
+        compose.waitForIdle()
+        val oldCopy = checkNotNull(compose.onNodeWithText("复制 API Key").fetchSemanticsNode()
+            .config[SemanticsActions.OnClick].action)
+        compose.runOnUiThread {
+            clipboard.setPrimaryClip(ClipData.newPlainText("test sentinel", "sentinel-value"))
+            liveSession = NEXT
+            assertTrue("The previously displayed control should remain invokable for this race test", oldCopy())
+            assertEquals("sentinel-value", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        }
+
+        compose.setContent {
+            MagpieTheme(darkTheme = false) {
+                Surface(Modifier.fillMaxSize()) {
+                    GatewayEndpointCard(
+                        running = true,
+                        clientReady = true,
+                        maskedGatewayKey = "sk-synthetic-old-mask",
+                        defaultModel = "fake-echo",
+                        expectedSession = NEXT,
+                        copyGatewayKeyIfCurrent = copyForLiveSession,
+                    )
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("复制 API Key").performClick()
+        compose.runOnUiThread { assertSensitiveClipboard(clipboard, currentKey) }
+
+        compose.onNodeWithText("复制测试 cURL").performClick()
+        var curl = ""
+        compose.runOnUiThread {
+            curl = clipboard.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+        }
+        assertTrue(curl.contains("Bearer $currentKey"))
+        assertFalse(curl.contains(oldMaskedKey))
+        compose.runOnUiThread { assertSensitiveClipboard(clipboard, curl) }
+
+        compose.onNodeWithText("复制 Base URL").performClick()
+        var baseUrl = ""
+        compose.runOnUiThread {
+            baseUrl = clipboard.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+        }
+        assertEquals("http://127.0.0.1:3425/v1", baseUrl)
+        compose.runOnUiThread {
+            assertFalse(clipboard.primaryClipDescription?.extras
+                ?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE, false) == true)
+        }
+    }
 
     @Test fun reconnectDismissesRestrictionDraftAndRejectsItsPreviouslyCapturedSave() {
         withPanel { source ->
@@ -64,7 +140,12 @@ class GatewayKeysInstrumentedTest {
             compose.onNodeWithText("客户端名称").performScrollTo().performTextReplacement("Personal client")
             compose.onNodeWithText("生成 Key").performScrollTo().performClick()
             compose.onNodeWithText("新密钥生成成功！").performScrollTo().assertIsDisplayed()
-            compose.onNodeWithText("密钥（已复制）：$SECRET").performScrollTo().assertIsDisplayed()
+            assertTrue(compose.onAllNodes(hasText(SECRET, substring = true)).fetchSemanticsNodes().isNotEmpty())
+            val clipboard = compose.activity.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            compose.runOnUiThread {
+                assertSensitiveClipboard(clipboard, SECRET)
+                clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
+            }
             compose.onNodeWithText("客户端名称").performScrollTo().performTextReplacement("Unsaved name")
             compose.runOnUiThread {
                 source.ready.value = false
@@ -73,7 +154,7 @@ class GatewayKeysInstrumentedTest {
             }
             compose.waitForIdle()
             compose.onNodeWithText("新密钥生成成功！").assertDoesNotExist()
-            compose.onNodeWithText("密钥（已复制）：$SECRET").assertDoesNotExist()
+            assertTrue(compose.onAllNodes(hasText(SECRET, substring = true)).fetchSemanticsNodes().isEmpty())
             compose.runOnUiThread {
                 source.session = NEXT
                 source.vm.attach(NEXT)
@@ -81,9 +162,27 @@ class GatewayKeysInstrumentedTest {
             }
             compose.waitForIdle()
             compose.onNodeWithText("Unsaved name").assertDoesNotExist()
-            compose.onNodeWithText("密钥（已复制）：$SECRET").assertDoesNotExist()
+            assertTrue(compose.onAllNodes(hasText(SECRET, substring = true)).fetchSemanticsNodes().isEmpty())
             assertEquals(1, source.calls.count { it.startsWith("create") })
         }
+    }
+
+    @Test fun copyExistingCallerKeyMarksTheExactSecretSensitive() {
+        withPanel { source ->
+            compose.onNodeWithText("复制 Key").performScrollTo().performClick()
+            compose.waitForIdle()
+            val clipboard = compose.activity.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            compose.runOnUiThread {
+                assertSensitiveClipboard(clipboard, SECRET)
+                clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
+            }
+        }
+    }
+
+    private fun assertSensitiveClipboard(clipboard: android.content.ClipboardManager, expectedText: String) {
+        val clip = clipboard.primaryClip
+        assertTrue("clipboard content mismatch", expectedText == clip?.getItemAt(0)?.text?.toString())
+        assertTrue(clip?.description?.extras?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE, false) == true)
     }
 
     private fun withPanel(block: (Source) -> Unit) {

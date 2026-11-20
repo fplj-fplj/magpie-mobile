@@ -29,6 +29,9 @@ class NativeCoreSessionTest {
             assertEquals(null, NativeCoreSession.providerSessionId())
             assertEquals(null, NativeCoreSession.providerSessionKey())
             assertEquals(null, NativeCoreSession.status.value.providerSession)
+            var copied = false
+            assertFalse(NativeCoreSession.copyGatewayKeyIfCurrent(ProviderSessionKey(owner, 1)) { copied = true })
+            assertFalse(copied)
             assertThrows(IllegalStateException::class.java) { NativeCoreSession.providerClient() }
             assertThrows(IllegalStateException::class.java) { NativeCoreSession.gatewayConfig() }
             assertThrows(CancellationException::class.java) { NativeCoreSession.gatewayRequest(owner) }

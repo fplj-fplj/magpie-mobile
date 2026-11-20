@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -42,6 +43,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -95,6 +97,43 @@ class ChatPanelInstrumentedTest {
             assertFalse(model.state.value.viewingOlderMessages)
             assertEquals(PRIMARY_ID, model.state.value.selected?.id)
             assertEquals(latestIds, model.state.value.messages.map { it.id })
+        }
+    }
+
+    @Test fun deletingOtherConversationKeepsTheOlderPageScrollAnchorVisible() {
+        withPanel(turns = 26, failedTurns = 26, otherConversation = true) { model, repository ->
+            assertEquals(104, runBlocking(Dispatchers.IO) {
+                repository.messages(PRIMARY_ID, limit = 200).size
+            })
+            assertEquals(50, model.state.value.messages.size)
+            assertTrue(model.state.value.olderMessages)
+            openMenu()
+            compose.onNodeWithTag("chat-older").assertIsDisplayed().performClick()
+            awaitIdle(model)
+            assertTrue(model.state.value.viewingOlderMessages)
+            assertTrue(model.state.value.olderMessages)
+            val pageIds = model.state.value.messages.map { it.id }
+
+            val anchor = compose.onNodeWithText("answer-10")
+                .performScrollTo().assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            openMenu()
+            compose.onNodeWithTag("chat-history").performClick()
+            compose.onNodeWithText(DELETE_TITLE).assertIsDisplayed()
+            model.deleteConversation(DELETE_ID)
+            awaitIdle(model)
+            assertFalse(compose.onAllNodesWithText(DELETE_TITLE).fetchSemanticsNodes().isNotEmpty())
+            compose.onNodeWithText("关闭").performClick()
+            compose.waitForIdle()
+
+            compose.onNodeWithText("answer-10").assertIsDisplayed()
+            val retainedAnchor = compose.onNodeWithText("answer-10")
+                .fetchSemanticsNode().boundsInRoot
+            assertEquals(anchor.top, retainedAnchor.top, 1f)
+            assertEquals(anchor.left, retainedAnchor.left, 1f)
+            assertEquals(pageIds, model.state.value.messages.map { it.id })
+            assertTrue(model.state.value.viewingOlderMessages)
+            assertTrue(model.state.value.olderMessages)
+            assertNull(runBlocking(Dispatchers.IO) { repository.conversation(DELETE_ID) })
         }
     }
 
@@ -156,6 +195,8 @@ class ChatPanelInstrumentedTest {
 
     private fun withPanel(
         turns: Int = 0,
+        failedTurns: Int = 0,
+        otherConversation: Boolean = false,
         landscape: Boolean = true,
         block: (ChatViewModel, ChatRepository) -> Unit,
     ) {
@@ -176,12 +217,21 @@ class ChatPanelInstrumentedTest {
         runBlocking(Dispatchers.IO) {
             // Do not import or alter any history left by the full installed-core test.
             repository.initialize(File(application.cacheDir, "absent-chat-panel-${UUID.randomUUID()}"))
+            if (otherConversation) {
+                database.chatDao().insertConversation(ConversationEntity(DELETE_ID, DELETE_TITLE, 0))
+            }
             database.chatDao().insertConversation(ConversationEntity(PRIMARY_ID, PRIMARY_TITLE, 1))
             val store = repository.turnStore(PRIMARY_ID)
             repeat(turns) { index ->
                 val timestamp = index.toLong() * 2 + 2
                 val turn = store.begin(SessionRecord(timestamp, "user", "chat:test/model", "question-$index"))
                 store.complete(turn, SessionRecord(timestamp + 1, "assistant", "chat:test/model", "answer-$index"))
+            }
+            repeat(failedTurns) { index ->
+                val timestamp = (turns + index).toLong() * 2 + 2
+                val turn = store.begin(SessionRecord(timestamp, "user", "chat:test/model",
+                    "failed-question-$index"))
+                store.fail(turn, SessionRecord(timestamp + 1, "error", "chat:test/model", "HTTP 429"))
             }
         }
         val viewModelStore = ViewModelStore()
@@ -310,5 +360,7 @@ class ChatPanelInstrumentedTest {
     private companion object {
         const val PRIMARY_ID = "chat-panel-history-fixture"
         const val PRIMARY_TITLE = "保留的本机会话"
+        const val DELETE_ID = "chat-panel-delete-other-fixture"
+        const val DELETE_TITLE = "删除时保留分页的其他会话"
     }
 }

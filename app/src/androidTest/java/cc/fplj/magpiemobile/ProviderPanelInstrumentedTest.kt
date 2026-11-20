@@ -1,5 +1,7 @@
 package cc.fplj.magpiemobile
 
+import android.content.ClipData
+import android.content.ClipDescription
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
@@ -23,6 +25,7 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -30,6 +33,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
@@ -38,6 +42,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import cc.fplj.magpiemobile.theme.MagpieTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,6 +59,39 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ProviderPanelInstrumentedTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun visibleApiKeySystemCopyAndCutAreMarkedSensitiveAndPasteStillWorks() {
+        ProviderPanelHttpPeer().use { peer ->
+            withPanel(peer) {
+                openEditor()
+                val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+                val clipboard = checkNotNull(compose.activity.getSystemService(android.content.ClipboardManager::class.java))
+                try {
+                    compose.onNodeWithTag(API_KEY).performScrollTo()
+                    compose.onNodeWithText("显示").performClick()
+                    compose.onNodeWithTag(API_KEY).performTextReplacement(SYNTHETIC_KEY)
+
+                    selectAllAndUseSystemAction(device, API_KEY, "Copy")
+                    assertSensitivePrimaryClip(SYNTHETIC_KEY)
+                    compose.onNodeWithTag(API_KEY).performTextReplacement("")
+                    pasteFromSystemClipboard(device)
+                    assertSensitivePrimaryClip(SYNTHETIC_KEY)
+
+                    compose.onNodeWithTag(API_KEY).performClick()
+                    selectAllAndUseSystemAction(device, API_KEY, "Cut")
+                    compose.onNodeWithTag(API_KEY).assert(SemanticsMatcher.expectValue(
+                        SemanticsProperties.EditableText, AnnotatedString("")))
+                    assertSensitivePrimaryClip(SYNTHETIC_KEY)
+                    pasteFromSystemClipboard(device)
+                    assertSensitivePrimaryClip(SYNTHETIC_KEY)
+                    assertTrue("Clipboard exercise must not submit provider changes", peer.editRequests.isEmpty())
+                    peer.assertHealthy()
+                } finally {
+                    clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
+                }
+            }
+        }
+    }
 
     @Test fun pendingSaveDisablesManualModelsAndRejectsPreviouslyCapturedSetTextUntilExplicitRetry() {
         ProviderPanelHttpPeer().use { peer ->
@@ -466,6 +504,34 @@ class ProviderPanelInstrumentedTest {
             SemanticsProperties.EditableText, AnnotatedString(expected)))
     }
 
+    private fun selectAllAndUseSystemAction(device: UiDevice, tag: String, action: String) {
+        compose.onNodeWithTag(tag).performTouchInput { longClick() }
+        compose.waitUntil(5_000) {
+            device.hasObject(By.text("Select all")) || device.hasObject(By.text(action))
+        }
+        if (device.hasObject(By.text("Select all"))) device.findObject(By.text("Select all")).click()
+        assertTrue("System $action action did not appear", device.wait(Until.hasObject(By.text(action)), 5_000))
+        device.findObject(By.text(action)).click()
+        compose.waitForIdle()
+    }
+
+    private fun pasteFromSystemClipboard(device: UiDevice) {
+        compose.onNodeWithTag(API_KEY).performTouchInput { longClick() }
+        assertTrue("System Paste action did not appear", device.wait(Until.hasObject(By.text("Paste")), 5_000))
+        device.findObject(By.text("Paste")).click()
+        compose.waitForIdle()
+        compose.onNodeWithTag(API_KEY).assert(SemanticsMatcher.expectValue(
+            SemanticsProperties.EditableText, AnnotatedString(SYNTHETIC_KEY)))
+    }
+
+    private fun assertSensitivePrimaryClip(expected: String) {
+        val clipboard = checkNotNull(compose.activity.getSystemService(android.content.ClipboardManager::class.java))
+        val clip = checkNotNull(clipboard.primaryClip)
+        assertEquals(expected, clip.getItemAt(0).coerceToText(compose.activity).toString())
+        assertTrue("System clip must carry the sensitive marker",
+            clip.description.extras?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE) == true)
+    }
+
     private fun assertModelWrite(request: ProviderPanelHttpPeer.Request, model: String) {
         val body = JSONObject(request.body)
         assertEquals(ProviderPanelHttpPeer.ID, body.getString("id"))
@@ -498,6 +564,8 @@ class ProviderPanelInstrumentedTest {
     private companion object {
         val SESSION = ProviderSessionKey(701L, 1L)
         const val ROW = "provider-row:${ProviderPanelHttpPeer.ID}"
+        const val API_KEY = "provider-api-key"
+        const val SYNTHETIC_KEY = "sk-provider-panel-clipboard-synthetic-62"
         const val MANUAL = "provider-manual-models"
         const val SAVE = "provider-save"
         const val BEFORE_SAVE = "manual-before-save"

@@ -13,6 +13,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
@@ -53,6 +54,7 @@ fun ProvidersPanel(
     val providerOperations = remember(scope, connection) {
         ProviderOperationController(scope, acquireLease = connection::acquireLease)
     }
+    val sensitiveClipboard = rememberSensitiveClipboardManager()
     val focus = LocalFocusManager.current
     val latestEnabled by rememberUpdatedState(enabled)
     val latestExternalRevision by rememberUpdatedState(externalRevision)
@@ -644,18 +646,20 @@ fun ProvidersPanel(
                                 title = "访问凭据",
                                 supporting = "密钥只保存在本机核心私有目录，不进入列表、日志或导出备份。",
                             ) {
-                                OutlinedTextField(
-                                    value = key,
-                                    onValueChange = { key = it },
-                                    enabled = !busy,
-                                    singleLine = true,
-                                    label = { Text(if (snapshot == null) "API 密钥" else "新密钥（留空保留现有密钥）") },
-                                    visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-                                    trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "隐藏" else "显示") } },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                                    keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
+                                CompositionLocalProvider(LocalClipboardManager provides sensitiveClipboard) {
+                                    OutlinedTextField(
+                                        value = key,
+                                        onValueChange = { key = it },
+                                        enabled = !busy,
+                                        singleLine = true,
+                                        label = { Text(if (snapshot == null) "API 密钥" else "新密钥（留空保留现有密钥）") },
+                                        visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                                        trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "隐藏" else "显示") } },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                                        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+                                        modifier = Modifier.fillMaxWidth().testTag("provider-api-key"),
+                                    )
+                                }
                                 if (newOriginNeedsKey) {
                                     Text(
                                         "服务来源已改变，请填写新密钥。",

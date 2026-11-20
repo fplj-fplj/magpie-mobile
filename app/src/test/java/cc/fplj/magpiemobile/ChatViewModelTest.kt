@@ -15,6 +15,9 @@ import cc.fplj.magpiemobile.core.GatewayConfig
 import cc.fplj.magpiemobile.core.SessionRecord
 import cc.fplj.magpiemobile.data.ChatDatabase
 import cc.fplj.magpiemobile.data.ChatRepository
+import cc.fplj.magpiemobile.data.ConversationEntity
+import cc.fplj.magpiemobile.data.StoredChatMessage
+import java.io.File
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
@@ -26,6 +29,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import java.util.UUID
 import kotlin.concurrent.thread
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
@@ -63,6 +67,7 @@ class ChatViewModelTest {
     private lateinit var db: ChatDatabase
     private lateinit var repo: ChatRepository
     private val stores = mutableListOf<ViewModelStore>()
+    private val extraDatabases = mutableListOf<ChatDatabase>()
 
     @Before fun setup() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -73,6 +78,7 @@ class ChatViewModelTest {
 
     @After fun teardown() {
         stores.forEach { it.clear() }
+        extraDatabases.forEach { it.close() }
         db.close()
         Dispatchers.resetMain()
     }
@@ -84,19 +90,67 @@ class ChatViewModelTest {
     private fun vm(
         dispatcher: CoroutineDispatcher = Dispatchers.IO,
         turnStore: (ChatRepository, String) -> ChatTurnStore = { repository, id -> repository.turnStore(id) },
+        repository: ChatRepository = repo,
         acquire: (ProviderSessionKey) -> GatewayRequestLease = { throw CancellationException("Offline fixture") },
     ): ChatViewModel {
         val store = ViewModelStore().also(stores::add)
         val factory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 @Suppress("UNCHECKED_CAST")
-                return ChatViewModel(app, { repo }, acquire, dispatcher, turnStore) as T
+                return ChatViewModel(app, { repository }, acquire, dispatcher, turnStore) as T
             }
         }
         return ViewModelProvider(store, factory)[ChatViewModel::class.java].also { settled(it) }
     }
 
     private fun lease(config: GatewayConfig): GatewayRequestLease = GatewayRequestLeases().acquire(config) { true }
+
+    private fun seedConversation(
+        id: String,
+        title: String = id,
+        updatedAt: Long,
+        successfulTurns: Int = 0,
+        failedTurns: Int = 0,
+        repository: ChatRepository = repo,
+        database: ChatDatabase = db,
+    ): List<StoredChatMessage> = runBlocking(Dispatchers.IO) {
+        repository.initialize(File(app.cacheDir, "absent-chat-view-model-${UUID.randomUUID()}"))
+        database.chatDao().insertConversation(ConversationEntity(id, title, updatedAt))
+        val turns = repository.turnStore(id)
+        var timestamp = 1L
+        repeat(successfulTurns) { index ->
+            val operation = turns.begin(SessionRecord(timestamp++, "user", "chat:test/model", "question-$index"))
+            turns.complete(operation, SessionRecord(timestamp++, "assistant", "stream:test/model",
+                "answer-$index", reasoning = "reasoning-$index"))
+        }
+        repeat(failedTurns) { index ->
+            val operation = turns.begin(SessionRecord(timestamp++, "user", "chat:test/model",
+                "failed-question-$index"))
+            turns.fail(operation, SessionRecord(timestamp++, "error", "stream:test/model", "HTTP 429"))
+        }
+        repository.messages(id, limit = successfulTurns * 2 + failedTurns * 2)
+    }
+
+    private fun seedConversationHistory(
+        count: Int,
+        prefix: String,
+        repository: ChatRepository = repo,
+        database: ChatDatabase = db,
+    ) = runBlocking(Dispatchers.IO) {
+        repository.initialize(File(app.cacheDir, "absent-chat-view-model-${UUID.randomUUID()}"))
+        repeat(count) { index ->
+            val id = "$prefix-${index.toString().padStart(3, '0')}"
+            database.chatDao().insertConversation(ConversationEntity(id, id, index.toLong() + 1))
+        }
+    }
+
+    private fun isolatedRepository(): Pair<ChatDatabase, ChatRepository> {
+        val database = Room.inMemoryDatabaseBuilder(app, ChatDatabase::class.java).build()
+            .also(extraDatabases::add)
+        return database to ChatRepository(database)
+    }
+
+    private fun messageIds(messages: List<StoredChatMessage>) = messages.map { it.id }
 
     @Test fun renameConversationUpdatesTitleAndLegacyStaysReadOnly() {
         val vm = vm()
@@ -127,6 +181,152 @@ class ChatViewModelTest {
         org.junit.Assert.assertThrows(IllegalStateException::class.java) {
             runBlocking(Dispatchers.IO) { repo.deleteConversation("missing-conversation") }
         }
+    }
+
+    @Test fun deletingOtherConversationPreservesOlderMessagePageAndDraft() {
+        val first = seedConversation("delete-page-current", updatedAt = 100, successfulTurns = 26)
+        seedConversation("delete-page-other", updatedAt = 1)
+        val vm = vm()
+        assertEquals("delete-page-current", vm.state.value.selected?.id)
+        assertEquals(50, vm.state.value.messages.size)
+        assertTrue(vm.state.value.olderMessages)
+        vm.olderMessages(); val older = settled(vm)
+        assertEquals(first.take(2), older.messages)
+        assertTrue(older.viewingOlderMessages)
+        assertFalse(older.olderMessages)
+        vm.editDraft("草稿随旧分页保留")
+        vm.profileUnavailable()
+        val before = vm.state.value
+        assertTrue(before.notice.isNotBlank())
+
+        vm.deleteConversation("delete-page-other")
+        val after = settled(vm)
+
+        assertEquals(before.copy(
+            conversations = after.conversations,
+            moreConversations = after.moreConversations,
+        ), after)
+        assertEquals(listOf("question-0", "answer-0"), after.messages.map { it.text })
+        assertEquals("草稿随旧分页保留", after.draft)
+        assertTrue(after.viewingOlderMessages)
+        assertFalse(after.olderMessages)
+        assertNull(runBlocking(Dispatchers.IO) { repo.conversation("delete-page-other") })
+        assertEquals(first, runBlocking(Dispatchers.IO) { repo.messages("delete-page-current", limit = 100) })
+    }
+
+    @Test fun deletingOtherConversationKeepsThe104MessageCursorUntilExplicitRefresh() {
+        val all = seedConversation("delete-cursor-current", updatedAt = 100,
+            successfulTurns = 26, failedTurns = 26)
+        seedConversation("delete-cursor-other", updatedAt = 1)
+        val vm = vm()
+        val currentId = checkNotNull(vm.state.value.selected).id
+        assertEquals("delete-cursor-current", currentId)
+        assertEquals(104, all.size)
+        assertEquals(50, vm.state.value.messages.size)
+        val latest = runBlocking(Dispatchers.IO) { repo.messages(currentId, limit = 51).takeLast(50) }
+        assertEquals(messageIds(latest), messageIds(vm.state.value.messages))
+        val middle = runBlocking(Dispatchers.IO) {
+            repo.messages(currentId, beforeId = latest.first().id, limit = 51).takeLast(50)
+        }
+        vm.editDraft("middle page draft")
+        vm.olderMessages(); val loadedMiddle = settled(vm)
+        assertEquals(messageIds(middle), messageIds(loadedMiddle.messages))
+        assertTrue(loadedMiddle.olderMessages)
+        assertTrue(loadedMiddle.viewingOlderMessages)
+
+        vm.deleteConversation("delete-cursor-other")
+        val afterDelete = settled(vm)
+        assertEquals(messageIds(middle), messageIds(afterDelete.messages))
+        assertTrue(afterDelete.olderMessages)
+        assertTrue(afterDelete.viewingOlderMessages)
+        assertEquals("middle page draft", afterDelete.draft)
+
+        val earliest = runBlocking(Dispatchers.IO) {
+            repo.messages(currentId, beforeId = middle.first().id, limit = 51)
+        }
+        assertEquals(4, earliest.size)
+        vm.olderMessages(); val loadedEarliest = settled(vm)
+        assertEquals(messageIds(earliest), messageIds(loadedEarliest.messages))
+        assertFalse(loadedEarliest.olderMessages)
+        assertTrue(loadedEarliest.viewingOlderMessages)
+        assertEquals("middle page draft", loadedEarliest.draft)
+
+        vm.refresh(); val refreshed = settled(vm)
+        assertEquals(messageIds(latest), messageIds(refreshed.messages))
+        assertTrue(refreshed.olderMessages)
+        assertFalse(refreshed.viewingOlderMessages)
+        assertEquals("middle page draft", refreshed.draft)
+    }
+
+    @Test fun deletingHistoryRowsPreservesLoadedRangeAcross31_61And65Conversations() {
+        for (total in listOf(65, 31, 61)) {
+            val (historyDb, historyRepo) = isolatedRepository()
+            val prefix = "history-$total"
+            seedConversationHistory(total, prefix, historyRepo, historyDb)
+            val vm = vm(repository = historyRepo)
+            val currentId = checkNotNull(vm.state.value.selected).id
+            val targetLoadedSize = if (total == 31) 30 else 60
+            while (vm.state.value.conversations.size < targetLoadedSize) {
+                vm.moreConversations(); settled(vm)
+            }
+            val loadedBefore = vm.state.value.conversations.map { it.id }
+            assertEquals(targetLoadedSize, loadedBefore.size)
+            val target = loadedBefore[if (total > 30) 35 else 10]
+            assertNotEquals(currentId, target)
+
+            vm.deleteConversation(target)
+            val afterDelete = settled(vm)
+            val expected = runBlocking(Dispatchers.IO) { historyRepo.conversations(limit = 100) }
+            assertEquals(expected.take(targetLoadedSize).map { it.id },
+                afterDelete.conversations.map { it.id })
+            assertEquals(expected.size > targetLoadedSize, afterDelete.moreConversations)
+            assertEquals(currentId, afterDelete.selected?.id)
+
+            if (total == 65) {
+                assertTrue(afterDelete.moreConversations)
+                vm.moreConversations(); val fullyLoaded = settled(vm)
+                assertEquals(expected.map { it.id }, fullyLoaded.conversations.map { it.id })
+                assertEquals(expected.size, fullyLoaded.conversations.map { it.id }.distinct().size)
+                assertFalse(fullyLoaded.moreConversations)
+            }
+            if (total == 31) {
+                assertEquals(30, afterDelete.conversations.size)
+                assertFalse(afterDelete.moreConversations)
+            }
+            if (total == 61) {
+                assertEquals(60, afterDelete.conversations.size)
+                assertFalse(afterDelete.moreConversations)
+            }
+            assertNull(runBlocking(Dispatchers.IO) { historyRepo.conversation(target) })
+        }
+    }
+
+    @Test fun rejectingDeletionOfRunningOtherConversationPreservesCurrentPageAndDraft() {
+        val first = seedConversation("delete-running-current", updatedAt = 100, successfulTurns = 26)
+        seedConversation("delete-running-other", updatedAt = 1)
+        val running = runBlocking(Dispatchers.IO) {
+            repo.turnStore("delete-running-other").begin(
+                SessionRecord(2, "user", "chat:test/model", "still running"),
+            )
+        }
+        val captures = AtomicInteger()
+        val vm = vm(acquire = { captures.incrementAndGet(); throw CancellationException("Offline fixture") })
+        assertEquals("delete-running-current", vm.state.value.selected?.id)
+        vm.olderMessages(); val older = settled(vm)
+        assertEquals(first.take(2), older.messages)
+        vm.editDraft("delete error leaves draft")
+        val before = vm.state.value
+
+        vm.deleteConversation("delete-running-other")
+        val after = settled(vm)
+        assertEquals(before.copy(notice = "会话删除失败；若该会话正在发送，请稍后重试。"), after)
+        runBlocking(Dispatchers.IO) {
+            assertNotNull(repo.conversation("delete-running-other"))
+            assertEquals("RUNNING", db.chatDao().operation(running)?.state)
+            assertEquals(listOf("still running"), repo.messages("delete-running-other").map { it.text })
+            assertEquals(first, repo.messages("delete-running-current", limit = 100))
+        }
+        assertEquals(0, captures.get())
     }
 
     @Test fun initializesOfflineAndKeepsSeparateConversationDrafts() {
@@ -214,6 +414,19 @@ class ChatViewModelTest {
         Probe(success = false, reasoning = "unfinished reasoning").use { probe ->
             val vm = vm { lease(probe.config) }
             val first = checkNotNull(vm.state.value.selected).id
+            runBlocking(Dispatchers.IO) {
+                val turns = repo.turnStore(first)
+                repeat(26) { index ->
+                    val timestamp = index.toLong() * 2 + 2
+                    val turn = turns.begin(SessionRecord(timestamp, "user", "chat:test/model", "fallback-question-$index"))
+                    turns.complete(turn, SessionRecord(timestamp + 1, "assistant", "stream:test/model",
+                        "fallback-answer-$index"))
+                }
+            }
+            vm.refresh(); settled(vm)
+            vm.olderMessages(); val oldFallbackPage = settled(vm)
+            assertEquals(2, oldFallbackPage.messages.size)
+            assertTrue(oldFallbackPage.viewingOlderMessages)
             vm.editDraft("first conversation draft")
             vm.newConversation(); settled(vm)
             val second = checkNotNull(vm.state.value.selected).id
@@ -237,6 +450,11 @@ class ChatViewModelTest {
             vm.deleteConversation(second)
             val restored = settled(vm)
             assertEquals(first, restored.selected?.id)
+            val firstLatest = runBlocking(Dispatchers.IO) { repo.messages(first, limit = 51).takeLast(50) }
+            assertEquals(messageIds(firstLatest), messageIds(restored.messages))
+            assertEquals(50, restored.messages.size)
+            assertTrue(restored.olderMessages)
+            assertFalse(restored.viewingOlderMessages)
             assertEquals("first conversation draft", restored.draft)
             assertEquals("", restored.partial)
             assertEquals("", restored.partialReasoning)
