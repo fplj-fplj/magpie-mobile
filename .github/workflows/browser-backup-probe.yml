@@ -41,6 +41,8 @@ jobs:
               "probeKind": "fresh-emulator-independent-browser",
               "status": "not_started",
               "browserAvailable": False,
+              "browserPreparationRequested": True,
+              "firstRunPrepared": False,
               "defaultActionViewReady": False,
               "independentBrowserForeground": False,
               "filePickerHandlersPresent": False,
@@ -93,7 +95,9 @@ jobs:
           disable-linux-hw-accel: false
           disable-animations: true
           emulator-options: -accel on -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-back none
-          script: python3 scripts/browser-backup-probe.py --target "$PROBE_TARGET" --output "$PROBE_OUTPUT" --serial emulator-5554
+          # Only the observed Chrome no-account button is permitted. Unknown
+          # privacy/safety/onboarding pages are captured and fail without taps.
+          script: python3 scripts/browser-backup-probe.py --target "$PROBE_TARGET" --output "$PROBE_OUTPUT" --serial emulator-5554 --prepare-browser
 
       - name: Finalize machine readable outcome even after setup failure
         if: always()
@@ -131,6 +135,7 @@ jobs:
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
               summary.write("### Browser probe: " + os.environ["PROBE_TARGET"] + "\n\n")
               summary.write("- Browser available: `" + str(report.get("browserAvailable", False)).lower() + "`\n")
+              summary.write("- First run prepared: `" + str(report.get("firstRunPrepared", False)).lower() + "`\n")
               summary.write("- Reason: `" + str(report.get("availabilityReason", "unknown")) + "`\n")
               summary.write("- Scope: environment only; backup Blob/download/import are not validated.\n")
           PY

@@ -43,6 +43,35 @@ PACKAGE_RE = r"(?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*|android"
 COMPONENT_RE = re.compile(rf"(?<![\w.])({PACKAGE_RE})/(\.?[A-Za-z_$][\w.$]*)")
 FORBIDDEN_ACTIVITIES = ("resolveractivity", "chooseractivity", "intentresolver", "customtab", "webview")
 DOCUMENTS_PACKAGES = {"com.android.documentsui", "com.google.android.documentsui"}
+CHROME_PACKAGE = "com.android.chrome"
+CHROME_FIRST_RUN = CHROME_PACKAGE + "/org.chromium.chrome.browser.firstrun.FirstRunActivity"
+WELCOME_TITLE_ID = CHROME_PACKAGE + ":id/title"
+SKIP_ACCOUNT_ID = CHROME_PACKAGE + ":id/signin_fre_dismiss_button"
+SKIP_ACCOUNT_TEXT = "Use without an account"
+# Exact labels observed in both CI image artifacts, never an open-ended
+# "continue/accept/skip" matcher. Unknown subsequent pages are evidence-only.
+SAFE_UI_LABELS = {
+    PAGE_MARKER, "Welcome to Chrome", SKIP_ACCOUNT_TEXT, "Add account to device",
+    "Sign in to browse easier across devices", "Magpie external browser probe",
+    "This local page contains no credentials or account data.", PROBE_URL,
+}
+SAFE_UI_ATTRIBUTES = {
+    "rotation", "index", "resource-id", "class", "package", "checkable", "checked",
+    "clickable", "enabled", "focusable", "focused", "scrollable", "long-clickable",
+    "password", "selected", "bounds", "display-id", "visible-to-user", "text", "content-desc",
+}
+
+
+def sanitize_hierarchy(root: ET.Element) -> None:
+    """Keep geometry/selectors; discard arbitrary text, descriptions, and extras."""
+    for node in root.iter():
+        for key in list(node.attrib):
+            if key not in SAFE_UI_ATTRIBUTES:
+                del node.attrib[key]
+            elif key in ("text", "content-desc"):
+                value = node.attrib[key]
+                if value and value not in SAFE_UI_LABELS:
+                    node.attrib[key] = "[redacted]"
 
 
 def now() -> str:
@@ -93,10 +122,19 @@ class Probe:
         self.report.update(
             status="running", browserAvailable=False, availabilityReason="probe_in_progress",
             defaultActionViewReady=False, independentBrowserForeground=False, filePickerHandlersPresent=False,
+            browserPreparationRequested=args.prepare_browser, firstRunPrepared=False,
+            firstRunPreparation={"requested": args.prepare_browser,
+                                 "status": "pending" if args.prepare_browser else "not_requested",
+                                 "allowedActions": ["chrome_welcome_use_without_account"] if args.prepare_browser else [],
+                                 "unknownScreenPolicy": "capture_and_fail", "attempts": []},
             collectionStartedAt=now(), serial=args.serial,
             requestedImage={"apiLevel": 35, "arch": "x86_64", "target": args.target, "profile": "pixel_6"},
             scope="Environment discovery only; no backup, download, or import acceptance claim.",
-            policy={"noAppInstalled": True, "noAccountInteraction": True, "noAutomatedConsentClicks": True,
+            policy={"noAppInstalled": True, "noAccountOrLoginActions": True,
+                    "noAutomatedConsentClicks": not args.prepare_browser,
+                    "automatedUIClicksPerformed": 0,
+                    "automatedUIClickPolicy": "exact_observed_chrome_no_account_button_only" if args.prepare_browser else "none",
+                    "savedHierarchyTextPolicy": "known_static_labels_only",
                     "noCredentialsInURL": True, "noRequestHeadersRecorded": True, "loopbackURL": PROBE_URL},
             errors=[], intentEvidence={}, packages={}, launchAttempts=[],
             scriptSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -108,6 +146,7 @@ class Probe:
         self.page_hits: list[dict] = []
         self.hits_lock = threading.Lock()
         self.candidates: set[str] = set()
+        self.preparation_blocked = False
         self.flush()
 
     def flush(self) -> None:
@@ -257,7 +296,9 @@ class Probe:
 
     def foreground(self) -> dict:
         activities = self.shell(["dumpsys", "activity", "activities"])
-        windows = self.shell(["dumpsys", "window", "windows"])
+        # API 35's `dumpsys window windows` omitted the global focus fields in
+        # both real image reports. Read the full dump, retaining only focus lines.
+        windows = self.shell(["dumpsys", "window"])
         activity_lines = [line.strip() for line in activities["stdout"].splitlines()
                           if any(key in line for key in ("topResumedActivity=", "mResumedActivity:", "ResumedActivity:"))]
         window_lines = [line.strip() for line in windows["stdout"].splitlines()
@@ -328,14 +369,18 @@ class Probe:
 
     def capture(self, prefix: str) -> dict:
         evidence = {"foregroundBefore": self.foreground(), "screenshot": None,
-                    "hierarchy": None, "visiblePageMarker": False, "captureErrors": []}
+                    "hierarchy": None, "visiblePageMarker": False, "captureErrors": [],
+                    "hierarchySanitized": True}
         screen_path = self.output / f"{prefix}.png"
         try:
             result = subprocess.run([self.adb, "-s", self.args.serial, "exec-out", "screencap", "-p"],
                                     capture_output=True, timeout=30, check=False)
-            if result.returncode == 0 and result.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
+            if (result.returncode == 0 and result.stdout.startswith(b"\x89PNG\r\n\x1a\n")
+                    and len(result.stdout) >= 24 and result.stdout[12:16] == b"IHDR"):
                 screen_path.write_bytes(result.stdout)
                 evidence["screenshot"] = screen_path.name
+                evidence["screenshotWidth"] = int.from_bytes(result.stdout[16:20], "big")
+                evidence["screenshotHeight"] = int.from_bytes(result.stdout[20:24], "big")
             else:
                 evidence["captureErrors"].append("screenshot_not_valid_png")
         except (OSError, subprocess.TimeoutExpired) as error:
@@ -350,13 +395,14 @@ class Probe:
                     root = ET.fromstring(content["stdout"])
                     if root.tag != "hierarchy":
                         raise ValueError("not_ui_hierarchy")
-                    hierarchy_path = self.output / f"{prefix}.xml"
-                    hierarchy_path.write_text(content["stdout"], encoding="utf-8")
-                    evidence["hierarchy"] = hierarchy_path.name
                     evidence["visiblePageMarker"] = any(
                         PAGE_MARKER in node.attrib.get("text", "") or PAGE_MARKER in node.attrib.get("content-desc", "")
                         for node in root.iter("node")
                     )
+                    sanitize_hierarchy(root)
+                    hierarchy_path = self.output / f"{prefix}.xml"
+                    hierarchy_path.write_text(ET.tostring(root, encoding="unicode"), encoding="utf-8")
+                    evidence["hierarchy"] = hierarchy_path.name
                 except (ET.ParseError, ValueError):
                     evidence["captureErrors"].append("hierarchy_not_valid_xml")
             else:
@@ -366,6 +412,115 @@ class Probe:
         self.shell(["rm", "-f", remote])  # Only the single exact path created by this attempt.
         evidence["foregroundAfter"] = self.foreground()
         return evidence
+
+    def page_ready(self, evidence: dict, hit_start: int) -> bool:
+        with self.hits_lock:
+            page_requested = len(self.page_hits) > hit_start
+        return bool(
+            page_requested and evidence["visiblePageMarker"] and evidence["screenshot"]
+            and evidence["hierarchy"] and not evidence["captureErrors"]
+            and self.independent_foreground(evidence["foregroundBefore"])
+            and self.independent_foreground(evidence["foregroundAfter"])
+            and all("firstrun" not in evidence[key]["resumedComponent"].lower()
+                    for key in ("foregroundBefore", "foregroundAfter"))
+            and component_package(evidence["foregroundBefore"]["resumedComponent"])
+            == component_package(evidence["foregroundAfter"]["resumedComponent"])
+        )
+
+    def wait_for_page(self, hit_start: int) -> None:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            with self.hits_lock:
+                hit_seen = len(self.page_hits) > hit_start
+            if hit_seen:
+                time.sleep(2)
+                break
+            time.sleep(1)
+
+    def chrome_first_run_foreground(self, foreground: dict) -> bool:
+        return (self.independent_foreground(foreground)
+                and foreground["resumedComponent"] == CHROME_FIRST_RUN
+                and component_package(foreground["focusedComponent"]) == CHROME_PACKAGE)
+
+    def prepare_browser(self, prefix: str, before: dict, hit_start: int, launch_ok: bool) -> tuple[dict, dict]:
+        """One explicit, evidence-backed no-account action; never guess later UI."""
+        preparation = {"status": "inspecting", "beforeEvidence": before, "actions": []}
+        self.report["firstRunPreparation"]["attempts"].append(preparation)
+
+        def blocked(reason: str, evidence: dict) -> tuple[dict, dict]:
+            preparation.update(status="blocked", reason=reason, afterEvidence=evidence)
+            self.report["firstRunPreparation"].update(status="blocked", reason=reason)
+            self.preparation_blocked = True
+            self.flush()
+            return evidence, preparation
+
+        if not launch_ok or not self.reverse_created or self.report["loopback"]["deviceURL"] != PROBE_URL:
+            return blocked("safe_loopback_action_view_not_confirmed", before)
+        if self.page_ready(before, hit_start):
+            preparation.update(status="not_needed", reason="safe_page_already_ready", afterEvidence=before)
+            self.report["firstRunPreparation"].update(status="not_needed", reason="safe_page_already_ready")
+            self.flush()
+            return before, preparation
+        if before["captureErrors"] or not before["hierarchy"]:
+            return blocked("preparation_evidence_incomplete", before)
+        if not all(self.chrome_first_run_foreground(before[key]) for key in ("foregroundBefore", "foregroundAfter")):
+            return blocked("unknown_screen_or_chrome_first_run_not_focused", before)
+        root = ET.parse(self.output / before["hierarchy"]).getroot()
+        titles = [node for node in root.iter("node")
+                  if node.attrib.get("package") == CHROME_PACKAGE
+                  and node.attrib.get("resource-id") == WELCOME_TITLE_ID
+                  and node.attrib.get("text") == "Welcome to Chrome"]
+        buttons = [node for node in root.iter("node")
+                   if node.attrib.get("package") == CHROME_PACKAGE
+                   and node.attrib.get("resource-id") == SKIP_ACCOUNT_ID
+                   and node.attrib.get("text") == SKIP_ACCOUNT_TEXT
+                   and node.attrib.get("class") == "android.widget.Button"
+                   and node.attrib.get("clickable") == "true" and node.attrib.get("enabled") == "true"
+                   and node.attrib.get("visible-to-user") != "false"]
+        if len(titles) != 1 or len(buttons) != 1:
+            return blocked("unknown_first_run_screen_or_ambiguous_no_account_button", before)
+        bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", buttons[0].attrib.get("bounds", ""))
+        if not bounds:
+            return blocked("no_account_button_bounds_invalid", before)
+        left, top, right, bottom = map(int, bounds.groups())
+        if not (0 <= left < right <= before.get("screenshotWidth", 0)
+                and 0 <= top < bottom <= before.get("screenshotHeight", 0)):
+            return blocked("no_account_button_outside_current_screenshot", before)
+        if self.report["policy"]["automatedUIClicksPerformed"] != 0:
+            return blocked("known_preparation_action_already_attempted", before)
+        # Recheck actual focus immediately before the one permitted tap. Every
+        # coordinate comes from this capture's exact enabled/clickable UI node.
+        current = self.foreground()
+        if not self.chrome_first_run_foreground(current):
+            return blocked("chrome_first_run_focus_changed_before_tap", self.capture(prefix + "-prepare-focus-changed"))
+        x, y = (left + right) // 2, (top + bottom) // 2
+        action = {"name": "chrome_welcome_use_without_account", "at": now(),
+                  "selector": {"package": CHROME_PACKAGE, "resourceId": SKIP_ACCOUNT_ID, "text": SKIP_ACCOUNT_TEXT},
+                  "bounds": [left, top, right, bottom], "tap": {"x": x, "y": y},
+                  "foregroundImmediatelyBeforeTap": current, "beforeEvidence": before,
+                  "status": "about_to_tap"}
+        preparation["actions"].append(action)
+        self.flush()  # Preserve the decision and before evidence even if adb fails.
+        self.report["policy"]["automatedUIClicksPerformed"] += 1
+        action["command"] = self.shell(["input", "tap", str(x), str(y)])
+        action["status"] = "tap_sent" if action["command"]["returnCode"] == 0 else "tap_failed"
+        self.flush()
+        self.wait_for_page(hit_start)
+        after = self.capture(prefix + "-prepare-01-after")
+        action["afterEvidence"] = after
+        preparation["afterEvidence"] = after
+        if action["command"]["returnCode"] != 0:
+            return blocked("no_account_tap_command_failed", after)
+        if not (self.page_ready(after, hit_start)
+                and all(component_package(after[key]["resumedComponent"]) == CHROME_PACKAGE
+                        for key in ("foregroundBefore", "foregroundAfter"))):
+            # No unobserved privacy/safety/consent button is guessed. The next
+            # CI artifact must identify any new page before extending this list.
+            return blocked("unknown_screen_after_known_no_account_action", after)
+        preparation.update(status="prepared_page_confirmed", reason="safe_chrome_page_after_no_account_action")
+        self.report["firstRunPreparation"].update(status="prepared_page_confirmed")
+        self.flush()
+        return after, preparation
 
     def launch(self, package: str | None, index: int) -> bool:
         prefix = f"attempt-{index:02d}"
@@ -379,17 +534,12 @@ class Probe:
         if package:
             intent += ["-p", package]
         attempt["launch"] = self.shell(intent, timeout=45)
-        # Wait only for our safe page or a bounded first-run/chooser observation.
-        # No signing in, settings edits, consent taps, or injected browser UI.
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            with self.hits_lock:
-                hit_seen = len(self.page_hits) > hit_start
-            if hit_seen:
-                time.sleep(2)
-                break
-            time.sleep(1)
-        evidence = self.capture(prefix)
+        self.wait_for_page(hit_start)
+        evidence = self.capture(prefix + "-prepare-01-before" if self.args.prepare_browser else prefix)
+        preparation = None
+        if self.args.prepare_browser:
+            evidence, preparation = self.prepare_browser(prefix, evidence, hit_start, attempt["launch"]["returnCode"] == 0)
+            attempt["firstRunPreparation"] = preparation
         with self.hits_lock:
             attempt_hits = list(self.page_hits[hit_start:])
         attempt.update(evidence)
@@ -405,9 +555,11 @@ class Probe:
         attempt["browserReady"] = bool(
             attempt["launch"]["returnCode"] == 0
             and attempt["independentBrowserForeground"] and attempt["requestedPackageReachedForeground"]
-            and attempt_hits and evidence["visiblePageMarker"]
-            and evidence["screenshot"] and evidence["hierarchy"] and not evidence["captureErrors"]
+            and self.page_ready(evidence, hit_start)
         )
+        if preparation and preparation["actions"] and attempt["browserReady"]:
+            self.report["firstRunPrepared"] = True
+            self.report["firstRunPreparation"].update(status="completed")
         attempt["finishedAt"] = now()
         self.report["launchAttempts"].append(attempt)
         self.flush()
@@ -424,9 +576,9 @@ class Probe:
         # Always observe the exact implicit ACTION_VIEW route, even if it lands in
         # ResolverActivity. A scoped follow-up is diagnostic, never a chooser pass.
         implicit_ready = self.launch(None, 0)
-        if not implicit_ready:
+        if not implicit_ready and not self.preparation_blocked:
             for index, package in enumerate(sorted(self.candidates), start=1):
-                if self.launch(package, index):
+                if self.launch(package, index) or self.preparation_blocked:
                     break
         attempts = self.report["launchAttempts"]
         any_ready = any(attempt["browserReady"] for attempt in attempts)
@@ -455,6 +607,8 @@ class Probe:
             reason = "no_http_action_view_handler"
         elif not self.candidates:
             reason = "no_independent_launchable_http_and_https_browser_candidate"
+        elif self.preparation_blocked:
+            reason = "explicit_browser_preparation_blocked_unknown_or_unready_screen"
         elif any_foreground:
             reason = "browser_present_but_local_page_not_confirmed_first_run_or_other_blocker"
         else:
@@ -478,6 +632,8 @@ def main() -> int:
     parser.add_argument("--target", required=True, choices=("google_apis", "google_apis_playstore"))
     parser.add_argument("--output", required=True)
     parser.add_argument("--serial", default="emulator-5554", choices=("emulator-5554",))
+    parser.add_argument("--prepare-browser", action="store_true",
+                        help="Explicitly permit the observed Chrome 'Use without an account' UI action; unknown pages fail closed.")
     args = parser.parse_args()
     if os.environ.get("GITHUB_ACTIONS") != "true":
         parser.error("This environment probe is CI-only; do not execute it locally.")
@@ -495,7 +651,7 @@ def main() -> int:
         probe.report["finishedAt"] = now()
         probe.flush()
     print(json.dumps({key: probe.report.get(key) for key in
-                      ("status", "browserAvailable", "availabilityReason", "defaultActionViewReady")}, sort_keys=True))
+                      ("status", "browserAvailable", "availabilityReason", "defaultActionViewReady", "firstRunPrepared")}, sort_keys=True))
     return 0 if probe.report.get("browserAvailable") is True else 1
 
 
