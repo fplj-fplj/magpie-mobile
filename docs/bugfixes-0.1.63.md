@@ -41,6 +41,10 @@ Python patch fixture 同时核对新增补丁与平台常量的打包约束。Go
 
 本次仅收敛测试同步：启用行的有界等待不再嵌套 Compose 的 frame-advancing `waitUntil` 与已自行同步的语义读取，改用墙钟超时；先确认唯一启用行，再断言只发起一次 GET。仍不捕获、重试或忽略布局异常，产品 UI 与断言强度不变。此调整须在新源码提交的完整 Actions 上验证，未将一次重跑成功视为底层触发器已修复。
 
+源码 `7133e4e10cea39e740efbc71cd496dc749394207` 的 Validation `44799890338` 中，JVM 实际报告仍为 1,127 项通过、零失败／错误／跳过；regression 任务成功。Android 23 项中 22 项通过、1 项失败，无跳过，实际 Go／Bun 插件运行证据为 PASS，AndroidRuntime 错误日志为空。这次失败是手动模型保存门禁用例首次等待保存按钮超时，上一轮的布局重入未出现；不能据此认定底层布局问题已经修复。
+
+已定位本次测试同步缺口：编辑器目录检查先设置 `discoveryLoading`，再通过 `LaunchedEffect` 的虚拟时钟等待 1,000ms；保存按钮在目录检查完成前禁用。墙钟轮询不会持续推进仅有未来 delay 的 Compose 测试时钟。现仅在该用例编辑手动模型前，先用可推进虚拟时钟的有界等待确认初次目录 POST，再确认保存按钮启用，与其他手动草稿用例的既有顺序一致。后续请求挂起、旧回调拒绝、草稿保留、失败后显式重试及写请求计数断言均保留，不改变产品逻辑，也不延长超时或吞掉异常。
+
 ## 真实 Android 浏览器验收门槛
 
 独立分支 `browser-backup-probe` 的环境探针只调查 API35 x86_64 官方 `google_apis`／`google_apis_playstore` 镜像：真实 HTTP handler、独立浏览器前台、无凭据 loopback 页面、截图、UI hierarchy、浏览器与 DocumentsUI 版本。它不安装产品 App，不执行备份，因此不能代替下面的往返验收。
