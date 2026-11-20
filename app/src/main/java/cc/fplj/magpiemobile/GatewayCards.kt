@@ -92,9 +92,9 @@ internal fun GatewayKeysCard(
     keysState: GatewayKeysUiState,
 ) {
     val clipboard = LocalClipboardManager.current
-    var notice by remember { mutableStateOf("") }
-    var newKeyName by remember { mutableStateOf("") }
-    var editingKey by remember { mutableStateOf<RegisteredGatewayKey?>(null) }
+    var notice by remember(keysState.session, clientReady) { mutableStateOf("") }
+    var newKeyName by remember(keysState.session, clientReady) { mutableStateOf("") }
+    var editingKey by remember(keysState.session, clientReady) { mutableStateOf<RegisteredGatewayKey?>(null) }
 
     ContentCard {
             Text("网关密钥管理 (Caller Keys)", style = MaterialTheme.typography.titleMedium)
@@ -158,7 +158,7 @@ internal fun GatewayKeysCard(
                                     OutlinedButton(
                                         enabled = !key.off && !keysState.loading,
                                         onClick = {
-                                            viewModel.copyKey(key.id) { secret ->
+                                            viewModel.copyKey(key.id, expectedSession = keysState.session) { secret ->
                                                 clipboard.setText(AnnotatedString(secret))
                                                 notice = "已复制密钥 [" + key.name + "] 到剪贴板"
                                             }
@@ -167,7 +167,7 @@ internal fun GatewayKeysCard(
                                         Text("复制 Key")
                                     }
                                     TextButton(
-                                        enabled = !key.off && !keysState.loading,
+                                        enabled = !key.off && !keysState.loading && !keysState.needsRefresh,
                                         onClick = { editingKey = key }
                                     ) {
                                         Text("限制")
@@ -194,10 +194,10 @@ internal fun GatewayKeysCard(
                         label = { Text("客户端名称") }
                     )
                     Button(
-                        enabled = newKeyName.isNotBlank() && !keysState.loading,
+                        enabled = newKeyName.isNotBlank() && !keysState.loading && !keysState.needsRefresh,
                         onClick = {
                             val nameToCreate = newKeyName.trim()
-                            viewModel.createKey(nameToCreate) { created ->
+                            viewModel.createKey(nameToCreate, expectedSession = keysState.session) { created ->
                                 clipboard.setText(AnnotatedString(created.secret))
                                 notice = "成功生成并复制新密钥 [" + created.name + "]"
                                 newKeyName = ""
@@ -233,8 +233,8 @@ internal fun GatewayKeysCard(
                 }
             }
     }
-    editingKey?.let { key ->
-        KeyRestrictionsDialog(key = key, viewModel = viewModel, onDismiss = { editingKey = null })
+    editingKey?.takeIf { clientReady }?.let { key ->
+        KeyRestrictionsDialog(key = key, viewModel = viewModel, keysState = keysState, onDismiss = { editingKey = null })
     }
 }
 
@@ -244,6 +244,7 @@ internal fun GatewayKeysCard(
 private fun KeyRestrictionsDialog(
     key: RegisteredGatewayKey,
     viewModel: GatewayKeysViewModel,
+    keysState: GatewayKeysUiState,
     onDismiss: () -> Unit,
 ) {
     var modelsText by remember { mutableStateOf(key.models.joinToString(", ")) }
@@ -252,7 +253,7 @@ private fun KeyRestrictionsDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            Button(onClick = {
+            Button(enabled = !keysState.loading && !keysState.needsRefresh, onClick = {
                 val models = modelsText.split(',', '，', ' ').map { it.trim() }.filter { it.isNotBlank() }.distinct()
                 val aliases = aliasesText.lines().mapNotNull { line ->
                     val idx = line.indexOf('=')
@@ -262,7 +263,8 @@ private fun KeyRestrictionsDialog(
                         if (name.isNotBlank() && target.isNotBlank()) name to target else null
                     } else null
                 }.toMap()
-                viewModel.updateKeyRestrictions(key.id, models, aliases, tierText.trim(), onDone = onDismiss)
+                viewModel.updateKeyRestrictions(key.id, models, aliases, tierText.trim(),
+                    expectedSession = keysState.session, onDone = onDismiss)
             }) {
                 Text("保存")
             }
@@ -271,13 +273,21 @@ private fun KeyRestrictionsDialog(
         title = { Text("编辑密钥限制 · " + key.name) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (keysState.error.isNotEmpty()) {
+                    Text(keysState.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                if (keysState.needsRefresh) {
+                    TextButton(enabled = !keysState.loading, onClick = viewModel::refresh) { Text("刷新列表核对") }
+                }
                 OutlinedTextField(
+                    enabled = !keysState.loading && !keysState.needsRefresh,
                     value = modelsText,
                     onValueChange = { modelsText = it },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("模型白名单（逗号分隔；留空=不修改）") },
                 )
                 OutlinedTextField(
+                    enabled = !keysState.loading && !keysState.needsRefresh,
                     value = aliasesText,
                     onValueChange = { aliasesText = it },
                     modifier = Modifier.fillMaxWidth(),
@@ -285,6 +295,7 @@ private fun KeyRestrictionsDialog(
                     label = { Text("模型别名（每行 名称=provider/model；留空=不修改）") },
                 )
                 OutlinedTextField(
+                    enabled = !keysState.loading && !keysState.needsRefresh,
                     value = tierText,
                     onValueChange = { tierText = it },
                     modifier = Modifier.fillMaxWidth(),

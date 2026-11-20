@@ -28,11 +28,29 @@ import cc.fplj.magpiemobile.theme.UiSpacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 
 internal fun officialPluginRowTag(spec: String) = "official-plugin-row-${spec.hashCode().toUInt().toString(16)}"
+
+/** A submitted draft becomes the editor baseline only after its own authoritative result. */
+internal suspend fun confirmedPluginOptionsSave(
+    states: StateFlow<OfficialPluginsState>,
+    session: ProviderSessionKey,
+    currentSession: () -> ProviderSessionKey?,
+    spec: String,
+    submitted: JsonObject,
+): JsonObject? {
+    // Observe the VM directly: Compose may coalesce the intermediate busy frame of a fast save.
+    // An unknown write continues waiting for readonly reconciliation, never another POST.
+    val settled = states.first { currentSession() != session || (!it.busy && !it.pending) }
+    if (currentSession() != session) return null
+    return settled.snapshot.entries.firstOrNull { it.spec == spec }?.options?.takeIf { it == submitted }
+}
 
 @OptIn(ExperimentalLayoutApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
@@ -195,7 +213,15 @@ internal fun PluginManagementPanel(
         { viewModel.edit(PluginEdit.Off(selected.spec, !selected.off)) },
         { viewModel.edit(PluginEdit.Upgrade(selected.spec)) },
         { removingSpec = selected.spec },
-        { value -> viewModel.saveOptions(selected.spec, value) },
+        { value, onSaved ->
+            val session = viewModel.currentSession()
+            if (session != null && viewModel.edit(PluginEdit.Options(selected.spec, value), expectedSession = session)) {
+                scope.launch {
+                    confirmedPluginOptionsSave(viewModel.state, session, viewModel::currentSession, selected.spec, value)
+                        ?.let(onSaved)
+                }
+            }
+        },
         { provider, method -> selectedSpec = null; viewModel.selectLogin(provider, method) },
         { provider -> viewModel.edit(PluginEdit.Prefer(selected.spec, provider)) }, onBrowserEditor,
         { viewModel.edit(PluginEdit.RestoreGatewayAccess) })
@@ -246,11 +272,12 @@ private fun PluginLoginRecoveryCard(viewModel: PluginManagementViewModel, state:
 private fun PluginDetailDialog(
     plugin: ManagedPlugin, state: OfficialPluginsState, canWrite: Boolean,
     close: () -> Unit, toggle: () -> Unit, upgrade: () -> Unit, remove: () -> Unit,
-    saveOptions: (String) -> Unit, login: (PluginProvider, Int) -> Unit, prefer: (String) -> Unit, browser: () -> Unit,
+    saveOptions: (JsonObject, (JsonObject) -> Unit) -> Unit,
+    login: (PluginProvider, Int) -> Unit, prefer: (String) -> Unit, browser: () -> Unit,
     restoreGateway: () -> Unit,
 ) {
     var tab by remember(plugin.spec) { mutableStateOf(0) }
-    val baseOptions = remember(plugin.spec) { plugin.options }
+    var baseOptions by remember(plugin.spec) { mutableStateOf(plugin.options) }
     var options by remember(plugin.spec) { mutableStateOf(Json { prettyPrint = true }.encodeToString(kotlinx.serialization.json.JsonObject.serializer(),
         plugin.options.takeIf { it.isNotEmpty() } ?: plugin.optionsExample)) }
     var optionsError by remember(plugin.spec) { mutableStateOf("") }
@@ -319,7 +346,14 @@ private fun PluginDetailDialog(
                             if (optionsError.isNotBlank()) Text(optionsError, color = MaterialTheme.colorScheme.error)
                             Button(enabled = canWrite, onClick = {
                                 if (plugin.options != baseOptions) optionsError = "参数已被其他入口修改，请关闭详情后重新打开"
-                                else saveOptions(options)
+                                else {
+                                    val submitted = runCatching { Json.parseToJsonElement(options) as? JsonObject }.getOrNull()
+                                    if (submitted == null) optionsError = "插件参数必须是有效的 JSON 对象"
+                                    else {
+                                        optionsError = ""
+                                        saveOptions(submitted) { saved -> baseOptions = saved }
+                                    }
+                                }
                             }) { Text("保存参数") }
                         }
                         2 -> {

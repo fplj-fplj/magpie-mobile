@@ -116,6 +116,7 @@ fun Dashboard(
     val clientReady = running && !stopping && connection.ready
     val owner = if (clientReady) NativeCoreSession.providerSessionId() else null
     val liveSession = if (clientReady) connection.providerSession else null
+    val visibleKeysState = keysState.takeIf { it.session == liveSession } ?: GatewayKeysUiState(session = liveSession)
     val catalogSession = shell.catalogSession?.takeIf { shell.catalogValid && it == liveSession }
     val catalogShell = if (shell.catalogValid && catalogSession == null) shell.copy(
         catalogValid = false, modelsNotice = "核心连接已变化，模型目录尚未确认。",
@@ -144,10 +145,10 @@ fun Dashboard(
             }
         }
     }
+    LaunchedEffect(liveSession) { keysViewModel.attach(liveSession) }
     LaunchedEffect(clientReady, owner) {
         usageViewModel.attach(owner)
         if (clientReady) {
-            keysViewModel.refresh()
             usageViewModel.refresh(5)
         }
     }
@@ -279,7 +280,7 @@ fun Dashboard(
                                 GatewayEndpointCard(running && !stopping, clientReady,
                                     if (clientReady) NativeCoreSession.currentGatewayKey() else null, shell.selectedModel)
                             }
-                            GatewaySection.KEYS -> GatewayKeysCard(clientReady, keysViewModel, keysState)
+                            GatewaySection.KEYS -> GatewayKeysCard(clientReady, keysViewModel, visibleKeysState)
                             GatewaySection.USAGE -> {
                                 RecentRequestsCard(clientReady, usageViewModel, usageState)
                                 UsageInsightsCard(clientReady, usageViewModel, usageState)

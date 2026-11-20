@@ -36,6 +36,7 @@ object NativeCoreSession {
     private val requests = GatewayRequestLeases()
     private val providerRequests = ProviderRequestLeases()
     private val pluginRequests = PluginRequestLeases()
+    private val managementRequests = ManagementRequestLeases()
     private val mutableStatus = MutableStateFlow(Snapshot(Phase.DISCONNECTED, "网关未连接"))
     val status = mutableStatus.asStateFlow()
     // All key provisioning is serial, including cancelled/old Service runs.
@@ -51,6 +52,7 @@ object NativeCoreSession {
             requests.invalidate()
             providerRequests.invalidate()
             pluginRequests.invalidate()
+            managementRequests.invalidate()
             providerSessions.begin(current.owner, current)
             current.config = null
             current.providers = null
@@ -80,6 +82,7 @@ object NativeCoreSession {
         requests.invalidate()
         providerRequests.invalidate()
         pluginRequests.invalidate()
+        managementRequests.invalidate()
         providerSessions.invalidate()
         val current = Binding(owner, ManagerCredential.fromKey(adminKey))
         binding = current
@@ -102,6 +105,7 @@ object NativeCoreSession {
         requests.invalidate()
         providerRequests.invalidate()
         pluginRequests.invalidate()
+        managementRequests.invalidate()
         providerSessions.invalidate()
         current.config = null
         current.providers = null
@@ -117,6 +121,7 @@ object NativeCoreSession {
         requests.invalidate()
         providerRequests.invalidate()
         pluginRequests.invalidate()
+        managementRequests.invalidate()
         providerSessions.invalidate()
         binding = null
         mutableStatus.value = Snapshot(Phase.DISCONNECTED, "网关已断开，管理凭据已从会话释放")
@@ -183,6 +188,18 @@ object NativeCoreSession {
         val config = current?.config
         val captured = providerSessions.capture(key, current, config, current != null && isRunningOwner(current))
         pluginRequests.acquire(captured.binding.credential) {
+            synchronized(lock) {
+                val active = binding
+                providerSessions.isCurrent(captured, active, active?.config, active != null && isRunningOwner(active))
+            }
+        }
+    }
+
+    /** Caller-key work captures credentials before dispatch and expires on every reconnect. */
+    internal fun managementRequest(key: ProviderSessionKey): ManagementRequestLease = synchronized(lock) {
+        val current = binding
+        val captured = providerSessions.capture(key, current, current?.config, current != null && isRunningOwner(current))
+        managementRequests.acquire(captured.binding.credential) {
             synchronized(lock) {
                 val active = binding
                 providerSessions.isCurrent(captured, active, active?.config, active != null && isRunningOwner(active))

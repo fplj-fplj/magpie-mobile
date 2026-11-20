@@ -23,6 +23,9 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -66,12 +69,15 @@ fun ChatPanel(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var historyOpen by remember { mutableStateOf(false) }
+    var conversationMenuOpen by remember { mutableStateOf(false) }
     var modelSheet by remember { mutableStateOf(false) }
     var modelSheetSession by remember { mutableStateOf<ProviderSessionKey?>(null) }
     val idle = state.ready && !state.busy && !state.sending
     val messagesScroll = rememberLazyListState()
     val configuration = LocalConfiguration.current
-    val compactChrome = configuration.screenHeightDp < 520 || WindowInsets.isImeVisible
+    // A popup may change IME visibility; keep its anchor until the user dismisses it.
+    val compactChrome = configuration.screenHeightDp < 520 || WindowInsets.isImeVisible ||
+        conversationMenuOpen
     val modelEntries = remember(modelGroups) { modelGroups.flatMap { it.entries } }
     val modelIds = remember(modelEntries) { modelEntries.map { it.id } }
     val selectedEntry = remember(modelEntries, selectedModel) {
@@ -166,17 +172,36 @@ fun ChatPanel(
                 }
             }
 
-            ModelSelectionField(
-                displayName = if (selectedModel.isBlank()) "选择模型"
-                else selectedEntry?.displayName ?: selectedModel,
-                enabled = canConnect && catalogSession != null && modelIds.isNotEmpty() &&
-                    idle && state.selected?.legacy != true,
-                modifier = Modifier.testTag("chat-model-selector").semantics {
-                    testTagsAsResourceId = true
-                },
-                compact = true,
-                onClick = { modelSheetSession = catalogSession; modelSheet = true },
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(UiSpacing.tiny),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ModelSelectionField(
+                    displayName = if (selectedModel.isBlank()) "选择模型"
+                    else selectedEntry?.displayName ?: selectedModel,
+                    enabled = canConnect && catalogSession != null && modelIds.isNotEmpty() &&
+                        idle && state.selected?.legacy != true,
+                    modifier = Modifier.weight(1f).testTag("chat-model-selector").semantics {
+                        testTagsAsResourceId = true
+                    },
+                    compact = true,
+                    onClick = { modelSheetSession = catalogSession; modelSheet = true },
+                )
+                if (compactChrome) {
+                    CompactConversationMenu(
+                        expanded = conversationMenuOpen,
+                        onExpandedChange = { conversationMenuOpen = it },
+                        state = state,
+                        idle = idle,
+                        providerBusy = providerBusy,
+                        onNewConversation = viewModel::newConversation,
+                        onHistory = { historyOpen = true },
+                        onRefresh = viewModel::refresh,
+                        onOlderMessages = viewModel::olderMessages,
+                    )
+                }
+            }
 
             if (!compactChrome) {
                 Row(
@@ -348,6 +373,65 @@ fun ChatPanel(
             onDismiss = { historyOpen = false },
             viewModel = viewModel,
         )
+    }
+}
+
+/** Keep local conversation actions reachable without adding another row above the keyboard. */
+@Composable
+private fun CompactConversationMenu(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    state: ChatUiState,
+    idle: Boolean,
+    providerBusy: Boolean,
+    onNewConversation: () -> Unit,
+    onHistory: () -> Unit,
+    onRefresh: () -> Unit,
+    onOlderMessages: () -> Unit,
+) {
+    Box {
+        IconButton(
+            onClick = { onExpandedChange(true) },
+            modifier = Modifier.testTag("chat-conversation-menu"),
+        ) {
+            AppIcon(AppSymbol.CHAT, description = "会话操作")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
+            DropdownMenuItem(
+                text = { Text("新会话") },
+                enabled = idle && !providerBusy,
+                onClick = { onExpandedChange(false); onNewConversation() },
+                modifier = Modifier.testTag("chat-new-conversation"),
+            )
+            DropdownMenuItem(
+                text = { Text("历史会话") },
+                enabled = idle,
+                onClick = { onExpandedChange(false); onHistory() },
+                modifier = Modifier.testTag("chat-history"),
+            )
+            DropdownMenuItem(
+                text = { Text("重读记录") },
+                enabled = !state.busy && !state.sending,
+                onClick = { onExpandedChange(false); onRefresh() },
+                modifier = Modifier.testTag("chat-refresh"),
+            )
+            if (state.viewingOlderMessages) {
+                DropdownMenuItem(
+                    text = { Text("回最新消息") },
+                    enabled = idle,
+                    onClick = { onExpandedChange(false); onRefresh() },
+                    modifier = Modifier.testTag("chat-latest"),
+                )
+            }
+            if (state.olderMessages) {
+                DropdownMenuItem(
+                    text = { Text("更早 50 条") },
+                    enabled = idle,
+                    onClick = { onExpandedChange(false); onOlderMessages() },
+                    modifier = Modifier.testTag("chat-older"),
+                )
+            }
+        }
     }
 }
 

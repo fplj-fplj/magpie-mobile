@@ -20,6 +20,8 @@ class CoreManagementClient(
     private val credential: ManagerCredential,
     baseUrl: String = "http://127.0.0.1:3430",
     timeout: Duration = Duration.ofSeconds(5),
+    requestControl: ChatRequestControl? = null,
+    ensureActive: () -> Unit = {},
 ) {
     private val endpoint = LoopbackEndpoint(baseUrl)
     private val transport: BoundedCoreHttp
@@ -28,7 +30,7 @@ class CoreManagementClient(
     init {
         require(endpoint.port != 3425) { "管理 cookie 不得发送到网关" }
         require(endpoint.port == credential.port) { "管理 cookie 端口不匹配" }
-        transport = BoundedCoreHttp(endpoint, timeout, credential.cookieHeader())
+        transport = BoundedCoreHttp(endpoint, timeout, credential.cookieHeader(), requestControl, ensureActive)
     }
 
     /** Fail closed before provisioning if any required mobile safety property differs. */
