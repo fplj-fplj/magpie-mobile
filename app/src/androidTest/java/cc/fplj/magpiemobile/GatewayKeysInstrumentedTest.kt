@@ -43,6 +43,7 @@ class GatewayKeysInstrumentedTest {
     @Test fun gatewayEndpointRejectsOldCallbackAndMarksCurrentKeyAndCurlSensitive() {
         val clipboard = compose.activity.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         var liveSession = FIRST
+        val displayedSession = mutableStateOf(FIRST)
         val oldMaskedKey = "sk-synthetic-old-mask"
         val currentKey = "sk-synthetic-current-key"
         val copyForLiveSession: (ProviderSessionKey, (String) -> Unit) -> Boolean = { expected, copy ->
@@ -55,9 +56,9 @@ class GatewayKeysInstrumentedTest {
                     GatewayEndpointCard(
                         running = true,
                         clientReady = true,
-                        maskedGatewayKey = "sk-synthetic-old-mask",
+                        maskedGatewayKey = oldMaskedKey,
                         defaultModel = "fake-echo",
-                        expectedSession = FIRST,
+                        expectedSession = displayedSession.value,
                         copyGatewayKeyIfCurrent = copyForLiveSession,
                     )
                 }
@@ -71,21 +72,7 @@ class GatewayKeysInstrumentedTest {
             liveSession = NEXT
             assertTrue("The previously displayed control should remain invokable for this race test", oldCopy())
             assertEquals("sentinel-value", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
-        }
-
-        compose.setContent {
-            MagpieTheme(darkTheme = false) {
-                Surface(Modifier.fillMaxSize()) {
-                    GatewayEndpointCard(
-                        running = true,
-                        clientReady = true,
-                        maskedGatewayKey = "sk-synthetic-old-mask",
-                        defaultModel = "fake-echo",
-                        expectedSession = NEXT,
-                        copyGatewayKeyIfCurrent = copyForLiveSession,
-                    )
-                }
-            }
+            displayedSession.value = NEXT
         }
         compose.waitForIdle()
         compose.onNodeWithText("复制 API Key").performClick()

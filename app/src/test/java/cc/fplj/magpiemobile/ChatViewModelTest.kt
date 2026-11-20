@@ -183,6 +183,38 @@ class ChatViewModelTest {
         }
     }
 
+    @Test fun renamingSelectedConversationPreservesOlderMessagePageAndDraft() {
+        val firstPage = seedConversation(
+            "rename-page-current", updatedAt = 100, successfulTurns = 26,
+        )
+        seedConversationHistory(65, "rename-history")
+        val vm = vm()
+        val id = "rename-page-current"
+        vm.selectConversation(id)
+        settled(vm)
+        vm.moreConversations()
+        assertEquals(60, settled(vm).conversations.size)
+        vm.olderMessages()
+        val older = settled(vm)
+        assertEquals(firstPage.take(2), older.messages)
+        assertTrue(older.viewingOlderMessages)
+        assertFalse(older.olderMessages)
+
+        vm.editDraft("重命名期间保留的草稿")
+        vm.profileUnavailable()
+        val before = vm.state.value
+        vm.renameConversation(id, "  保留旧分页的会话  ")
+        val after = settled(vm)
+
+        assertEquals(before.copy(
+            selected = after.selected,
+            conversations = after.conversations,
+        ), after)
+        assertEquals("保留旧分页的会话", after.selected?.title)
+        assertEquals(after.selected, after.conversations.first())
+        assertEquals(60, after.conversations.size)
+    }
+
     @Test fun deletingOtherConversationPreservesOlderMessagePageAndDraft() {
         val first = seedConversation("delete-page-current", updatedAt = 100, successfulTurns = 26)
         seedConversation("delete-page-other", updatedAt = 1)
@@ -266,12 +298,12 @@ class ChatViewModelTest {
             val vm = vm(repository = historyRepo)
             val currentId = checkNotNull(vm.state.value.selected).id
             val targetLoadedSize = if (total == 31) 30 else 60
-            while (vm.state.value.conversations.size < targetLoadedSize) {
+            if (targetLoadedSize == 60) {
                 vm.moreConversations(); settled(vm)
             }
             val loadedBefore = vm.state.value.conversations.map { it.id }
             assertEquals(targetLoadedSize, loadedBefore.size)
-            val target = loadedBefore[if (total > 30) 35 else 10]
+            val target = loadedBefore[if (targetLoadedSize == 60) 35 else 10]
             assertNotEquals(currentId, target)
 
             vm.deleteConversation(target)

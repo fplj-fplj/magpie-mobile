@@ -4,18 +4,22 @@
 
 删除非当前会话时，旧逻辑会重新加载当前聊天的最新 50 条记录，导致用户查看的更早页面被替换并触发滚动到底部；历史列表也会缩回最初 30 项。现在只刷新会话列表，并按当前已加载数量重新读取列表，聊天消息页、分页游标、草稿、失败正文、思考预览和其他当前会话状态保持不变。删除选中会话的 fallback 仍读取 fallback 会话的最新页面。
 
+重命名当前会话也曾把旧消息页重置到最新。现在重命名只刷新历史列表及当前会话的标题与更新时间，保留已加载的历史范围、消息页和草稿。
+
 原生显式复制的 Caller Key、生成的密钥、网关接入 API Key 和含凭据 cURL 现在都通过统一的 Android 剪贴板封装写入敏感标记。接入页面在复制时以 NativeCoreSession 的会话锁核对完整连接轮次并读取当前配置中的 Key，旧 UI 回调在连接轮次变化后不再覆盖剪贴板。提供商 API 密钥输入框仅在该字段局部包装 Compose 剪贴板管理器，让系统 Copy/Cut 同样携带标记；读取与粘贴继续委托原管理器。
 
 普通 Base URL 保持未标记。敏感标记是提供给系统剪贴板和输入法的提示，不是加密保证；官方网页编辑器由外部浏览器执行的复制不在本轮原生实现范围内。保持现有暖纸色、RikkaHub 页面结构和霞鹜文楷字体，不调整页面布局或编辑流程。
 
 ## 回归覆盖
 
-- JVM 新增 4 项真实 ViewModel／Room 用例，覆盖旧消息页及草稿保持、104 条记录的下一页游标、加载 30/60 项后的删除分页边界，以及运行中会话删除被拒时保留当前视图；扩充了选中会话删除后恢复 fallback 最新页的既有回归。
+- JVM 新增 5 项真实 ViewModel／Room 用例，覆盖旧消息页及草稿保持、104 条记录的下一页游标、加载 30/60 项后的删除分页边界、运行中会话删除被拒时保留当前视图，以及重命名时保留旧消息页和 60 项历史列表；扩充了选中会话删除后恢复 fallback 最新页的既有回归。
 - Android 新增 1 项 ChatPanel／Room 滚动锚点用例、1 项提供商系统 Copy/Cut/Paste 敏感标记用例、2 项网关剪贴板与旧回调用例；真实核心集成测试增加当前会话成功和旧 epoch 拒绝断言。
-- 预期 JVM 总数为 1,118 项，Android API 35 x86_64 仪器测试为 23 项。以上仅是源码测试清单和预期数量，须由 GitHub Actions 同提交报告确认。
+- 预期 JVM 总数为 1,119 项，Android API 35 x86_64 仪器测试为 23 项。最终数量与结果以 GitHub Actions 同提交报告为准。
 
 ## 验证状态
 
-本机只进行了源码与差异静态审查及 `git diff --check`；未运行 Gradle、Kotlin/JVM、Go 或 Android 编译／测试。提交 `a3e9a4a089327231e7f8989bcb1885f11333de0b` 的 [Validation run 44715579488](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44715579488) 已结束并失败，失败步骤为 “Run core and app JVM regression tests”。当前环境无法读取该步骤日志或报告 artifact，具体失败用例尚未确认；没有签名候选验收，也没有发布 Release。**本候选尚不能标记为可用。** 获取失败详情、修正后对更新提交完成全套 Validation 和签名构建产物核查，再决定是否正式发布。
+首轮源码 `a3e9a4a089327231e7f8989bcb1885f11333de0b` 的 [Validation 44715579488](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44715579488) 未通过。JVM 报告 `14619896576` 中，31 条会话用例从只加载了 30 条的列表读取索引 35；Android job 编译测试 APK 时报告 `onAllNodesWithText` 缺少导入，未启动模拟器。修正了用例索引和导入，同时调整聊天惰性列表的滚动定位，以及网关剪贴板用例的轮次切换方式。
+
+本机只进行了源码与差异静态审查及 `git diff --check`；未运行 Gradle、Kotlin/JVM、Go 或 Android 编译／测试。修复后的候选仍须通过同提交完整 Validation 和签名产物核查，才可发布 Release。
 
 版本候选：`0.1.62-chat-session-clipboard-fixes`，versionCode 63，备份 metadata appVersion `0.1.62`；核心继续使用 `0.1.3781-androidhost.2`。

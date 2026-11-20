@@ -11,12 +11,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -114,12 +116,12 @@ class ChatPanelInstrumentedTest {
             assertTrue(model.state.value.olderMessages)
             val pageIds = model.state.value.messages.map { it.id }
 
-            val anchor = compose.onNodeWithText("answer-10")
-                .performScrollTo().assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            compose.onNodeWithTag("chat-message-list").performScrollToNode(hasText("answer-10"))
+            val anchor = compose.onNodeWithText("answer-10").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
             openMenu()
             compose.onNodeWithTag("chat-history").performClick()
             compose.onNodeWithText(DELETE_TITLE).assertIsDisplayed()
-            model.deleteConversation(DELETE_ID)
+            compose.runOnUiThread { model.deleteConversation(DELETE_ID) }
             awaitIdle(model)
             assertFalse(compose.onAllNodesWithText(DELETE_TITLE).fetchSemanticsNodes().isNotEmpty())
             compose.onNodeWithText("关闭").performClick()

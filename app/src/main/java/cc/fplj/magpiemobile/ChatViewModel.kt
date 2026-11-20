@@ -139,7 +139,10 @@ class ChatViewModel internal constructor(
         viewModelScope.launch {
             try {
                 withContext(dispatcher) { checkNotNull(repository).renameConversation(id, title) }
-                if (snapshot.selected?.id == id) loadLatest(id) else reloadConversationList()
+                reloadConversationList(
+                    snapshot.conversations.size.coerceAtLeast(30),
+                    renamedSelectionId = id.takeIf { snapshot.selected?.id == it },
+                )
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { mutable.update { it.copy(notice = "会话重命名失败；原标题保留。") } }
             finally { mutable.update { it.copy(busy = false) } }
@@ -172,11 +175,18 @@ class ChatViewModel internal constructor(
         }
     }
 
-    private suspend fun reloadConversationList(visibleLimit: Int = 30) {
-        val repo = checkNotNull(repository)
-        val list = withContext(dispatcher) { repo.conversations(limit = visibleLimit + 1) }
+    private suspend fun reloadConversationList(visibleLimit: Int, renamedSelectionId: String? = null) {
+        val (list, selected) = withContext(dispatcher) {
+            val repo = checkNotNull(repository)
+            val rows = repo.conversations(limit = visibleLimit + 1)
+            rows to renamedSelectionId?.let { id -> rows.firstOrNull { it.id == id } ?: repo.conversation(id) }
+        }
         mutable.update {
-            it.copy(conversations = list.take(visibleLimit), moreConversations = list.size > visibleLimit)
+            it.copy(
+                conversations = list.take(visibleLimit),
+                moreConversations = list.size > visibleLimit,
+                selected = selected ?: it.selected,
+            )
         }
     }
 
