@@ -466,7 +466,7 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue(device.takeScreenshot(File(artifacts, "provider-connectivity-results.png")))
                     device.findObject(By.text("关闭")).click()
                     await("implicit provider test dialog closed") {
-                        !device.hasObject(By.res("provider-connectivity-dialog"))
+                        !device.hasObject(By.text("测试连接"))
                     }
                     device.findObject(By.desc("返回提供商列表")).click()
                     await("implicit provider editor closed") { !device.hasObject(By.res("provider-editor-surface")) }
@@ -1752,8 +1752,11 @@ class OfficialPluginsInstrumentedTest {
     }
 
     private fun verifyDisabledProviderModels(artifacts: File, cookie: String, auth: String) {
-        val dialog = By.res("provider-connectivity-dialog")
+        // This separate Dialog window exposes visible text to UiAutomator. Its Compose-only
+        // test tag is used by Panel tests and is not inherited as an Android resource ID.
+        val dialog = By.text("测试连接")
         val editorBack = By.desc("返回提供商列表")
+        var primaryFailure: Throwable? = null
         try {
             saveOfficialProviderModels(cookie, noModels = true)
             val listed = NativeCoreSession.providerClient().getProviders().providers.single { it.id == "android-runtime" }
@@ -1775,18 +1778,28 @@ class OfficialPluginsInstrumentedTest {
                     "real Go capability checks passed. Official select-none retained the catalog with on=false, " +
                     "removed its actual gateway route, and disabled Start in a freshly opened native dialog.\n",
             )
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            runCatching { device.takeScreenshot(File(artifacts, "provider-auto-models-failure.png")) }
+            throw failure
         } finally {
-            if (device.hasObject(dialog)) device.findObject(By.text("关闭"))?.click()
-            await("disabled provider test dialog closed") { !device.hasObject(dialog) }
-            if (device.hasObject(editorBack)) device.findObject(editorBack).click()
-            await("disabled provider editor closed") { !device.hasObject(By.res("provider-editor-surface")) }
-            val client = NativeCoreSession.providerClient()
-            val draft = ProviderEditDraft(client.editable("android-runtime"), modelIds = listOf("fake-echo"))
-            try { client.edit(draft) } finally { draft.clearSecret() }
-            assertEquals(listOf("fake-echo"), client.editable("android-runtime").modelIds)
-            assertFalse(client.editable("android-runtime").noModels)
-            assertTrue("restoring explicit picks must restore the gateway route", runtimeProviderRoutePresent(auth))
-            refreshProviderRow("已启用")
+            try {
+                if (device.hasObject(dialog)) device.findObject(By.text("关闭"))?.click()
+                await("disabled provider test dialog closed") { !device.hasObject(dialog) }
+                if (device.hasObject(editorBack)) device.findObject(editorBack).click()
+                await("disabled provider editor closed") { !device.hasObject(By.res("provider-editor-surface")) }
+                val client = NativeCoreSession.providerClient()
+                val draft = ProviderEditDraft(client.editable("android-runtime"), modelIds = listOf("fake-echo"))
+                try { client.edit(draft) } finally { draft.clearSecret() }
+                assertEquals(listOf("fake-echo"), client.editable("android-runtime").modelIds)
+                assertFalse(client.editable("android-runtime").noModels)
+                assertTrue("restoring explicit picks must restore the gateway route", runtimeProviderRoutePresent(auth))
+                refreshProviderRow("已启用")
+            } catch (cleanupFailure: Throwable) {
+                val original = primaryFailure
+                if (original == null) throw cleanupFailure
+                original.addSuppressed(cleanupFailure)
+            }
         }
     }
 
