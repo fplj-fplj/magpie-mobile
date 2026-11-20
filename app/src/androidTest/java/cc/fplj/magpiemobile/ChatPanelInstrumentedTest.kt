@@ -30,6 +30,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import cc.fplj.magpiemobile.core.SessionRecord
 import cc.fplj.magpiemobile.data.ChatDatabase
 import cc.fplj.magpiemobile.data.ChatRepository
@@ -297,12 +298,14 @@ class ChatPanelInstrumentedTest {
 
     private fun dismissEmulatorLauncherAnr() {
         // API35's Pixel Launcher can ANR during first boot; leave any app ANR as a failure.
-        if (device.hasObject(By.text("Pixel Launcher isn't responding"))) {
+        val launcherAnr = By.text("Pixel Launcher isn't responding")
+        if (device.hasObject(launcherAnr)) {
             checkNotNull(device.findObject(By.text("Close app"))) {
                 "The identified Pixel Launcher ANR must offer its Close app action"
             }.click()
-            device.waitForIdle()
-            assertFalse(device.hasObject(By.text("Pixel Launcher isn't responding")))
+            // Input/accessibility idleness can precede removal of the system ANR window.
+            assertTrue("The identified Pixel Launcher ANR did not close after its Close app action",
+                device.wait(Until.gone(launcherAnr), 5_000))
         }
     }
 
