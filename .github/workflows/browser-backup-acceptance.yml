@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 65
     env:
-      PINNED_CANDIDATE_SOURCE_SHA: 7133e4e10cea39e740efbc71cd496dc749394207
+      PINNED_CANDIDATE_SOURCE_SHA: 26639e1ed74ca60a2d4cd46b7374affeaa628dc8
       EXPECTED_CORE_VERSION: 0.1.3781-androidhost.3
       PINNED_UPSTREAM_SHA: b52c711142a662fe18fedf5a80cb1e4aa94bce62
     steps:

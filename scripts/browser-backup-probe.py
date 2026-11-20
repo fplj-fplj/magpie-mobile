@@ -51,13 +51,17 @@ SKIP_ACCOUNT_TEXT = "Use without an account"
 CHROME_TABBED = CHROME_PACKAGE + "/org.chromium.chrome.browser.ChromeTabbedActivity"
 NOTIFICATIONS_TITLE = "Chrome notifications make things easier"
 NOTIFICATIONS_DECLINE_ID = CHROME_PACKAGE + ":id/negative_button"
-# Exact labels observed in both CI image artifacts, never an open-ended
-# "continue/accept/skip" matcher. Unknown subsequent pages are evidence-only.
+PIXEL_LAUNCHER = "com.google.android.apps.nexuslauncher"
+PIXEL_HOME = PIXEL_LAUNCHER + "/" + PIXEL_LAUNCHER + ".NexusLauncherActivity"
+PIXEL_ANR_TITLE = "Pixel Launcher isn't responding"
+# Exact labels observed in the Chrome image artifacts and launcher ANR in
+# run 44801702713; never an open-ended "continue/accept/skip" matcher.
+# Unknown subsequent pages are evidence-only.
 SAFE_UI_LABELS = {
     PAGE_MARKER, "Welcome to Chrome", SKIP_ACCOUNT_TEXT, "Add account to device",
     "Sign in to browse easier across devices", "Magpie external browser probe",
     "This local page contains no credentials or account data.", PROBE_URL,
-    NOTIFICATIONS_TITLE, "No thanks",
+    NOTIFICATIONS_TITLE, "No thanks", PIXEL_ANR_TITLE, "Close app", "Wait",
 }
 SAFE_UI_ATTRIBUTES = {
     "rotation", "index", "resource-id", "class", "package", "checkable", "checked",
@@ -132,13 +136,18 @@ class Probe:
                                  "status": "pending" if args.prepare_browser else "not_requested",
                                  "allowedActions": ["chrome_welcome_use_without_account", "chrome_notifications_no_thanks"] if args.prepare_browser else [],
                                  "unknownScreenPolicy": "capture_and_fail", "attempts": []},
+            launcherANRRecovery={"status": "not_needed", "attempted": False,
+                                 "allowedAction": "observed_pixel_launcher_anr_close_once_before_first_view"
+                                 if args.prepare_browser else "none"},
             collectionStartedAt=now(), serial=args.serial,
             requestedImage={"apiLevel": 35, "arch": "x86_64", "target": args.target, "profile": "pixel_6"},
             scope="Environment discovery only; no backup, download, or import acceptance claim.",
             policy={"noAppInstalled": True, "noAccountOrLoginActions": True,
                     "noAutomatedConsentClicks": not args.prepare_browser,
                     "automatedUIClicksPerformed": 0,
-                    "automatedUIClickPolicy": "exact_observed_chrome_no_account_and_notification_decline_only" if args.prepare_browser else "none",
+                    "chromePreparationClicksPerformed": 0,
+                    "launcherANRCloseClicksPerformed": 0,
+                    "automatedUIClickPolicy": "observed_pixel_launcher_anr_close_once_before_view_and_exact_chrome_preparation" if args.prepare_browser else "none",
                     "savedHierarchyTextPolicy": "known_static_labels_only",
                     "homeSynchronization": "main_home_wait_and_two_focused_samples",
                     "noRetryAfterUnconfirmedBrowserLaunch": True,
@@ -387,7 +396,101 @@ class Probe:
         result["focusWait"] = self.wait_for_focused(component=resolved[0])
         result["confirmed"] = result["focusWait"]["confirmed"]
         result["reason"] = "home_focused" if result["confirmed"] else "home_dual_focus_not_reached"
+        if (not result["confirmed"] and resolved[0] == PIXEL_HOME
+                and result["focusWait"]["samples"]
+                and self.pixel_launcher_anr_focus(result["focusWait"]["samples"][-1])):
+            recovery = self.close_known_launcher_anr()
+            result["launcherANRRecovery"] = recovery
+            result["confirmed"] = recovery["status"] == "recovered"
+            result["reason"] = ("home_focused_after_one_observed_launcher_anr_close" if result["confirmed"]
+                                else "observed_launcher_anr_recovery_not_confirmed")
         return result
+
+    def pixel_launcher_anr_focus(self, foreground: dict) -> bool:
+        current_focus = [line for line in foreground["windowLines"] if line.startswith("mCurrentFocus=")]
+        return bool(foreground["commandsSucceeded"] and foreground["resumedComponent"] == PIXEL_HOME
+                    and foreground["focusedComponent"] is None and len(current_focus) == 1
+                    and re.fullmatch(r"mCurrentFocus=Window\{[0-9a-f]+ u0 Application Not Responding: "
+                                     + re.escape(PIXEL_LAUNCHER) + r"\}", current_focus[0]))
+
+    def close_known_launcher_anr(self) -> dict:
+        """Only the exact launcher ANR observed in run 44801702713, before VIEW."""
+        recovery = self.report["launcherANRRecovery"]
+        attempts = self.report["launchAttempts"]
+        policy = self.report["policy"]
+        if (not self.args.prepare_browser or recovery["attempted"] or len(attempts) != 1
+                or attempts[0]["kind"] != "implicit_action_view"
+                or attempts[0]["launch"].get("notAttempted") is not True
+                or policy["automatedUIClicksPerformed"] != 0):
+            recovery.update(status="blocked", reason="launcher_recovery_not_allowed_before_first_view")
+            return recovery
+        recovery.update(status="inspecting", attempted=True)
+        before = self.capture("attempt-00-home-anr-before")
+        recovery["beforeEvidence"] = before
+
+        def blocked(reason: str) -> dict:
+            recovery.update(status="blocked", reason=reason)
+            self.flush()
+            return recovery
+
+        if (before["captureErrors"] or not before["hierarchy"] or not before["screenshot"]
+                or not all(self.pixel_launcher_anr_focus(before[key])
+                           for key in ("foregroundBefore", "foregroundAfter"))):
+            return blocked("known_launcher_anr_focus_or_evidence_not_confirmed")
+        root = ET.parse(self.output / before["hierarchy"]).getroot()
+
+        def matching(resource_id: str, text: str, class_name: str, button: bool = False) -> list:
+            return [node for node in root.iter("node")
+                    if node.attrib.get("package") == "android"
+                    and node.attrib.get("resource-id") == resource_id
+                    and node.attrib.get("text") == text and node.attrib.get("class") == class_name
+                    and node.attrib.get("visible-to-user") != "false"
+                    and (not button or (node.attrib.get("clickable") == "true"
+                                        and node.attrib.get("enabled") == "true"))]
+
+        titles = matching("android:id/alertTitle", PIXEL_ANR_TITLE, "android.widget.TextView")
+        close = matching("android:id/aerr_close", "Close app", "android.widget.Button", True)
+        wait = matching("android:id/aerr_wait", "Wait", "android.widget.Button", True)
+        if len(titles) != 1 or len(close) != 1 or len(wait) != 1:
+            return blocked("observed_launcher_anr_title_and_both_buttons_not_unique")
+        bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", close[0].attrib.get("bounds", ""))
+        if not bounds:
+            return blocked("launcher_anr_close_bounds_invalid")
+        left, top, right, bottom = map(int, bounds.groups())
+        if not (0 <= left < right <= before.get("screenshotWidth", 0)
+                and 0 <= top < bottom <= before.get("screenshotHeight", 0)):
+            return blocked("launcher_anr_close_outside_current_screenshot")
+        current = self.foreground()
+        if not self.pixel_launcher_anr_focus(current):
+            recovery["focusChangedEvidence"] = self.capture("attempt-00-home-anr-focus-changed")
+            return blocked("launcher_anr_focus_changed_before_close")
+        x, y = (left + right) // 2, (top + bottom) // 2
+        recovery.update(status="about_to_tap", action="observed_pixel_launcher_anr_close",
+                        selector={"package": "android", "resourceId": "android:id/aerr_close",
+                                  "text": "Close app", "title": PIXEL_ANR_TITLE},
+                        bounds=[left, top, right, bottom], tap={"x": x, "y": y},
+                        foregroundImmediatelyBeforeTap=current)
+        policy["automatedUIClicksPerformed"] += 1
+        policy["launcherANRCloseClicksPerformed"] += 1
+        self.flush()
+        recovery["command"] = self.shell(["input", "tap", str(x), str(y)])
+        if recovery["command"]["returnCode"] == 0:
+            # Closing the launcher can cause Android to recreate HOME. Only
+            # observe that transition; do not restart Chrome or repeat the tap.
+            recovery["homeFocusWait"] = self.wait_for_focused(component=PIXEL_HOME)
+        after = self.capture("attempt-00-home-anr-after")
+        recovery["afterEvidence"] = after
+        if recovery["command"]["returnCode"] != 0:
+            return blocked("launcher_anr_close_tap_failed")
+        if (not recovery["homeFocusWait"]["confirmed"] or after["captureErrors"]
+                or not after["screenshot"] or not after["hierarchy"]
+                or not all(after[key]["commandsSucceeded"] and after[key]["resumedComponent"] == PIXEL_HOME
+                           and after[key]["focusedComponent"] == PIXEL_HOME
+                           for key in ("foregroundBefore", "foregroundAfter"))):
+            return blocked("home_not_restored_after_one_launcher_anr_close")
+        recovery.update(status="recovered", reason="home_recreated_and_dual_focus_confirmed")
+        self.flush()
+        return recovery
 
     def chrome_exit_info(self) -> dict:
         # Parse only fixed numeric/date fields in memory. In particular, never
@@ -576,7 +679,7 @@ class Probe:
         if not (0 <= left < right <= before.get("screenshotWidth", 0)
                 and 0 <= top < bottom <= before.get("screenshotHeight", 0)):
             return blocked("no_account_button_outside_current_screenshot", before)
-        if self.report["policy"]["automatedUIClicksPerformed"] != 0:
+        if self.report["policy"]["chromePreparationClicksPerformed"] != 0:
             return blocked("known_preparation_action_already_attempted", before)
         # Recheck actual focus immediately before the one permitted tap. Every
         # coordinate comes from this capture's exact enabled/clickable UI node.
@@ -592,6 +695,7 @@ class Probe:
         preparation["actions"].append(action)
         self.flush()  # Preserve the decision and before evidence even if adb fails.
         self.report["policy"]["automatedUIClicksPerformed"] += 1
+        self.report["policy"]["chromePreparationClicksPerformed"] += 1
         action["command"] = self.shell(["input", "tap", str(x), str(y)])
         action["status"] = "tap_sent" if action["command"]["returnCode"] == 0 else "tap_failed"
         self.flush()
@@ -637,7 +741,7 @@ class Probe:
                 return blocked("notification_decline_outside_current_screenshot", after)
             current = self.foreground()
             if (not notification_foreground(current)
-                    or self.report["policy"]["automatedUIClicksPerformed"] != 1):
+                    or self.report["policy"]["chromePreparationClicksPerformed"] != 1):
                 return blocked("notification_decline_focus_or_action_count_changed", self.capture(prefix + "-prepare-02-focus-changed"))
             x, y = (left + right) // 2, (top + bottom) // 2
             decline = {"name": "chrome_notifications_no_thanks", "at": now(),
@@ -649,6 +753,7 @@ class Probe:
             preparation["actions"].append(decline)
             self.flush()
             self.report["policy"]["automatedUIClicksPerformed"] += 1
+            self.report["policy"]["chromePreparationClicksPerformed"] += 1
             decline["command"] = self.shell(["input", "tap", str(x), str(y)])
             decline["status"] = "tap_sent" if decline["command"]["returnCode"] == 0 else "tap_failed"
             self.flush()
