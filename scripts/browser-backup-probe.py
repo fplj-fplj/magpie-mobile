@@ -53,6 +53,7 @@ NOTIFICATIONS_TITLE = "Chrome notifications make things easier"
 NOTIFICATIONS_DECLINE_ID = CHROME_PACKAGE + ":id/negative_button"
 PIXEL_LAUNCHER = "com.google.android.apps.nexuslauncher"
 PIXEL_HOME = PIXEL_LAUNCHER + "/" + PIXEL_LAUNCHER + ".NexusLauncherActivity"
+GOOGLE_SETUP_HOME = "com.google.android.googlesdksetup/com.google.android.googlesdksetup.DefaultActivity"
 PIXEL_ANR_TITLE = "Pixel Launcher isn't responding"
 # Exact labels observed in the Chrome image artifacts and launcher ANR in
 # run 44801702713; never an open-ended "continue/accept/skip" matcher.
@@ -402,10 +403,31 @@ class Probe:
                 or launched != resolved):
             result["reason"] = "home_wait_launch_not_confirmed"
             return result
-        result["focusWait"] = self.wait_for_focused(component=resolved[0])
+        focused_home = resolved[0]
+        if focused_home == GOOGLE_SETUP_HOME:
+            # Run 44807780332 observed the fresh image's temporary HOME handler
+            # hand off to Pixel Launcher without another intent or any UI click.
+            # A focused launcher alone is insufficient: HOME must resolve to it
+            # too, then remain the resumed and focused activity for two samples.
+            handoff = {"fromComponent": GOOGLE_SETUP_HOME, "toComponent": PIXEL_HOME,
+                       "focusWait": self.wait_for_focused(component=PIXEL_HOME)}
+            result["setupHomeHandoff"] = handoff
+            if not handoff["focusWait"]["confirmed"]:
+                result["reason"] = "setup_home_handoff_dual_focus_not_reached"
+                return result
+            resolve_after = self.shell(["cmd", "package", "resolve-activity", "--brief", "--user", "0",
+                                        "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME"])
+            handoff["resolveAfter"] = resolve_after
+            handoff["resolvedComponentsAfter"] = components(resolve_after["stdout"])
+            if (resolve_after["returnCode"] != 0 or handoff["resolvedComponentsAfter"] != [PIXEL_HOME]
+                    or PIXEL_LAUNCHER not in self.installed_packages):
+                result["reason"] = "setup_home_handoff_handler_not_confirmed"
+                return result
+            focused_home = PIXEL_HOME
+        result["focusWait"] = self.wait_for_focused(component=focused_home)
         result["confirmed"] = result["focusWait"]["confirmed"]
         result["reason"] = "home_focused" if result["confirmed"] else "home_dual_focus_not_reached"
-        if (not result["confirmed"] and resolved[0] == PIXEL_HOME
+        if (not result["confirmed"] and focused_home == PIXEL_HOME
                 and result["focusWait"]["samples"]
                 and self.pixel_launcher_anr_focus(result["focusWait"]["samples"][-1])):
             recovery = self.close_known_launcher_anr()
