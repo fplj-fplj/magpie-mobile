@@ -1720,7 +1720,8 @@ class OfficialPluginsInstrumentedTest {
 
     /** Wait for a visibly fresh Panel summary; opening only a fresh editable snapshot is insufficient. */
     private fun refreshProviderRow(expectedTag: String) {
-        val refresh = By.text("刷新").enabled(true).clickable(true)
+        // TextButton exposes its label on a child text node; that child is not clickable.
+        val refresh = By.text("刷新").enabled(true)
         await("provider refresh visible") {
             if (device.hasObject(refresh)) true else {
                 device.swipe(device.displayWidth / 2, device.displayHeight / 3,
