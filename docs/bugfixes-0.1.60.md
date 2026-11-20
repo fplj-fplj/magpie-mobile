@@ -12,4 +12,6 @@
 
 新增 JVM helper 覆盖 implicit-all、ready/off/noModels 状态、显式选择与 `models[].on` 不一致、重复及 23/24/25 边界。新增真实 ProviderPanel 覆盖默认 1/1、implicit 2/3、明确禁用和停用 0/1、24/25、未就绪及草稿不写入列表。测试使用 loopback 管理响应和合成凭据，不启动假连接上的推理。
 
+首轮源码 `7e13f27e51b4d6edd81f605974e9f8d2696ee0a3` 的 Validation `44679289929` 已完成 Android 编译和 164.538 秒的真实 Go/Bun 综合用例；九项 Panel 用例在新增摘要的可见性断言失败。真实应用由 Dashboard 提供滚动容器，隔离 Panel fixture 缺少该容器，导致行内标签受有限高度约束；fixture 现对齐实际滚动宿主，并使用未合并树中的具体 Text 滚动后检查可见性，保留 exact 文案和行祖先限定。首轮不发布，需修正后完整同提交重跑。
+
 Actions、正式 APK、签名、哈希、Release tag 和四项附件将在云端完成后补录；当前文件不提前声称通过。

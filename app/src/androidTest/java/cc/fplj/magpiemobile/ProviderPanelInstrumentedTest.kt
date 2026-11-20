@@ -4,6 +4,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
@@ -342,11 +344,15 @@ class ProviderPanelInstrumentedTest {
     }
 
     private fun assertProviderSummary(summary: String) {
-        compose.onNode(hasText(summary) and hasAnyAncestor(hasTestTag(ROW))).assertIsDisplayed()
+        compose.onNode(hasText(summary) and hasAnyAncestor(hasTestTag(ROW)), useUnmergedTree = true)
+            .performScrollTo()
+            .assertIsDisplayed()
     }
 
     private fun assertProviderStatus(status: String) {
-        compose.onNode(hasText(status) and hasAnyAncestor(hasTestTag(ROW))).assertIsDisplayed()
+        compose.onNode(hasText(status) and hasAnyAncestor(hasTestTag(ROW)), useUnmergedTree = true)
+            .performScrollTo()
+            .assertIsDisplayed()
     }
 
     private fun assertNoSavedModelsCanBeTested(peer: ProviderPanelHttpPeer) {
@@ -377,7 +383,10 @@ class ProviderPanelInstrumentedTest {
             MagpieTheme(darkTheme = false) {
                 Surface(Modifier.fillMaxSize()) {
                     CompositionLocalProvider(LocalProviderPanelConnection provides source) {
-                        if (visible.value) Column(Modifier.fillMaxSize().padding(12.dp)) {
+                        // Dashboard supplies this scrolling host in the installed app. Match
+                        // it here so row labels retain their natural height and can be revealed.
+                        if (visible.value) Column(Modifier.fillMaxSize()
+                            .verticalScroll(rememberScrollState()).padding(12.dp)) {
                             ProvidersPanel(
                                 enabled = true,
                                 onProvidersChanged = {},
@@ -407,7 +416,7 @@ class ProviderPanelInstrumentedTest {
     }
 
     private fun openEditor() {
-        compose.onNodeWithTag(ROW).performClick()
+        compose.onNodeWithTag(ROW).performScrollTo().performClick()
         compose.waitUntil(10_000) {
             compose.onAllNodesWithTag("provider-editor-surface").fetchSemanticsNodes().isNotEmpty()
         }
