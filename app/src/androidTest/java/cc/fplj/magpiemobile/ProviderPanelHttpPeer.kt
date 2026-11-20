@@ -17,7 +17,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** A real loopback management peer; only synthetic metadata and credentials are ever used. */
-internal class ProviderPanelHttpPeer : Closeable {
+internal class ProviderPanelHttpPeer(
+    savedModels: List<String> = listOf("saved-model"),
+    noModels: Boolean = false,
+    off: Boolean = false,
+    private val listedModels: Map<String, Boolean>? = null,
+    private val discoveryModels: List<String> = listOf("saved-model"),
+) : Closeable {
     private val listener = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
     private val workers = Executors.newCachedThreadPool { task ->
         Thread(task, "provider-panel-http-fixture").apply { isDaemon = true }
@@ -25,13 +31,14 @@ internal class ProviderPanelHttpPeer : Closeable {
     private val sockets = CopyOnWriteArrayList<Socket>()
     private val closing = AtomicBoolean()
     private val failure = AtomicReference<Throwable?>()
-    private val canonical = AtomicReference(Canonical())
+    private val canonical = AtomicReference(Canonical(models = savedModels, noModels = noModels, off = off))
     private val listGates = ConcurrentLinkedQueue<Gate>()
     private val editGates = ConcurrentLinkedQueue<EditGate>()
     private val allGates = CopyOnWriteArrayList<Gate>()
     val requests = CopyOnWriteArrayList<Request>()
     val credential = ManagerCredential.fromKey("provider-panel-synthetic-manager", listener.localPort)
     val listCount: Int get() = requests.count { it.method == "GET" && it.path == LIST }
+    val modelDirectoryCount: Int get() = requests.count { it.method == "POST" && it.path == MODELS }
     val editRequests: List<Request> get() = requests.filter { it.method == "POST" && it.path == EDIT }
 
     init {
@@ -122,8 +129,9 @@ internal class ProviderPanelHttpPeer : Closeable {
             request.method == "GET" && request.path == EDITABLE -> respond(socket, 200, editable(canonical.get()))
             request.method == "GET" && request.path == CAPABILITIES -> respond(socket, 200, CAPABILITIES_BODY)
             request.method == "POST" && request.path == MODELS -> respond(socket, 200,
-                JSONObject().put("baseUrl", CHAT_URL).put("models", JSONArray().put(JSONObject()
-                    .put("id", "saved-model").put("name", "Saved model"))).toString())
+                JSONObject().put("baseUrl", CHAT_URL).put("models", JSONArray(discoveryModels.map { id ->
+                    JSONObject().put("id", id).put("name", id)
+                })).toString())
             request.method == "POST" && request.path == EDIT -> {
                 val next = checkNotNull(editGates.poll()) { "A provider write occurred without an explicit test action" }
                 next.gate.hold()
@@ -156,14 +164,15 @@ internal class ProviderPanelHttpPeer : Closeable {
 
     private fun editable(value: Canonical): String = JSONObject()
         .put("id", ID).put("revision", value.revision).put("name", value.name).put("chat", CHAT_URL)
-        .put("models", JSONArray(value.models)).put("noModels", false).put("key", keyMetadata()).toString()
+        .put("models", JSONArray(value.models)).put("noModels", value.noModels).put("key", keyMetadata()).toString()
 
     private fun listBody(value: Canonical): String = JSONObject().put("providers", JSONArray().put(JSONObject()
         .put("id", ID).put("name", value.name).put("chat", CHAT_URL).put("preset", "")
-        .put("baseAPI", "chat").put("ready", true).put("off", false).put("noModels", false)
+        .put("baseAPI", "chat").put("ready", true).put("off", value.off).put("noModels", value.noModels)
         .put("key", keyMetadata()).put("chosen", JSONArray(value.models))
-        .put("models", JSONArray(value.models.map { id -> JSONObject()
-            .put("id", id).put("name", id).put("on", true) })))).toString()
+        .put("models", JSONArray((listedModels ?: value.models.associateWith { true }).map { (id, on) ->
+            JSONObject().put("id", id).put("name", id).put("on", on)
+        })))).toString()
 
     private fun keyMetadata() = JSONObject().put("set", true).put("optional", false).put("masked", "******")
 
@@ -195,6 +204,8 @@ internal class ProviderPanelHttpPeer : Closeable {
     private data class Canonical(
         val name: String = ORIGINAL_NAME,
         val models: List<String> = listOf("saved-model"),
+        val noModels: Boolean = false,
+        val off: Boolean = false,
         val revision: String = "a".repeat(64),
     )
 

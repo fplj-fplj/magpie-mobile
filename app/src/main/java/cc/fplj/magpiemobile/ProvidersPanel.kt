@@ -899,9 +899,9 @@ fun ProvidersPanel(
                             owner = sessionKey?.owner,
                             providerId = snapshot?.id,
                             providerName = name.ifBlank { "提供商" },
-                            testModels = providers?.providers
-                                ?.firstOrNull { it.id == snapshot?.id }
-                                ?.chosen.orEmpty(),
+                            testModels = providerConnectivityModelIds(
+                                providers?.providers?.firstOrNull { it.id == snapshot?.id },
+                            ),
                             modifier = Modifier.weight(1f),
                         )
                         Button(

@@ -15,6 +15,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -162,6 +163,116 @@ class ProviderPanelInstrumentedTest {
         }
     }
 
+    @Test fun implicitAllSavedEnabledModelsCanBeSelectedForTestingWithoutUsingUnsavedDirectoryOrDraft() {
+        ProviderPanelHttpPeer(
+            savedModels = emptyList(),
+            listedModels = linkedMapOf(AUTO_FIRST to true, AUTO_SECOND to true, INACTIVE_MODEL to false),
+            discoveryModels = listOf(DIRECTORY_ONLY),
+        ).use { peer ->
+            withPanel(peer) {
+                openEditor()
+                enterUnsavedManualModel(peer, expectedAutomaticSelection = DIRECTORY_ONLY)
+                openConnectivityDialog()
+                compose.onNode(inConnectivityDialog(AUTO_FIRST)).assertIsDisplayed().assertIsEnabled()
+                compose.onNode(inConnectivityDialog("开始测试")).assertIsDisplayed().assertIsEnabled()
+
+                // Open the actual single-select sheet. Its options must come from the saved
+                // management response's on=true models, even though chosen is empty.
+                compose.onNode(inConnectivityDialog(AUTO_FIRST)).performClick()
+                compose.onNodeWithTag("model-option:$AUTO_FIRST").assertIsSelected()
+                compose.onNodeWithTag("model-option:$AUTO_SECOND").assertIsDisplayed().assertIsEnabled()
+                listOf(INACTIVE_MODEL, DIRECTORY_ONLY, UNSAVED_MODEL).forEach { excluded ->
+                    // Search forces any wrongly included option into view; absence must not
+                    // depend on which lazy rows happened to be composed on this device.
+                    compose.onNodeWithTag("model-search").performTextReplacement(excluded)
+                    compose.onNodeWithTag("model-option:$excluded").assertDoesNotExist()
+                    compose.onNode(hasText("没有匹配的模型") and
+                        hasAnyAncestor(hasTestTag("model-selection-sheet"))).assertIsDisplayed()
+                }
+                compose.onNodeWithTag("model-search").performTextReplacement("")
+                compose.onNodeWithTag("model-option:$AUTO_SECOND").performClick()
+                compose.waitUntil(10_000) {
+                    compose.onAllNodesWithTag("model-selection-sheet").fetchSemanticsNodes().isEmpty()
+                }
+                compose.onNode(inConnectivityDialog(AUTO_SECOND)).assertIsDisplayed()
+                compose.onNode(inConnectivityDialog("开始测试")).assertIsEnabled()
+                assertEquals(1, peer.listCount)
+                assertTrue("Changing a test model must not save the editor draft", peer.editRequests.isEmpty())
+                peer.assertHealthy()
+                // Do not start inference here: installed-Go instrumentation covers execution.
+            }
+        }
+    }
+
+    @Test fun explicitlyDisabledSavedModelsRemainUntestableDespiteUnsavedManualModels() {
+        ProviderPanelHttpPeer(
+            savedModels = emptyList(),
+            noModels = true,
+            listedModels = linkedMapOf(AUTO_FIRST to false),
+            discoveryModels = listOf(DIRECTORY_ONLY),
+        ).use { peer ->
+            withPanel(peer) {
+                openEditor()
+                enterUnsavedManualModel(peer, expectedAutomaticSelection = "")
+                openConnectivityDialog()
+                assertNoSavedModelsCanBeTested(peer)
+            }
+        }
+    }
+
+    @Test fun switchedOffProviderRemainsUntestableEvenWithEnabledMetadataAndUnsavedManualModels() {
+        ProviderPanelHttpPeer(
+            savedModels = emptyList(),
+            off = true,
+            // Deliberately retain on=true metadata: the provider's off gate must win.
+            listedModels = linkedMapOf(AUTO_FIRST to true),
+            discoveryModels = listOf(DIRECTORY_ONLY),
+        ).use { peer ->
+            withPanel(peer) {
+                openEditor()
+                enterUnsavedManualModel(peer, expectedAutomaticSelection = DIRECTORY_ONLY)
+                openConnectivityDialog()
+                assertNoSavedModelsCanBeTested(peer)
+            }
+        }
+    }
+
+    private fun enterUnsavedManualModel(peer: ProviderPanelHttpPeer, expectedAutomaticSelection: String) {
+        compose.waitUntil(10_000) { peer.modelDirectoryCount == 1 }
+        // A received POST alone does not prove its catalog has reached the editor.
+        awaitEnabled(SAVE)
+        compose.onNodeWithText("高级").performClick()
+        compose.onNodeWithText("手动补充模型 ID").performScrollTo().performClick()
+        compose.onNodeWithTag(MANUAL).performScrollTo()
+        assertManualText(expectedAutomaticSelection)
+        compose.onNodeWithTag(MANUAL).performTextReplacement(UNSAVED_MODEL)
+        assertManualText(UNSAVED_MODEL)
+        assertTrue(peer.editRequests.isEmpty())
+    }
+
+    private fun openConnectivityDialog() {
+        compose.onNodeWithTag("provider-connectivity-entry").assertIsEnabled().performClick()
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithTag("provider-connectivity-dialog").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("provider-connectivity-dialog").assertIsDisplayed()
+    }
+
+    private fun assertNoSavedModelsCanBeTested(peer: ProviderPanelHttpPeer) {
+        compose.onNode(inConnectivityDialog(NO_SAVED_MODELS)).assertIsDisplayed()
+        compose.onNode(inConnectivityDialog("开始测试")).assertIsDisplayed().assertIsNotEnabled()
+        compose.onNode(inConnectivityDialog(AUTO_FIRST)).assertDoesNotExist()
+        compose.onNode(inConnectivityDialog(DIRECTORY_ONLY)).assertDoesNotExist()
+        compose.onNode(inConnectivityDialog(UNSAVED_MODEL)).assertDoesNotExist()
+        compose.onNodeWithTag("model-selection-sheet").assertDoesNotExist()
+        assertEquals(1, peer.listCount)
+        assertTrue("An unsaved manual model must not trigger a provider write", peer.editRequests.isEmpty())
+        peer.assertHealthy()
+    }
+
+    private fun inConnectivityDialog(text: String): SemanticsMatcher = hasText(text) and
+        hasAnyAncestor(hasTestTag("provider-connectivity-dialog"))
+
     private fun withPanel(
         peer: ProviderPanelHttpPeer,
         awaitList: Boolean = true,
@@ -274,5 +385,11 @@ class ProviderPanelInstrumentedTest {
         const val BEFORE_SAVE = "manual-before-save"
         const val AFTER_FAILURE = "manual-after-explicit-retry"
         const val STALE_CALLBACK = "must-not-enter-draft-or-request"
+        const val AUTO_FIRST = "saved-auto-first"
+        const val AUTO_SECOND = "saved-auto-second"
+        const val INACTIVE_MODEL = "saved-catalog-inactive"
+        const val DIRECTORY_ONLY = "discovered-directory-only"
+        const val UNSAVED_MODEL = "unsaved-manual-model"
+        const val NO_SAVED_MODELS = "当前提供商没有已保存且启用的模型；保存模型选择后再测试。"
     }
 }
