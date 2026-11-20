@@ -47,6 +47,7 @@ class BrowserBackupInstrumentedTest {
     private var downloadRetryClicked = false
     private var privateArchiveChecks = 0
     private var passed = false
+    private var failureHierarchyCaptured = false
 
     @Test fun officialBrowserBackupRoundTripUsesRealDownloadedFile() {
         // Never pass these via instrumentation arguments or write their values to evidence.
@@ -68,112 +69,126 @@ class BrowserBackupInstrumentedTest {
             }
             device.setOrientationNatural()
             ActivityScenario.launch(MainActivity::class.java).use {
-                phase = "starting_gateway"
-                await(30_000) { device.hasObject(By.res("gateway-power-switch")) }
-                val power = requireNotNull(device.findObject(By.res("gateway-power-switch")))
-                if (!power.isChecked) power.click()
-                await(120_000) { NativeCoreSession.status.value.ready }
-                val session = requireNotNull(NativeCoreSession.providerSessionKey())
-                accept(NativeCoreSession.managementClient().capabilities().coreVersion == "0.1.3781-androidhost.3",
-                    FailureReason.CORE_VERSION_MISMATCH)
-                accept(NativeCoreSession.providerSessionKey() == session, FailureReason.CORE_SESSION_CHANGED)
+                try {
+                    phase = "starting_gateway"
+                    await(30_000) { device.hasObject(By.res("gateway-power-switch")) }
+                    val power = requireNotNull(device.findObject(By.res("gateway-power-switch")))
+                    if (!power.isChecked) power.click()
+                    await(120_000) { NativeCoreSession.status.value.ready }
+                    val session = requireNotNull(NativeCoreSession.providerSessionKey())
+                    accept(NativeCoreSession.managementClient().capabilities().coreVersion == "0.1.3781-androidhost.3",
+                        FailureReason.CORE_VERSION_MISMATCH)
+                    accept(NativeCoreSession.providerSessionKey() == session, FailureReason.CORE_SESSION_CHANGED)
 
-                phase = "creating_A_via_production_RPC"
-                rpc(session) { client ->
-                    check(client.list().providers.none { it.id == FIXTURE_ID }) { "fresh fixture required" }
-                    val draft = ProviderCreateDraft(FIXTURE_ID, A_NAME, A_URL, fixtureKey, listOf(A_MODEL))
-                    try { client.create(draft) } finally { draft.clearSecret() }
-                }
-                assertFixture(session, before = true)
-                val baseline = completeDownloads().keys
-                val privateArchiveBaseline = privateBackupArchives()
+                    phase = "creating_A_via_production_RPC"
+                    rpc(session) { client ->
+                        check(client.list().providers.none { it.id == FIXTURE_ID }) { "fresh fixture required" }
+                        val draft = ProviderCreateDraft(FIXTURE_ID, A_NAME, A_URL, fixtureKey, listOf(A_MODEL))
+                        try { client.create(draft) } finally { draft.clearSecret() }
+                    }
+                    assertFixture(session, before = true)
+                    val baseline = completeDownloads().keys
+                    val privateArchiveBaseline = privateBackupArchives()
 
-                phase = "opening_production_browser_button"
-                clickNamed(context.packageName, listOf("提供商"))
-                revealNativeBrowserButton().click()
-                // This click is NativeNavigation's actual ACTION_VIEW path. CI preparation
-                // only warmed a harmless page and cannot replace this authenticated entry.
-                await(30_000) {
-                    rejectBrowserFirstRun()
-                    device.currentPackageName == CHROME && device.hasObject(By.res(CHROME, "url_bar"))
-                }
-                confirmOfficialPage(CLEAN_ENTRY_URL)
-                cleanRedirectObserved = true
-                safeHierarchy("browser-backup-clean-entry.xml")
+                    phase = "opening_production_browser_button"
+                    clickNamed(context.packageName, listOf("提供商"))
+                    revealNativeBrowserButton().click()
+                    // This click is NativeNavigation's actual ACTION_VIEW path. CI preparation
+                    // only warmed a harmless page and cannot replace this authenticated entry.
+                    await(30_000) {
+                        rejectBrowserFirstRun()
+                        device.currentPackageName == CHROME && device.hasObject(By.res(CHROME, "url_bar"))
+                    }
+                    confirmOfficialPage(CLEAN_ENTRY_URL)
+                    cleanRedirectObserved = true
+                    safeHierarchy("browser-backup-clean-entry.xml")
 
-                phase = "opening_official_sync_settings"
-                clickNamed(CHROME, SETTINGS)
-                revealSyncTab().click()
-                revealWebControl(EXPORT_OPEN).click()
-                phase = "exporting_via_official_web_form"
-                setRealPasswordFields(listOf(phrase, phrase))
-                revealWebControl(EXPORT_SUBMIT).click()
-                downloaded = awaitRealDownload(baseline)
-                assertPrivateArchivesUnchanged(privateArchiveBaseline)
-                safeHierarchy("browser-backup-after-download.xml")
+                    phase = "opening_official_sync_settings"
+                    clickNamed(CHROME, SETTINGS)
+                    revealSyncTab().click()
+                    revealWebControl(EXPORT_OPEN).click()
+                    phase = "exporting_via_official_web_form"
+                    setRealPasswordFields(listOf(phrase, phrase))
+                    revealWebControl(EXPORT_SUBMIT).click()
+                    downloaded = awaitRealDownload(baseline)
+                    assertPrivateArchivesUnchanged(privateArchiveBaseline)
+                    safeHierarchy("browser-backup-after-download.xml")
 
-                phase = "changing_A_to_B_via_same_connection_RPC"
-                rpc(session) { client ->
-                    val draft = ProviderEditDraft(client.editable(FIXTURE_ID),
-                        name = B_NAME, chatUrl = B_URL, modelIds = listOf(B_MODEL))
-                    try { client.edit(draft) } finally { draft.clearSecret() }
-                }
-                assertFixture(session, before = false)
+                    phase = "changing_A_to_B_via_same_connection_RPC"
+                    rpc(session) { client ->
+                        val draft = ProviderEditDraft(client.editable(FIXTURE_ID),
+                            name = B_NAME, chatUrl = B_URL, modelIds = listOf(B_MODEL))
+                        try { client.edit(draft) } finally { draft.clearSecret() }
+                    }
+                    assertFixture(session, before = false)
 
-                phase = "choosing_real_download_from_official_import"
-                revealWebControl(IMPORT_OPEN, startAtTop = true).click()
-                revealWebControl(CHOOSE).click()
-                chooseActualDownload(requireNotNull(downloaded))
-                await(30_000) { hasWebName(requireNotNull(downloaded).name) }
-                assertDownloadUnchanged()
-                safeHierarchy("browser-backup-real-file-selected.xml")
+                    phase = "choosing_real_download_from_official_import"
+                    revealWebControl(IMPORT_OPEN, startAtTop = true).click()
+                    revealWebControl(CHOOSE).click()
+                    chooseActualDownload(requireNotNull(downloaded))
+                    await(30_000) { hasWebName(requireNotNull(downloaded).name) }
+                    assertDownloadUnchanged()
+                    safeHierarchy("browser-backup-real-file-selected.xml")
 
-                phase = "wrong_phrase_must_preserve_B"
-                setRealPasswordFields(listOf(wrongPhrase))
-                revealWebControl(IMPORT_SUBMIT).click()
-                await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
-                    accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
-                    hasWebText(WRONG_PHRASE_ERROR)
-                }
-                assertFixture(session, before = false)
-                SystemClock.sleep(500)
-                assertFixture(session, before = false)
-                assertDownloadUnchanged()
-                assertPrivateArchivesUnchanged(privateArchiveBaseline)
-                safeHierarchy("browser-backup-wrong-phrase-rejected.xml")
+                    phase = "wrong_phrase_must_preserve_B"
+                    setRealPasswordFields(listOf(wrongPhrase))
+                    revealWebControl(IMPORT_SUBMIT).click()
+                    await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
+                        accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
+                        hasWebText(WRONG_PHRASE_ERROR)
+                    }
+                    assertFixture(session, before = false)
+                    SystemClock.sleep(500)
+                    assertFixture(session, before = false)
+                    assertDownloadUnchanged()
+                    assertPrivateArchivesUnchanged(privateArchiveBaseline)
+                    safeHierarchy("browser-backup-wrong-phrase-rejected.xml")
 
-                phase = "correct_phrase_must_restore_A"
-                // Keep the same selected real file; no re-export, alternate URI or API import.
-                // Its filename may be above the viewport after the error. The
-                // successful restore below must use this already-selected file.
-                setRealPasswordFields(listOf(phrase))
-                revealWebControl(IMPORT_SUBMIT).click()
-                await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
-                assertFixture(session, before = true)
-                assertDownloadUnchanged()
-                assertPrivateArchivesUnchanged(privateArchiveBaseline)
-                confirmOfficialPage(SYNC_SETTINGS_URL)
-                safeHierarchy("browser-backup-restored.xml")
-                // Import replaces the form; never capture a password form or a ticket URL.
-                val raw = hierarchyBytes()
-                check(!String(raw, Charsets.UTF_8).contains("password=\"true\"")) {
-                    "password control remains; screenshot refused"
+                    phase = "correct_phrase_must_restore_A"
+                    // Keep the same selected real file; no re-export, alternate URI or API import.
+                    // Its filename may be above the viewport after the error. The
+                    // successful restore below must use this already-selected file.
+                    setRealPasswordFields(listOf(phrase))
+                    revealWebControl(IMPORT_SUBMIT).click()
+                    await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
+                    assertFixture(session, before = true)
+                    assertDownloadUnchanged()
+                    assertPrivateArchivesUnchanged(privateArchiveBaseline)
+                    confirmOfficialPage(SYNC_SETTINGS_URL)
+                    safeHierarchy("browser-backup-restored.xml")
+                    // Import replaces the form; never capture a password form or a ticket URL.
+                    val raw = hierarchyBytes()
+                    check(!String(raw, Charsets.UTF_8).contains("password=\"true\"")) {
+                        "password control remains; screenshot refused"
+                    }
+                    check(secrets.none { String(raw, Charsets.UTF_8).contains(it) }) {
+                        "secret remains; screenshot refused"
+                    }
+                    check(device.takeScreenshot(File(artifacts, "browser-backup-restored.png"))) {
+                        "final screenshot failed"
+                    }
+                    passed = true
+                    phase = "passed"
+                } catch (failure: Throwable) {
+                    // Preserve the real browser/picker state before use closes the Activity.
+                    // Raw nodes stay in memory; only the existing allowlisted XML is saved.
+                    try {
+                        safeHierarchy("browser-backup-final-sanitized.xml")
+                        failureHierarchyCaptured = true
+                    } catch (_: Throwable) {
+                        // Keep the operation failure; the outer fallback can still collect.
+                    }
+                    throw failure
                 }
-                check(secrets.none { String(raw, Charsets.UTF_8).contains(it) }) {
-                    "secret remains; screenshot refused"
-                }
-                check(device.takeScreenshot(File(artifacts, "browser-backup-restored.png"))) {
-                    "final screenshot failed"
-                }
-                passed = true
-                phase = "passed"
             }
         } catch (failure: Throwable) {
             // Do not propagate the original exception: framework/HTTP text can include inputs.
             failureType = failure.javaClass.simpleName
             failureReason = (failure as? AcceptanceFailure)?.reason ?: FailureReason.UNEXPECTED_EXCEPTION
         }
-        try { safeHierarchy("browser-backup-final-sanitized.xml") } catch (failure: Throwable) {
+        try {
+            if (!failureHierarchyCaptured) safeHierarchy("browser-backup-final-sanitized.xml")
+        } catch (failure: Throwable) {
             failureType = failureType ?: failure.javaClass.simpleName
             failureReason = failureReason ?: FailureReason.EVIDENCE_SANITIZATION_FAILED
         }
@@ -241,8 +256,14 @@ class BrowserBackupInstrumentedTest {
     private fun confirmOfficialPage(expectedUrl: Regex) {
         rejectBrowserFirstRun()
         accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
-        await(30_000) { device.hasObject(By.res(CHROME, "url_bar")) && webViewOrNull() != null }
-        // Expand Chrome's real omnibox to inspect its full displayed URL in memory only.
+        // Chrome already has the harmless preparation tab. Its toolbar/WebView alone
+        // cannot prove that the production ACTION_VIEW has reached the official UI.
+        await(30_000, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED) {
+            device.hasObject(By.res(CHROME, "url_bar")) && webViewOrNull() != null &&
+                namedControl(CHROME, SETTINGS) != null
+        }
+        // Expand Chrome's real omnibox only after the official page has loaded.
+        // Inspect its full displayed URL in memory only; never save a ticket URL.
         requireNotNull(device.findObject(By.res(CHROME, "url_bar"))).click()
         await(5_000, FailureReason.CLEAN_OFFICIAL_URL_NOT_REACHED) {
             val actual = device.findObject(By.res(CHROME, "url_bar"))?.text?.trim().orEmpty()
