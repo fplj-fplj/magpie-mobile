@@ -1,11 +1,18 @@
 package cc.fplj.magpiemobile
 
 import android.app.Application
+import android.database.Cursor
+import android.database.sqlite.SQLiteException
+import android.os.CancellationSignal
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
 import androidx.room.Room
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.SupportSQLiteQuery
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import cc.fplj.magpiemobile.core.ChatClient
 import cc.fplj.magpiemobile.core.ChatProfile
@@ -144,10 +151,57 @@ class ChatViewModelTest {
         }
     }
 
-    private fun isolatedRepository(): Pair<ChatDatabase, ChatRepository> {
-        val database = Room.inMemoryDatabaseBuilder(app, ChatDatabase::class.java).build()
+    private fun isolatedRepository(readFault: ConversationListReadFault? = null): Pair<ChatDatabase, ChatRepository> {
+        val database = Room.inMemoryDatabaseBuilder(app, ChatDatabase::class.java)
+            .apply { if (readFault != null) openHelperFactory(readFault) }.build()
             .also(extraDatabases::add)
         return database to ChatRepository(database)
+    }
+
+    /** Fail one real DAO read after transactions, without faking their writes or rollback. */
+    private class ConversationListReadFault : SupportSQLiteOpenHelper.Factory {
+        private val remaining = AtomicInteger(-1)
+        val failures = AtomicInteger()
+
+        fun arm(afterSuccessfulReads: Int = 0) {
+            check(afterSuccessfulReads >= 0)
+            check(remaining.compareAndSet(-1, afterSuccessfulReads))
+        }
+
+        override fun create(configuration: SupportSQLiteOpenHelper.Configuration): SupportSQLiteOpenHelper {
+            val helper = FrameworkSQLiteOpenHelperFactory().create(configuration)
+            fun wrap(database: SupportSQLiteDatabase): SupportSQLiteDatabase =
+                object : SupportSQLiteDatabase by database {
+                    private fun beforeRead(query: SupportSQLiteQuery) {
+                        if (database.inTransaction() || !query.sql.startsWith(
+                            "SELECT * FROM conversation ORDER BY ")) return
+                        while (true) {
+                            val before = remaining.get()
+                            if (before < 0) return
+                            if (!remaining.compareAndSet(before, before - 1)) continue
+                            if (before == 0) {
+                                failures.incrementAndGet()
+                                throw SQLiteException("Injected conversation-list read failure")
+                            }
+                            return
+                        }
+                    }
+
+                    override fun query(query: SupportSQLiteQuery): Cursor {
+                        beforeRead(query)
+                        return database.query(query)
+                    }
+
+                    override fun query(query: SupportSQLiteQuery, cancellationSignal: CancellationSignal?): Cursor {
+                        beforeRead(query)
+                        return database.query(query, cancellationSignal)
+                    }
+                }
+            return object : SupportSQLiteOpenHelper by helper {
+                override val writableDatabase: SupportSQLiteDatabase get() = wrap(helper.writableDatabase)
+                override val readableDatabase: SupportSQLiteDatabase get() = wrap(helper.readableDatabase)
+            }
+        }
     }
 
     private fun messageIds(messages: List<StoredChatMessage>) = messages.map { it.id }
@@ -434,7 +488,9 @@ class ChatViewModelTest {
             assertEquals("尚未完成的思考", vm.state.value.partialReasoning)
             assertEquals("answer", vm.state.value.partial)
             assertEquals(1, probe.requests.get())
-            vm.refresh(); settled(vm)
+            val beforeRefresh = vm.state.value
+            vm.refresh()
+            assertEquals(beforeRefresh, settled(vm))
             val reopened = vm { lease(probe.config) }
             assertFalse(reopened.state.value.sending)
             assertEquals(1, probe.requests.get())
@@ -500,6 +556,347 @@ class ChatViewModelTest {
             assertEquals("", fresh.draft)
             assertTrue(fresh.messages.isEmpty())
             assertEquals(1, probe.requests.get())
+        }
+    }
+
+    @Test fun committedSelectedDeletionWithReadFailureRevokesContextAndLaterSendsOnlyFallbackDraft() {
+        val fault = ConversationListReadFault()
+        val (database, repository) = isolatedRepository(fault)
+        seedConversation("deleted-source", updatedAt = 100, successfulTurns = 2,
+            repository = repository, database = database)
+        seedConversation("delete-fallback", updatedAt = 50, successfulTurns = 1,
+            repository = repository, database = database)
+        Probe(success = false, reasoning = "source-only unfinished reasoning").use { failed ->
+            Probe().use { success ->
+                val config = AtomicReference(failed.config)
+                val captures = AtomicInteger()
+                val vm = vm(repository = repository, acquire = {
+                    captures.incrementAndGet()
+                    lease(config.get())
+                })
+                vm.selectConversation("delete-fallback"); settled(vm)
+                vm.editDraft("fallback-only draft")
+                vm.selectConversation("deleted-source"); settled(vm)
+                vm.editDraft("source-only draft")
+                vm.send("provider/model", SESSION_A)
+                assertTrue(failed.started.await(5, TimeUnit.SECONDS))
+                failed.release.countDown()
+                val preview = settled(vm)
+                assertEquals("answer", preview.partial)
+                assertEquals("source-only unfinished reasoning", preview.partialReasoning)
+
+                fault.arm()
+                vm.deleteConversation("deleted-source")
+                val unreadable = settled(vm)
+                assertEquals(1, fault.failures.get())
+                assertNull(runBlocking(Dispatchers.IO) { repository.conversation("deleted-source") })
+                assertFalse(unreadable.ready)
+                assertNull(unreadable.selected)
+                assertTrue(unreadable.messages.isEmpty())
+                assertTrue(unreadable.conversations.none { it.id == "deleted-source" })
+                assertEquals("", unreadable.draft)
+                assertEquals("", unreadable.partial)
+                assertEquals("", unreadable.partialReasoning)
+                assertTrue(unreadable.notice.contains("会话已删除"))
+                assertFalse(unreadable.notice.contains("会话删除失败"))
+                vm.send("provider/model", SESSION_A)
+                assertEquals(1, captures.get())
+                assertEquals(0, success.requests.get())
+
+                vm.refresh()
+                val recovered = settled(vm)
+                assertTrue(recovered.ready)
+                assertEquals("delete-fallback", recovered.selected?.id)
+                assertEquals("fallback-only draft", recovered.draft)
+                assertEquals("", recovered.partial)
+                assertEquals("", recovered.partialReasoning)
+                assertEquals("", recovered.notice)
+                config.set(success.config)
+                success.release.countDown()
+                vm.send("provider/model", SESSION_A)
+                assertTrue(success.started.await(5, TimeUnit.SECONDS))
+                settled(vm)
+                assertEquals(listOf(
+                    ChatClient.Message("user", "question-0"),
+                    ChatClient.Message("assistant", "answer-0"),
+                    ChatClient.Message("user", "fallback-only draft"),
+                ), requestMessages(requestBody(success, 0)))
+                assertFalse(success.bodies.single().contains("source-only"))
+                assertEquals(1, failed.requests.get())
+                assertEquals(1, success.requests.get())
+                assertEquals(2, captures.get())
+            }
+        }
+    }
+
+    @Test fun refreshFallbackRestoresTargetDraftAndPreservesMissingSourcesOwnDraft() {
+        seedConversation("refresh-source", updatedAt = 100, successfulTurns = 2)
+        seedConversation("refresh-fallback", updatedAt = 50, successfulTurns = 1)
+        Probe(success = false, reasoning = "refresh-source reasoning").use { probe ->
+            val vm = vm { lease(probe.config) }
+            vm.selectConversation("refresh-fallback"); settled(vm)
+            vm.editDraft("refresh-fallback draft")
+            vm.selectConversation("refresh-source"); settled(vm)
+            vm.editDraft("refresh-source draft")
+            vm.send("provider/model", SESSION_A)
+            assertTrue(probe.started.await(5, TimeUnit.SECONDS))
+            probe.release.countDown()
+            assertEquals("refresh-source reasoning", settled(vm).partialReasoning)
+            runBlocking(Dispatchers.IO) { repo.deleteConversation("refresh-source") }
+
+            vm.refresh()
+            val fallback = settled(vm)
+            assertEquals("refresh-fallback", fallback.selected?.id)
+            assertEquals("refresh-fallback draft", fallback.draft)
+            assertEquals(listOf("question-0", "answer-0"), fallback.messages.map { it.text })
+            assertEquals("", fallback.partial)
+            assertEquals("", fallback.partialReasoning)
+            assertEquals("", fallback.notice)
+            // An implicit fallback is not a user deletion: never discard that source's draft.
+            runBlocking(Dispatchers.IO) {
+                db.chatDao().insertConversation(ConversationEntity("refresh-source", "restored identity", 1))
+            }
+            vm.selectConversation("refresh-source")
+            assertEquals("refresh-source draft", settled(vm).draft)
+            assertEquals(1, probe.requests.get())
+        }
+    }
+
+    @Test fun sendCleanupFallbackRestoresItsOwnDraftAndContextBeforeTheNextRealRequest() {
+        seedConversation("cleanup-source", updatedAt = 100, successfulTurns = 2)
+        seedConversation("cleanup-fallback", updatedAt = 50, successfulTurns = 1)
+        Probe(success = false, reasoning = "cleanup-source reasoning").use { failed ->
+            Probe().use { success ->
+                val config = AtomicReference(failed.config)
+                val deleteAfterFailure = AtomicBoolean(true)
+                val vm = vm(turnStore = { repository, id ->
+                    val real = repository.turnStore(id)
+                    object : ChatTurnStore by real {
+                        override fun fail(turnId: String, failure: SessionRecord) {
+                            real.fail(turnId, failure)
+                            if (id == "cleanup-source" && deleteAfterFailure.compareAndSet(true, false)) {
+                                // The real failed turn is committed before the selected row disappears.
+                                repository.deleteConversation(id)
+                            }
+                        }
+                    }
+                }, acquire = { lease(config.get()) })
+                vm.selectConversation("cleanup-fallback"); settled(vm)
+                vm.editDraft("cleanup-fallback draft")
+                vm.selectConversation("cleanup-source"); settled(vm)
+                vm.editDraft("cleanup-source draft")
+                vm.send("provider/model", SESSION_A)
+                assertTrue(failed.started.await(5, TimeUnit.SECONDS))
+                failed.release.countDown()
+                val fallback = settled(vm)
+                assertFalse(deleteAfterFailure.get())
+                assertEquals("cleanup-fallback", fallback.selected?.id)
+                assertEquals("cleanup-fallback draft", fallback.draft)
+                assertEquals("", fallback.partial)
+                assertEquals("", fallback.partialReasoning)
+                assertEquals("", fallback.notice)
+                assertNull(runBlocking(Dispatchers.IO) { repo.conversation("cleanup-source") })
+
+                config.set(success.config)
+                success.release.countDown()
+                vm.send("provider/model", SESSION_A)
+                assertTrue(success.started.await(5, TimeUnit.SECONDS))
+                settled(vm)
+                assertEquals(listOf(
+                    ChatClient.Message("user", "question-0"),
+                    ChatClient.Message("assistant", "answer-0"),
+                    ChatClient.Message("user", "cleanup-fallback draft"),
+                ), requestMessages(requestBody(success, 0)))
+                assertFalse(success.bodies.single().contains("cleanup-source"))
+                assertEquals(1, failed.requests.get())
+                assertEquals(1, success.requests.get())
+            }
+        }
+    }
+
+    @Test fun committedRenameWithReadFailureKeepsKnownTitlePageAndDraftUntilReadRecovery() {
+        val fault = ConversationListReadFault()
+        val (database, repository) = isolatedRepository(fault)
+        seedConversation("rename-read-failure", updatedAt = 100, successfulTurns = 26,
+            repository = repository, database = database)
+        val vm = vm(repository = repository)
+        vm.olderMessages(); settled(vm)
+        vm.editDraft("rename failure draft")
+        val before = vm.state.value
+
+        fault.arm()
+        vm.renameConversation("rename-read-failure", "  已提交的新标题  ")
+        val unreadable = settled(vm)
+        assertEquals(1, fault.failures.get())
+        assertEquals("已提交的新标题", runBlocking(Dispatchers.IO) {
+            repository.conversation("rename-read-failure")?.title
+        })
+        assertFalse(unreadable.ready)
+        assertEquals("已提交的新标题", unreadable.selected?.title)
+        assertEquals(before.messages, unreadable.messages)
+        assertEquals(before.viewingOlderMessages, unreadable.viewingOlderMessages)
+        assertEquals(before.olderMessages, unreadable.olderMessages)
+        assertEquals(before.draft, unreadable.draft)
+        assertTrue(unreadable.notice.contains("重命名已保存"))
+        assertFalse(unreadable.notice.contains("原标题保留"))
+
+        vm.refresh()
+        val recovered = settled(vm)
+        assertTrue(recovered.ready)
+        assertEquals("rename-read-failure", recovered.selected?.id)
+        assertEquals("已提交的新标题", recovered.selected?.title)
+        assertEquals("rename failure draft", recovered.draft)
+        assertEquals("", recovered.notice)
+    }
+
+    @Test fun committedCreationWithReadFailureRecoversTheSameRowAndKeepsTheOldDraft() {
+        val fault = ConversationListReadFault()
+        val (_, repository) = isolatedRepository(fault)
+        val vm = vm(repository = repository)
+        val first = checkNotNull(vm.state.value.selected).id
+        vm.editDraft("original conversation draft")
+        fault.arm()
+        vm.newConversation()
+        val unreadable = settled(vm)
+        val rows = runBlocking(Dispatchers.IO) { repository.conversations() }
+        val created = rows.single { it.id != first }.id
+        assertEquals(1, fault.failures.get())
+        assertEquals(2, rows.size)
+        assertFalse(unreadable.ready)
+        assertEquals(first, unreadable.selected?.id)
+        assertEquals("original conversation draft", unreadable.draft)
+        assertTrue(unreadable.notice.contains("新会话已创建"))
+        vm.newConversation(); settled(vm)
+        assertEquals(2, runBlocking(Dispatchers.IO) { repository.conversations().size })
+
+        vm.refresh()
+        val recovered = settled(vm)
+        assertTrue(recovered.ready)
+        assertEquals(created, recovered.selected?.id)
+        assertEquals("", recovered.draft)
+        assertEquals("", recovered.notice)
+        vm.selectConversation(first)
+        assertEquals("original conversation draft", settled(vm).draft)
+        vm.refresh()
+        assertEquals(first, settled(vm).selected?.id)
+        assertEquals(2, runBlocking(Dispatchers.IO) { repository.conversations().size })
+    }
+
+    @Test fun initializationReadFailureAfterFallbackCreationRecoversItsCommittedRowBeforeNewerRows() {
+        val fault = ConversationListReadFault()
+        val (database, repository) = isolatedRepository(fault)
+        // The first list is empty; fail the final list after loadLatest really creates a row.
+        fault.arm(afterSuccessfulReads = 1)
+        val vm = vm(repository = repository)
+        val unreadable = vm.state.value
+        val created = runBlocking(Dispatchers.IO) { repository.conversations().single().id }
+        assertEquals(1, fault.failures.get())
+        assertFalse(unreadable.ready)
+        assertNull(unreadable.selected)
+        runBlocking(Dispatchers.IO) {
+            database.chatDao().insertConversation(ConversationEntity("newer-after-init-failure", "newer", Long.MAX_VALUE))
+        }
+
+        vm.refresh()
+        val recovered = settled(vm)
+        assertTrue(recovered.ready)
+        assertEquals(created, recovered.selected?.id)
+        assertEquals("", recovered.notice)
+        assertEquals(2, runBlocking(Dispatchers.IO) { repository.conversations().size })
+    }
+
+    @Test fun cancellingReturnDispatchAfterCreateOrDeleteCommitRetainsTheCommittedIdentity() {
+        for (delete in listOf(false, true)) {
+            val (database, repository) = isolatedRepository()
+            seedConversation("return-source", updatedAt = 100, repository = repository, database = database)
+            seedConversation("return-fallback", updatedAt = 50, repository = repository, database = database)
+            val io = GatedDispatcher()
+            val observeReturn = AtomicBoolean()
+            val returnedFromIo = CountDownLatch(1)
+            val dispatcher = object : CoroutineDispatcher() {
+                override fun dispatch(context: CoroutineContext, block: Runnable) {
+                    val observed = observeReturn.get()
+                    io.dispatch(context, Runnable {
+                        try { block.run() }
+                        finally { if (observed) returnedFromIo.countDown() }
+                    })
+                }
+            }
+            val vm = vm(dispatcher = dispatcher, repository = repository)
+            vm.editDraft("return-source draft")
+            vm.selectConversation("return-fallback"); settled(vm)
+            vm.selectConversation("return-source"); settled(vm)
+            val main = StandardTestDispatcher()
+            io.hold = true
+            observeReturn.set(true)
+            Dispatchers.setMain(main)
+            try {
+                if (delete) vm.deleteConversation("return-source") else vm.newConversation()
+                main.scheduler.runCurrent()
+                assertEquals(1, io.queued)
+                io.release()
+                assertTrue(returnedFromIo.await(5, TimeUnit.SECONDS))
+                assertFalse(vm.state.value.ready)
+                val committedRows = runBlocking(Dispatchers.IO) { repository.conversations() }
+                val target = if (delete) {
+                    assertTrue(committedRows.none { it.id == "return-source" })
+                    "return-fallback"
+                } else committedRows.single { it.id !in listOf("return-source", "return-fallback") }.id
+                // IO has committed and published its safety state, but Main has not resumed.
+                vm.viewModelScope.coroutineContext[Job]!!.children.single().cancel()
+                main.scheduler.runCurrent()
+                Dispatchers.setMain(UnconfinedTestDispatcher())
+                val interrupted = settled(vm)
+                assertFalse(interrupted.ready)
+                if (delete) {
+                    assertNull(interrupted.selected)
+                    assertEquals("", interrupted.draft)
+                    assertTrue(interrupted.notice.contains("会话已删除"))
+                } else {
+                    assertEquals("return-source", interrupted.selected?.id)
+                    assertEquals("return-source draft", interrupted.draft)
+                    assertTrue(interrupted.notice.contains("新会话已创建"))
+                }
+                vm.refresh()
+                val recovered = settled(vm)
+                assertTrue(recovered.ready)
+                assertEquals(target, recovered.selected?.id)
+                assertEquals("", recovered.draft)
+                assertEquals(if (delete) 1 else 3, runBlocking(Dispatchers.IO) { repository.conversations().size })
+                if (delete) runBlocking(Dispatchers.IO) {
+                    database.chatDao().insertConversation(ConversationEntity("return-source", "restored identity", 1))
+                }
+                vm.selectConversation("return-source")
+                assertEquals(if (delete) "" else "return-source draft", settled(vm).draft)
+            } finally {
+                Dispatchers.setMain(UnconfinedTestDispatcher())
+                io.release()
+                main.scheduler.runCurrent()
+            }
+        }
+    }
+
+    @Test fun rolledBackRenameAndSelectedDeletionRetainTheirOriginalIdentityPageAndDraft() {
+        seedConversation("rollback-current", updatedAt = 100, successfulTurns = 26)
+        val vm = vm()
+        vm.olderMessages(); settled(vm)
+        vm.editDraft("rollback keeps this draft")
+        val before = vm.state.value
+        runBlocking(Dispatchers.IO) {
+            db.openHelper.writableDatabase.apply {
+                execSQL("CREATE TRIGGER reject_title BEFORE UPDATE OF title ON conversation " +
+                    "BEGIN SELECT RAISE(ABORT, 'injected title rollback'); END")
+                execSQL("CREATE TRIGGER reject_delete BEFORE DELETE ON conversation " +
+                    "BEGIN SELECT RAISE(ABORT, 'injected delete rollback'); END")
+            }
+        }
+        vm.renameConversation("rollback-current", "must roll back")
+        assertEquals(before.copy(notice = "会话重命名失败；原标题保留。"), settled(vm))
+        vm.deleteConversation("rollback-current")
+        assertEquals(before.copy(notice = "会话删除失败；若该会话正在发送，请稍后重试。"), settled(vm))
+        runBlocking(Dispatchers.IO) {
+            assertEquals("rollback-current", repo.conversation("rollback-current")?.title)
+            assertEquals(52, repo.messages("rollback-current", limit = 100).size)
         }
     }
 

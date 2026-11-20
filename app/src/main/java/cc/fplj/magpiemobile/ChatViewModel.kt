@@ -17,6 +17,7 @@ import cc.fplj.magpiemobile.data.ConversationSummary
 import cc.fplj.magpiemobile.data.StoredChatMessage
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
@@ -100,6 +101,8 @@ class ChatViewModel internal constructor(
     private var repository: ChatRepository? = null
     private var readRunning = false // Main-thread guard, including before openRepository returns.
     private val drafts = mutableMapOf<String, String>() // No Bundle, Intent, log or disk draft copies.
+    private val pendingCreatedConversationId = AtomicReference<String?>(null)
+    private var failedReadNotice: String? = null
 
     init { refresh() }
 
@@ -120,10 +123,10 @@ class ChatViewModel internal constructor(
                 val importText = report.warning ?: if (report.imported > 0)
                     "旧记录已归档：" + report.imported + " 条。源文件保留；旧记录不作为推理上下文。" else ""
                 mutable.update { it.copy(importNotice = importText) }
-                loadLatest(mutable.value.selected?.id)
+                loadLatest(pendingCreatedConversationId.get() ?: mutable.value.selected?.id)
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) {
-                mutable.update { it.copy(ready = false, notice = "会话数据库读取失败；已保留原始数据，未重建或覆盖数据库。请重试读取，当前禁止发送。") }
+                readFailed("会话数据库读取失败；已保留原始数据，未重建或覆盖数据库。请重试读取，当前禁止发送。")
             } finally { readRunning = false; mutable.update { it.copy(busy = false) } }
         }
     }
@@ -135,16 +138,32 @@ class ChatViewModel internal constructor(
         val snapshot = mutable.value
         if (!snapshot.ready || snapshot.busy || snapshot.sending) return
         if (title.isBlank()) return
+        val committed = AtomicBoolean()
+        val savedTitle = title.trim()
+        val committedReadFailure = "会话重命名已保存，但列表读取失败；消息和草稿保留，请重读记录核对。"
         mutable.update { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                withContext(dispatcher) { checkNotNull(repository).renameConversation(id, title) }
+                withContext(dispatcher) {
+                    checkNotNull(repository).renameConversation(id, title)
+                    committed.set(true)
+                    mutable.update { current -> current.copy(
+                        selected = current.selected?.let { if (it.id == id) it.copy(title = savedTitle) else it },
+                        conversations = current.conversations.map { if (it.id == id) it.copy(title = savedTitle) else it },
+                    ) }
+                }
                 reloadConversationList(
                     snapshot.conversations.size.coerceAtLeast(30),
                     renamedSelectionId = id.takeIf { snapshot.selected?.id == it },
                 )
-            } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { mutable.update { it.copy(notice = "会话重命名失败；原标题保留。") } }
+            } catch (e: CancellationException) {
+                if (committed.get()) readFailed(committedReadFailure)
+                throw e
+            }
+            catch (_: Exception) {
+                if (committed.get()) readFailed(committedReadFailure)
+                else mutable.update { it.copy(notice = "会话重命名失败；原标题保留。") }
+            }
             finally { mutable.update { it.copy(busy = false) } }
         }
     }
@@ -153,26 +172,51 @@ class ChatViewModel internal constructor(
         val snapshot = mutable.value
         if (!snapshot.ready || snapshot.busy || snapshot.sending) return
         if (snapshot.selected?.legacy == true && snapshot.selected?.id == id) return
+        val committed = AtomicBoolean()
+        val committedReadFailure = "会话已删除，但列表读取失败；请重读记录，未恢复已删除的会话。"
         mutable.update { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                withContext(dispatcher) { checkNotNull(repository).deleteConversation(id) }
-                drafts.remove(id)
+                withContext(dispatcher) {
+                    checkNotNull(repository).deleteConversation(id)
+                    committed.set(true)
+                    // A committed deletion must never remain a sendable UI identity, even
+                    // when the return dispatch is cancelled or the fallback read fails.
+                    mutable.update { current ->
+                        val remaining = current.conversations.filterNot { it.id == id }
+                        if (current.selected?.id == id) current.copy(
+                            ready = false, selected = null, messages = emptyList(),
+                            conversations = remaining, olderMessages = false,
+                            viewingOlderMessages = false, draft = "", partial = "",
+                            partialReasoning = "", notice = "", contextBlocked = false,
+                        ) else current.copy(conversations = remaining)
+                    }
+                }
                 if (snapshot.selected?.id == id) {
                     // Deleted selection falls back to the newest live conversation automatically.
                     loadLatest(null)
-                    mutable.update {
-                        it.copy(draft = drafts[it.selected?.id].orEmpty(), partial = "",
-                            partialReasoning = "", notice = "")
-                    }
                 } else {
                     // Unrelated deletion changes history only; preserve the current message page.
                     reloadConversationList(snapshot.conversations.size.coerceAtLeast(30))
                 }
-            } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { mutable.update { it.copy(notice = "会话删除失败；若该会话正在发送，请稍后重试。") } }
-            finally { mutable.update { it.copy(busy = false) } }
+            } catch (e: CancellationException) {
+                if (committed.get()) readFailed(committedReadFailure)
+                throw e
+            }
+            catch (_: Exception) {
+                if (committed.get()) readFailed(committedReadFailure)
+                else mutable.update { it.copy(notice = "会话删除失败；若该会话正在发送，请稍后重试。") }
+            }
+            finally {
+                if (committed.get()) drafts.remove(id)
+                mutable.update { it.copy(busy = false) }
+            }
         }
+    }
+
+    private fun readFailed(notice: String) {
+        failedReadNotice = notice
+        mutable.update { it.copy(ready = false, notice = notice) }
     }
 
     private suspend fun reloadConversationList(visibleLimit: Int, renamedSelectionId: String? = null) {
@@ -193,18 +237,33 @@ class ChatViewModel internal constructor(
     private fun changeSelection(id: String?, create: Boolean = false) {
         val snapshot = mutable.value
         if (!snapshot.ready || snapshot.busy || snapshot.sending) return
+        if (!create) pendingCreatedConversationId.set(null)
         snapshot.selected?.id?.let { drafts[it] = snapshot.draft }
+        val committedReadFailure = "新会话已创建，但读取失败；原草稿保留，请重读记录，未重复创建。"
         mutable.update { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                val target = if (create) withContext(dispatcher) { checkNotNull(repository).createConversation() } else id
+                val target = if (create) withContext(dispatcher) {
+                    checkNotNull(repository).createConversation().also { created ->
+                        pendingCreatedConversationId.set(created)
+                        // Retrying a failed read must select this committed row, not create another.
+                        mutable.update { it.copy(ready = false) }
+                    }
+                } else id
                 loadLatest(target)
                 mutable.update {
                     it.copy(draft = drafts[it.selected?.id].orEmpty(), partial = "",
                         partialReasoning = "", notice = "")
                 }
-            } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { mutable.update { it.copy(notice = "会话读取失败；未切换上下文，请重试。") } }
+            } catch (e: CancellationException) {
+                if (create && pendingCreatedConversationId.get() != null) readFailed(committedReadFailure)
+                throw e
+            }
+            catch (_: Exception) {
+                if (create && pendingCreatedConversationId.get() != null) {
+                    readFailed(committedReadFailure)
+                } else mutable.update { it.copy(notice = "会话读取失败；未切换上下文，请重试。") }
+            }
             finally { mutable.update { it.copy(busy = false) } }
         }
     }
@@ -215,18 +274,33 @@ class ChatViewModel internal constructor(
             val list = repo.conversations(limit = 31)
             val selected = selectedId?.let(repo::conversation)
                 ?: list.firstOrNull { !it.legacy }
-                ?: repo.conversation(repo.createConversation())!!
+                ?: repo.createConversation().let { created ->
+                    pendingCreatedConversationId.set(created)
+                    mutable.update { it.copy(ready = false) }
+                    checkNotNull(repo.conversation(created))
+                }
             val messages = repo.messages(selected.id, limit = 51)
             val blocked = if (selected.legacy) false else try { repo.context(selected.id).size >= 80 }
                 catch (_: ContextLimitException) { true }
             Triple(selected, messages, Pair(repo.conversations(limit = 31), blocked))
         }
+        val previous = mutable.value
+        val selectionChanged = previous.selected?.id != loaded.first.id
+        if (selectionChanged) previous.selected?.id?.let { drafts[it] = previous.draft }
+        val nextDraft = if (selectionChanged) drafts[loaded.first.id].orEmpty() else previous.draft
+        val recoveredReadNotice = failedReadNotice
         mutable.update { it.copy(
             ready = true, selected = loaded.first,
             messages = loaded.second.takeLast(50), olderMessages = loaded.second.size > 50, viewingOlderMessages = false,
             conversations = loaded.third.first.take(30), moreConversations = loaded.third.first.size > 30,
             contextBlocked = loaded.third.second,
+            draft = nextDraft,
+            partial = if (selectionChanged) "" else it.partial,
+            partialReasoning = if (selectionChanged) "" else it.partialReasoning,
+            notice = if (selectionChanged || it.notice == recoveredReadNotice) "" else it.notice,
         ) }
+        pendingCreatedConversationId.set(null)
+        failedReadNotice = null
     }
 
     fun olderMessages() {
@@ -350,7 +424,7 @@ class ChatViewModel internal constructor(
                 if (coroutineContext.isActive) {
                     try { loadLatest(selected.id) }
                     catch (e: CancellationException) { throw e }
-                    catch (_: Exception) { mutable.update { it.copy(ready = false, notice = it.notice + " 会话读取失败；保留原始数据，当前禁止发送。") } }
+                    catch (_: Exception) { readFailed(mutable.value.notice + " 会话读取失败；保留原始数据，当前禁止发送。") }
                 }
             }
         }

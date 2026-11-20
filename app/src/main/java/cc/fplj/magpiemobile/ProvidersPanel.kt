@@ -643,7 +643,7 @@ fun ProvidersPanel(
                             }
                             ProviderFormGroup(
                                 title = "访问凭据",
-                                supporting = "密钥只保存在本机核心私有目录，不进入列表、日志或导出备份。",
+                                supporting = "密钥保存在本机核心私有目录，列表和日志不显示明文；官方加密备份可按导出选项包含密钥。",
                             ) {
                                 ProviderApiKeyField(
                                     value = key,
