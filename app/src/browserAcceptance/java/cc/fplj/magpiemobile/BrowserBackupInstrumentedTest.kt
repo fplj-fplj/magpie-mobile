@@ -326,13 +326,27 @@ class BrowserBackupInstrumentedTest {
 
     private fun revealSyncTab(): UiObject2 {
         // The pinned phone layout wraps its tabs; it has no horizontal tab scroller.
-        // Wait for the real accessible label instead of swiping unrelated content.
+        // Chrome's native tab text need not equal its DOM label. Match that static
+        // label only inside the unique real Settings TabWidget, never page-wide.
+        var tab: UiObject2? = null
         await(15_000, FailureReason.SYNC_TAB_NOT_REACHED) {
             accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
-            namedControl(CHROME, SYNC_TAB) != null
+            val document = webViewOrNull()
+            val lists = SETTINGS.flatMap { name ->
+                document?.findObjects(By.pkg(CHROME).clazz("android.widget.TabWidget").text(name)).orEmpty()
+            }.filter { !it.visibleBounds.isEmpty }.distinctBy { it.visibleBounds.toShortString() }
+            accept(lists.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+            val matches = lists.singleOrNull()?.let { list ->
+                SYNC_TAB.flatMap { name ->
+                    list.findObjects(By.pkg(CHROME).clazz("android.view.View").textContains(name)
+                        .enabled(true).clickable(true))
+                }.filter { !it.visibleBounds.isEmpty }.distinctBy { it.visibleBounds.toShortString() }
+            }.orEmpty()
+            accept(matches.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+            tab = matches.singleOrNull()
+            tab != null
         }
-        return namedControl(CHROME, SYNC_TAB)
-            ?: throw AcceptanceFailure(FailureReason.SYNC_TAB_NOT_REACHED)
+        return requireNotNull(tab)
     }
 
     private fun revealWebControl(names: List<String>, startAtTop: Boolean = false): UiObject2 {
