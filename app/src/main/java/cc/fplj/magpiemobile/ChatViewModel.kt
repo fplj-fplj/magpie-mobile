@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import cc.fplj.magpiemobile.core.ChatClient
 import cc.fplj.magpiemobile.core.ChatTurnStore
 import cc.fplj.magpiemobile.core.ChatException
+import cc.fplj.magpiemobile.core.ChatRequestOptions
 import cc.fplj.magpiemobile.core.StreamingChatClient
 import cc.fplj.magpiemobile.core.StreamingChatException
 import cc.fplj.magpiemobile.core.StreamingChatFailure
@@ -243,7 +244,17 @@ class ChatViewModel internal constructor(
         }
     }
 
-    fun send(model: String, expectedSession: ProviderSessionKey?) {
+    fun profileUnavailable() {
+        if (!mutable.value.sending && !mutable.value.busy) {
+            mutable.update { it.copy(notice = "预设暂不可读取；草稿已保留。请在“模型与对话配置”中重试读取后再发送。") }
+        }
+    }
+
+    fun send(
+        model: String,
+        expectedSession: ProviderSessionKey?,
+        requestOptions: ChatRequestOptions = ChatRequestOptions(),
+    ) {
         val snapshot = mutable.value
         val selected = snapshot.selected ?: return
         if (!snapshot.ready || snapshot.busy || snapshot.sending || selected.legacy || snapshot.contextBlocked || snapshot.draft.isBlank() || model.isBlank()) return
@@ -269,7 +280,8 @@ class ChatViewModel internal constructor(
                     val repo = checkNotNull(repository)
                     val context = repo.context(selected.id)
                     ensureCurrent()
-                    if (context.size >= 80 || context.sumOf { it.content.length.toLong() } + snapshot.draft.length > 65536) throw ContextLimitException()
+                    val systemChars = requestOptions.systemPrompt.takeIf { it.isNotBlank() }?.length ?: 0
+                    if (context.size >= 80 || context.sumOf { it.content.length.toLong() } + snapshot.draft.length + systemChars > 65536) throw ContextLimitException()
                     val guardedTurns = cancellableTurnStore(turnStore(repo, selected.id), sendContext,
                         ensureCurrent = lease::ensureCurrent, onCommitted = { committed.set(true) })
                     val requestControl = lease.control
@@ -277,6 +289,7 @@ class ChatViewModel internal constructor(
                         StreamingChatClient(lease.config, requestControl = requestControl),
                         ChatClient(lease.config, requestControl = requestControl), store = null, defaultModel = model,
                         turnStore = guardedTurns, initialMessages = context, requestControl = requestControl,
+                        requestOptions = requestOptions,
                     )
                     withChatRequestCancellation(requestControl) { session.sendWithReasoning(
                         text = snapshot.draft,

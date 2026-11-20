@@ -21,6 +21,7 @@ class StreamingChatSession(
     private val turnStore: ChatTurnStore? = null,
     initialMessages: List<ChatClient.Message> = emptyList(),
     private val requestControl: ChatRequestControl? = null,
+    private val requestOptions: ChatRequestOptions = ChatRequestOptions(),
 ) {
     private val lock = Any()
     private val history = initialMessages.map { it.copy() }.toMutableList().also { messages ->
@@ -85,13 +86,16 @@ class StreamingChatSession(
                 val message = ChatClient.Message("user", text)
                 pendingUser = PendingUser(sequence, history.size, message)
                 history.add(message)
-                history.toList()
+                // A profile prompt is request-only: never append it to chat history or storage.
+                if (requestOptions.systemPrompt.isBlank()) history.toList()
+                else listOf(ChatClient.Message("system", requestOptions.systemPrompt)) + history
             }
             val reply = try {
                 // 返回值已经是纯文本，不能再过非流式 extractReply。
                 streaming.withRequestControl(control).streamWithReasoning(
                     model = model,
                     messages = requestMessages,
+                    requestOptions = requestOptions,
                     onReasoning = { delta ->
                         control.ensureActive()
                         reasoning.append(delta)
@@ -109,7 +113,13 @@ class StreamingChatSession(
                 if (e.httpCode != 405 && e.httpCode != 501) throw e
                 control.ensureActive()
                 engine = engineId(model, false) + ":fallback"
-                val raw = fallback.withRequestControl(control).complete(model, requestMessages)
+                val raw = fallback.withRequestControl(control).complete(
+                    model = model,
+                    messages = requestMessages,
+                    maxTokens = requestOptions.maxTokens,
+                    temperature = requestOptions.temperature,
+                    topP = requestOptions.topP,
+                )
                 control.ensureActive()
                 val completion = ChatSession.extractCompletion(raw)
                 validateFallbackSize(completion.content, completion.reasoning)

@@ -69,4 +69,14 @@ class ChatProfileTest {
             ChatProfile("invalid id with spaces", "Test")
         }
     }
+
+    @Test
+    fun validationRejectsNonFiniteSamplingParametersAndAcceptsBoundaries() {
+        for (invalid in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
+            assertFailsWith<IllegalArgumentException> { ChatProfile("test", "Test", temperature = invalid) }
+            assertFailsWith<IllegalArgumentException> { ChatProfile("test", "Test", topP = invalid) }
+        }
+        assertEquals(0.0, ChatProfile("test", "Test", temperature = 0.0, topP = 0.0, maxTokens = 1).temperature)
+        assertEquals(2.0, ChatProfile("test", "Test", temperature = 2.0, topP = 1.0, maxTokens = 131072).temperature)
+    }
 }

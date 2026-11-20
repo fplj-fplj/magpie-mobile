@@ -4,8 +4,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -115,39 +119,45 @@ internal fun SubscriptionPluginCard(
 }
 
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun ChatProfileCard(
     viewModel: ChatProfileViewModel,
     profileState: ChatProfileUiState,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    var editMode by remember { mutableStateOf(false) }
-    var newId by remember { mutableStateOf("") }
-    var newName by remember { mutableStateOf("") }
-    var newPrompt by remember { mutableStateOf("") }
-    var newTemp by remember { mutableStateOf("0.7") }
+    var form by remember { mutableStateOf(ChatProfileFormState()) }
 
-    ContentCard {
+    ContentCard(Modifier.testTag("chat-profile-card").semantics { testTagsAsResourceId = true }) {
             Text("智能体与配置预设 (Agent Profiles)", style = MaterialTheme.typography.titleMedium)
             val active = profileState.activeProfile
-            Text(
-                "当前预设: " + active.name + " (" + active.id + ") · 温度: " + active.temperature,
-                style = MaterialTheme.typography.bodyMedium
-            )
-            if (active.systemPrompt.isNotBlank()) {
+            if (profileState.profiles.isNotEmpty()) {
                 Text(
-                    "系统提示词: " + active.systemPrompt,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
+                    "当前预设: " + active.name + " (" + active.id + ") · " + chatProfileParameterSummary(active),
+                    style = MaterialTheme.typography.bodyMedium
                 )
+                chatProfilePromptPreview(active)?.let { prompt ->
+                    Text(
+                        "系统提示词: " + prompt,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+            } else {
+                Text("预设暂不可读取", style = MaterialTheme.typography.bodyMedium)
+            }
+
+            if (profileState.storageError.isNotEmpty()) {
+                Text(profileState.storageError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { viewModel.retryReload() }) { Text("重试读取") }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { expanded = true }) {
+                Button(enabled = profileState.profiles.isNotEmpty(), onClick = { expanded = true }) {
                     Text("切换预设 (" + profileState.profiles.size + ")")
                 }
-                TextButton(onClick = { editMode = !editMode }) {
-                    Text(if (editMode) "收起新建" else "新建预设")
+                TextButton(onClick = { form = form.copy(editing = !form.editing) }) {
+                    Text(if (form.editing) "收起新建" else "新建预设")
                 }
             }
 
@@ -157,7 +167,7 @@ internal fun ChatProfileCard(
                         text = {
                             Column {
                                 Text(profile.name + if (profile.id == active.id) " (当前)" else "")
-                                Text("T: " + profile.temperature + " · " + profile.id, style = MaterialTheme.typography.bodySmall)
+                                Text(chatProfileParameterSummary(profile) + " · " + profile.id, style = MaterialTheme.typography.bodySmall)
                             }
                         },
                         onClick = {
@@ -168,45 +178,48 @@ internal fun ChatProfileCard(
                 }
             }
 
-            if (editMode) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (form.editing) {
+                Column(
+                    modifier = Modifier.testTag("chat-profile-form").semantics { testTagsAsResourceId = true },
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     OutlinedTextField(
-                        value = newId,
-                        onValueChange = { newId = it },
+                        value = form.id,
+                        onValueChange = { form = form.copy(id = it) },
                         label = { Text("Profile 标识 (例如: code-helper)") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().testTag("chat-profile-id").semantics { testTagsAsResourceId = true }
                     )
                     OutlinedTextField(
-                        value = newName,
-                        onValueChange = { newName = it },
+                        value = form.name,
+                        onValueChange = { form = form.copy(name = it) },
                         label = { Text("预设名称 (例如: 编程助手)") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().testTag("chat-profile-name").semantics { testTagsAsResourceId = true }
                     )
                     OutlinedTextField(
-                        value = newPrompt,
-                        onValueChange = { newPrompt = it },
+                        value = form.prompt,
+                        onValueChange = { form = form.copy(prompt = it) },
                         label = { Text("系统提示词 (System Prompt)") },
                         maxLines = 3,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().testTag("chat-profile-prompt").semantics { testTagsAsResourceId = true }
                     )
                     OutlinedTextField(
-                        value = newTemp,
-                        onValueChange = { newTemp = it },
+                        value = form.temperature,
+                        onValueChange = { form = form.copy(temperature = it, error = "") },
                         label = { Text("采样温度 (0.0 .. 2.0)") },
+                        isError = form.error.isNotEmpty(),
+                        supportingText = if (form.error.isNotEmpty()) ({ Text(form.error) }) else null,
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().testTag("chat-profile-temperature").semantics { testTagsAsResourceId = true }
                     )
                     Button(
-                        enabled = newId.isNotBlank() && newName.isNotBlank(),
+                        enabled = form.canSubmit && profileState.canWriteProfiles,
+                        modifier = Modifier.testTag("chat-profile-save").semantics { testTagsAsResourceId = true },
                         onClick = {
-                            val tempVal = newTemp.toDoubleOrNull() ?: 0.7
-                            viewModel.saveProfile(newId, newName, newPrompt, temperature = tempVal)
-                            newId = ""
-                            newName = ""
-                            newPrompt = ""
-                            editMode = false
+                            form = form.submit { id, name, prompt, temperature ->
+                                viewModel.saveProfile(id, name, prompt, temperature = temperature)
+                            }
                         }
                     ) {
                         Text("保存预设")

@@ -48,6 +48,16 @@ class StreamingChatClient(
         onDelta: (String) -> Unit = {},
     ): String = streamInternal(model, messages, null, null, null, onDelta, onReasoning)
 
+    /** Sampling options with reasoning callbacks; the session supplies any system message. */
+    fun streamWithReasoning(
+        model: String,
+        messages: List<ChatClient.Message>,
+        requestOptions: ChatRequestOptions,
+        onReasoning: (String) -> Unit = {},
+        onDelta: (String) -> Unit = {},
+    ): String = streamInternal(model, messages, requestOptions.maxTokens, requestOptions.temperature,
+        requestOptions.topP, onDelta, onReasoning)
+
     /** 流式一轮（带采样与长度控制参数）。 */
     fun streamWithOptions(
         model: String,

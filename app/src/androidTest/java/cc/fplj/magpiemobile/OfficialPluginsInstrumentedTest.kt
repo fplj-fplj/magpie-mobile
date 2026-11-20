@@ -717,6 +717,7 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue(device.takeScreenshot(File(artifacts, "chat-composer-landscape.png")))
                     device.setOrientationNatural()
                     await("portrait chat restored") { context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT }
+                    verifyChatProfileUiAndRequest(scenario, upstream, nativeModel, artifacts)
                     await("gateway navigation after font scale restore") {
                         dismissEmulatorLauncherAnr()
                         if (device.findObject(power)?.isChecked == true) true
@@ -820,6 +821,115 @@ class OfficialPluginsInstrumentedTest {
                     }
                 }
             }
+        }
+    }
+
+    /** Actual profile form -> retained Activity VM -> UI send -> installed Go -> local upstream. */
+    private fun verifyChatProfileUiAndRequest(
+        scenario: ActivityScenario<MainActivity>,
+        upstream: LocalUpstream,
+        model: String,
+        artifacts: File,
+    ) {
+        val profileId = "android-profile-probe"
+        val profileName = "Runtime profile"
+        val prompt = "Follow the current profile instructions."
+        val marker = "android-profile-real-ui-send"
+        lateinit var profiles: ChatProfileViewModel
+        lateinit var chat: ChatViewModel
+        scenario.onActivity {
+            profiles = androidx.lifecycle.ViewModelProvider(it)[ChatProfileViewModel::class.java]
+            chat = androidx.lifecycle.ViewModelProvider(it)[ChatViewModel::class.java]
+        }
+        fun reveal(selector: androidx.test.uiautomator.BySelector, towardsTop: Boolean = false): UiObject2 {
+            await("profile control visible: $selector") {
+                val control = device.findObject(selector)
+                if (control != null && control.visibleBounds.height() >= 20) true else {
+                    device.swipe(device.displayWidth / 2,
+                        device.displayHeight * (if (towardsTop) 3 else 7) / 10,
+                        device.displayWidth / 2,
+                        device.displayHeight * (if (towardsTop) 7 else 3) / 10, 20)
+                    false
+                }
+            }
+            return requireNotNull(device.findObject(selector))
+        }
+        try {
+            await("profile settings after portrait restoration") { device.hasObject(By.desc("模型与对话配置")) }
+            device.findObject(By.desc("模型与对话配置")).click()
+            reveal(By.textContains("使用模型默认参数"))
+            assertFalse(device.hasObject(By.textContains(ChatProfile.DEFAULT.systemPrompt)))
+            assertTrue(device.takeScreenshot(File(artifacts, "chat-profile-default.png")))
+            reveal(By.text("新建预设")).click()
+            reveal(By.res("chat-profile-id")).text = profileId
+            reveal(By.res("chat-profile-name")).text = profileName
+            reveal(By.res("chat-profile-prompt")).text = prompt
+            reveal(By.res("chat-profile-temperature")).text = "abc"
+            reveal(By.res("chat-profile-save").enabled(true).clickable(true)).click()
+            reveal(By.text(ChatProfileFormState.TEMPERATURE_ERROR))
+            assertTrue(device.hasObject(By.res("chat-profile-form")))
+            assertTrue(device.takeScreenshot(File(artifacts, "chat-profile-invalid-temperature.png")))
+            assertEquals(profileId, reveal(By.res("chat-profile-id"), towardsTop = true).text)
+            assertEquals(profileName, reveal(By.res("chat-profile-name")).text)
+            assertEquals(prompt, reveal(By.res("chat-profile-prompt")).text)
+            assertEquals("abc", reveal(By.res("chat-profile-temperature")).text)
+            assertFalse(profiles.state.value.profiles.any { it.id == profileId })
+            reveal(By.res("chat-profile-temperature")).text = "0"
+            reveal(By.res("chat-profile-save").enabled(true).clickable(true)).click()
+            await("profile saved only after a valid form submission") {
+                !device.hasObject(By.res("chat-profile-form")) && profiles.state.value.activeProfile.id == profileId
+            }
+            assertEquals(prompt, profiles.state.value.activeProfile.systemPrompt)
+            assertEquals(0.0, profiles.state.value.activeProfile.temperature, 0.0)
+            reveal(By.textContains("当前预设"), towardsTop = true)
+            assertTrue(device.takeScreenshot(File(artifacts, "chat-profile-saved.png")))
+            // The existing form edits prompt and temperature. Exercise the other persisted
+            // options through its real VM API, without claiming those controls exist in the UI.
+            scenario.onActivity {
+                assertTrue(profiles.saveProfile(profileId, profileName, prompt,
+                    temperature = 0.0, topP = 0.0, maxTokens = 17, modelAlias = "unconfirmed-alias"))
+            }
+            device.findObject(By.text("关闭")).click()
+            await("profile dialog closed") { !device.hasObject(By.res("chat-profile-card")) }
+            scenario.onActivity { chat.newConversation() }
+            await("isolated profile conversation") { !chat.state.value.busy && chat.state.value.messages.isEmpty() }
+            val conversation = requireNotNull(chat.state.value.selected).id
+            device.findObject(By.res("chat-draft")).text = marker
+            await("real chat draft set before profile send") { chat.state.value.draft == marker }
+            device.findObject(By.res("chat-send")).click()
+            await("actual profile request committed through installed core") {
+                !chat.state.value.sending && chat.state.value.draft.isEmpty() && chat.state.value.messages.size == 2
+            }
+            val matched = upstream.requests.mapNotNull { runCatching { JSONObject(it) }.getOrNull() }.filter { body ->
+                body.optJSONArray("messages")?.let { messages ->
+                    messages.length() > 0 && messages.getJSONObject(messages.length() - 1)
+                        .optString("content").startsWith(marker)
+                } == true
+            }
+            assertEquals("the UI send must reach the actual upstream exactly once", 1, matched.size)
+            val received = matched.single()
+            assertEquals("fake-echo", received.getString("model"))
+            assertEquals(0.0, received.getDouble("temperature"), 0.0)
+            assertEquals(0.0, received.getDouble("top_p"), 0.0)
+            assertEquals(17, received.getInt("max_tokens"))
+            val messages = received.getJSONArray("messages")
+            assertEquals(2, messages.length())
+            assertEquals("system", messages.getJSONObject(0).getString("role"))
+            assertEquals(prompt, messages.getJSONObject(0).getString("content"))
+            assertEquals("user", messages.getJSONObject(1).getString("role"))
+            val history = ChatRepository.open(context).context(conversation)
+            assertEquals(listOf("user", "assistant"), history.map { it.role })
+            assertFalse(history.any { it.content == prompt })
+            assertEquals("chat:$model", chat.state.value.messages.first().engine)
+            File(artifacts, "chat-profile-form-and-request.txt").writeText(
+                "PASS: unchanged built-in profile displays model defaults without an unsent prompt\n" +
+                    "PASS: actual form rejected abc, preserved ID/name/prompt/temperature and stayed open; valid zero saved and closed\n" +
+                    "PASS: real UI send captured the retained Activity profile; installed Go forwarded system, explicit zero sampling and positive token limit exactly once\n" +
+                    "PASS: alias did not replace confirmed model; Room context contains only user/assistant, never the system prompt\n",
+            )
+        } finally {
+            scenario.onActivity { profiles.selectProfile(ChatProfile.DEFAULT.id) }
+            device.findObject(By.text("关闭"))?.click()
         }
     }
 

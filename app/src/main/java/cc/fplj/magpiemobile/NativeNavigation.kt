@@ -247,7 +247,12 @@ fun Dashboard(
                         onSend = { model, expected ->
                             if (appShell.state.value.selectedModel == model &&
                                 appShell.isConfirmedModel(model, expected)) {
-                                chatViewModel.send(model, expectedSession = expected)
+                                val profile = profileViewModel.state.value
+                                if (profile.storageError.isNotEmpty()) chatViewModel.profileUnavailable()
+                                else {
+                                    val options = cc.fplj.magpiemobile.core.ChatRequestOptions.fromProfile(profile.activeProfile)
+                                    chatViewModel.send(model, expectedSession = expected, requestOptions = options)
+                                }
                             }
                         },
                         canConnect = catalogSession != null,

@@ -26,7 +26,7 @@ def is_listening(p):
         with socket.create_connection(('127.0.0.1',p),timeout=.2): return True
     except OSError: return False
 
-args=argparse.ArgumentParser();args.add_argument('--exe',required=True);args.add_argument('--full-admin',action='store_true');opts=args.parse_args()
+args=argparse.ArgumentParser();args.add_argument('--exe',required=True);args.add_argument('--full-admin',action='store_true');args.add_argument('--evidence');opts=args.parse_args()
 core_version='0.1.3781-androidhost.2' if opts.full_admin else '0.1.3781-mobile.1'
 exe=Path(opts.exe).resolve();assert exe.is_file()
 with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
@@ -52,6 +52,7 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
             except ValueError: parsed={}
             vendor_calls.setdefault('chat_paths',[]).append(self.path)
             vendor_calls.setdefault('chat_models',[]).append(parsed.get('model'))
+            vendor_calls.setdefault('chat_bodies',[]).append(parsed)
             body=json.dumps({'id':'chatcmpl-test','object':'chat.completion','model':parsed.get('model'),
                 'choices':[{'index':0,'message':{'role':'assistant','content':'OK'},'finish_reason':'stop'}]}).encode()
             self.send_response(200);self.send_header('Content-Type','application/json')
@@ -209,6 +210,20 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
         assert code==200,'gateway chat failed with HTTP '+str(code)
         assert vendor_calls['chat_paths']==['/v1/chat/completions'],'unexpected upstream chat path'
         assert vendor_calls['chat_models']==['probe-model'],'unexpected upstream model name'
+        profile_messages=[{'role':'system','content':'按本轮预设回答。'},
+                          {'role':'user','content':'previous question'},
+                          {'role':'assistant','content':'previous answer'},
+                          {'role':'user','content':'profile probe'}]
+        code,body=request(gateway,'/v1/chat/completions','POST',
+                          {'model':target,'messages':profile_messages,'max_tokens':17,
+                           'temperature':0.0,'top_p':0.0,'stream':False},
+                          {'Authorization':'Bearer '+secret})
+        assert code==200,'gateway profile chat failed with HTTP '+str(code)
+        received=vendor_calls['chat_bodies'][-1]
+        assert received['messages']==profile_messages,'gateway altered ordinary profile messages'
+        assert received['temperature']==0.0 and received['top_p']==0.0,'gateway dropped explicit zero sampling'
+        assert received['max_tokens']==17,'gateway dropped profile token limit'
+        assert received['model']=='probe-model' and len(vendor_calls['chat_bodies'])==2,'profile changed routing or replayed'
         if not opts.full_admin:
             assert request(admin,'/api/provider/test','POST',{'id':'host-provider'},cookie)[0]==404
             assert request(admin,'/api/provider/detect','POST',{'id':'host-provider'},cookie)[0]==404
@@ -223,6 +238,11 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
         p.terminate();p.wait(timeout=5);t.join(timeout=1)
         assert not is_listening(admin_port) and not is_listening(gateway_port),'orphan listener after stop'
         passed=True
+        if opts.evidence:
+            Path(opts.evidence).write_text(json.dumps({'passed':True,'coreVersion':core_version,
+                'checks':['system message and complete history forwarded unchanged',
+                          'explicit zero temperature and top_p preserved','positive max_tokens forwarded',
+                          'confirmed provider model routing and single request preserved']},indent=2)+'\n')
         print('PASS: host startup, strict auth, provider create/edit/revision, synthetic chat, debug denial and stop; '+('full official provider writes and browser entry' if opts.full_admin else 'legacy mobile policy'))
     finally:
         vendor.shutdown();vendor.server_close()

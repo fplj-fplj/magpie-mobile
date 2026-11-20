@@ -7,6 +7,9 @@ import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import cc.fplj.magpiemobile.core.ChatClient
+import cc.fplj.magpiemobile.core.ChatProfile
+import cc.fplj.magpiemobile.core.ChatRequestOptions
 import cc.fplj.magpiemobile.core.ChatTurnStore
 import cc.fplj.magpiemobile.core.GatewayConfig
 import cc.fplj.magpiemobile.core.SessionRecord
@@ -37,6 +40,13 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -260,6 +270,273 @@ class ChatViewModelTest {
             assertEquals(listOf("哈哈哈", "answer"), context.map { it.content })
             assertFalse(context.any { it.content.contains("先理解问题") })
         }
+    }
+
+    @Test fun unavailableProfilePreservesDraftWithoutSideEffectsAndCannotOverwriteBusyOrSendingState() {
+        Probe().use { probe ->
+            val source = LeaseSource(probe.config)
+            val io = GatedDispatcher()
+            val begins = AtomicInteger()
+            val vm = vm(dispatcher = io, turnStore = { repository, id ->
+                val real = repository.turnStore(id)
+                object : ChatTurnStore by real {
+                    override fun begin(user: SessionRecord): String {
+                        begins.incrementAndGet()
+                        return real.begin(user)
+                    }
+                }
+            }, acquire = source::acquire)
+            val id = checkNotNull(vm.state.value.selected).id
+            vm.editDraft("keep draft when profile storage cannot be read")
+            try {
+                // Refresh is held before its I/O: the empty existing notice must stay untouched.
+                io.hold = true
+                vm.refresh()
+                val busy = vm.state.value
+                assertTrue(busy.busy)
+                vm.profileUnavailable()
+                assertEquals(busy, vm.state.value)
+                io.release(); settled(vm)
+
+                val idle = vm.state.value
+                vm.profileUnavailable()
+                val unavailable = vm.state.value
+                assertTrue(unavailable.notice.contains("预设暂不可读取"))
+                assertEquals(idle.copy(notice = unavailable.notice), unavailable)
+                assertEquals(0, source.captures.get())
+                assertEquals(0, begins.get())
+                assertEquals(0, probe.requests.get())
+                assertTrue(runBlocking(Dispatchers.IO) { repo.messages(id) }.isEmpty())
+
+                // An authorized queued send has one lease, but this warning cannot mutate it.
+                io.hold = true
+                vm.send("provider/model", SESSION_A)
+                val sending = vm.state.value
+                assertTrue(sending.sending)
+                assertEquals(1, source.captures.get())
+                vm.profileUnavailable()
+                assertEquals(sending, vm.state.value)
+                assertEquals(1, source.captures.get())
+                assertEquals(0, begins.get())
+                assertEquals(0, probe.requests.get())
+                stores.last().clear()
+                io.release(); settled(vm)
+                assertEquals(1, source.closes.get())
+                assertEquals(idle.draft, vm.state.value.draft)
+                assertEquals(0, begins.get())
+                assertEquals(0, probe.requests.get())
+                assertTrue(probe.bodies.isEmpty())
+                runBlocking(Dispatchers.IO) {
+                    assertTrue(repo.messages(id).isEmpty())
+                    assertNull(db.chatDao().runningOperation(id))
+                }
+            } finally { io.release() }
+        }
+    }
+
+    @Test fun queuedSendKeepsClickedProfileSnapshotAndNextExplicitTurnUsesNewProfile() {
+        for (holdMain in listOf(false, true)) {
+            Probe().use { probe ->
+                val source = LeaseSource(probe.config)
+                val io = GatedDispatcher()
+                val vm = vm(dispatcher = io, acquire = source::acquire)
+                vm.newConversation(); settled(vm)
+                var selectedProfile = ChatProfile("queued-profile", "Queued profile",
+                    systemPrompt = "First clicked system prompt", temperature = 0.0, topP = 0.0,
+                    maxTokens = 23, modelAlias = "must-not-override-confirmed-model")
+                val clickedOptions = ChatRequestOptions.fromProfile(selectedProfile)
+                vm.editDraft("first queued draft")
+                val main = if (holdMain) StandardTestDispatcher().also { Dispatchers.setMain(it) } else null
+                io.hold = true
+                try {
+                    vm.send("provider/confirmed-model", SESSION_A, ChatRequestOptions.fromProfile(selectedProfile))
+                    assertEquals(1, source.captures.get())
+                    assertTrue(vm.state.value.sending)
+                    assertEquals(if (holdMain) 0 else 1, io.queued)
+                    assertEquals(0, probe.requests.get())
+                    selectedProfile = selectedProfile.copy(systemPrompt = "Next selected system prompt",
+                        temperature = 0.9, topP = 0.75, maxTokens = 41)
+                    main?.scheduler?.runCurrent()
+                    if (main != null) Dispatchers.setMain(UnconfinedTestDispatcher())
+                    io.release()
+                    assertTrue(probe.started.await(5, TimeUnit.SECONDS))
+                    probe.release.countDown()
+                    assertEquals("", settled(vm).draft)
+
+                    val first = requestBody(probe, 0)
+                    assertRequestOptions(first, clickedOptions)
+                    assertEquals(listOf(ChatClient.Message("system", clickedOptions.systemPrompt),
+                        ChatClient.Message("user", "first queued draft")), requestMessages(first))
+                    assertEquals("provider/confirmed-model", first.getValue("model").jsonPrimitive.content)
+
+                    val nextOptions = ChatRequestOptions.fromProfile(selectedProfile)
+                    vm.editDraft("next explicit draft")
+                    vm.send("provider/confirmed-model", SESSION_A, nextOptions)
+                    assertEquals("", settled(vm).draft)
+                    val second = requestBody(probe, 1)
+                    assertRequestOptions(second, nextOptions)
+                    assertEquals(listOf(ChatClient.Message("system", nextOptions.systemPrompt),
+                        ChatClient.Message("user", "first queued draft"), ChatClient.Message("assistant", "answer"),
+                        ChatClient.Message("user", "next explicit draft")), requestMessages(second))
+                    assertEquals("provider/confirmed-model", second.getValue("model").jsonPrimitive.content)
+                    assertFalse(probe.bodies.any { it.contains(selectedProfile.modelAlias) })
+                    assertEquals(2, probe.requests.get())
+                    assertEquals(2, source.captures.get())
+                    assertEquals(2, source.closes.get())
+                } finally {
+                    Dispatchers.setMain(UnconfinedTestDispatcher())
+                    io.release()
+                    main?.scheduler?.runCurrent()
+                }
+            }
+        }
+    }
+
+    @Test fun profileOptionsReachActualHttpWhileRoomKeepsOnlyVisibleConversationContext() {
+        Probe(reasoning = "separate saved profile reasoning").use { probe ->
+            val vm = vm { lease(probe.config) }
+            val id = checkNotNull(vm.state.value.selected).id
+            val options = ChatRequestOptions.fromProfile(ChatProfile("profile-room", "Profile Room",
+                systemPrompt = "Request-only system prompt", temperature = 0.3, topP = 0.85, maxTokens = 512))
+            vm.editDraft("first profile user")
+            vm.send("provider/model", SESSION_A, options)
+            assertTrue(probe.started.await(5, TimeUnit.SECONDS))
+            probe.release.countDown()
+            val first = settled(vm)
+            assertEquals("separate saved profile reasoning", first.messages.last().reasoning)
+            vm.editDraft("second profile user")
+            vm.send("provider/model", SESSION_A, options)
+            val completed = settled(vm)
+            assertEquals("", completed.draft)
+            assertEquals(2, probe.requests.get())
+            assertEquals(listOf(ChatClient.Message("system", options.systemPrompt),
+                ChatClient.Message("user", "first profile user")), requestMessages(requestBody(probe, 0)))
+            assertEquals(listOf(ChatClient.Message("system", options.systemPrompt),
+                ChatClient.Message("user", "first profile user"), ChatClient.Message("assistant", "answer"),
+                ChatClient.Message("user", "second profile user")), requestMessages(requestBody(probe, 1)))
+            probe.bodies.indices.forEach { index ->
+                val body = requestBody(probe, index)
+                assertRequestOptions(body, options)
+                assertEquals(1, requestMessages(body).count { it.role == "system" })
+                assertFalse(probe.bodies[index].contains("separate saved profile reasoning"))
+            }
+            runBlocking(Dispatchers.IO) {
+                val messages = repo.messages(id)
+                assertEquals(listOf("user", "assistant", "user", "assistant"), messages.map { it.role })
+                assertTrue(messages.all { it.state == "SUCCEEDED" })
+                assertTrue(messages.none { it.text.contains(options.systemPrompt) || it.text.contains("profile reasoning") })
+                assertEquals(listOf("separate saved profile reasoning", "separate saved profile reasoning"),
+                    messages.filter { it.role == "assistant" }.map { it.reasoning })
+                assertEquals(listOf(ChatClient.Message("user", "first profile user"), ChatClient.Message("assistant", "answer"),
+                    ChatClient.Message("user", "second profile user"), ChatClient.Message("assistant", "answer")), repo.context(id))
+                assertNull(db.chatDao().runningOperation(id))
+            }
+        }
+    }
+
+    @Test fun systemPromptContextAndDraftOverLimitRejectBeforeRoomBeginOrHttpAndKeepDraft() {
+        Probe().use { probe ->
+            val source = LeaseSource(probe.config)
+            val begins = AtomicInteger()
+            val vm = vm(turnStore = { repository, id ->
+                val real = repository.turnStore(id)
+                object : ChatTurnStore by real {
+                    override fun begin(user: SessionRecord): String {
+                        begins.incrementAndGet()
+                        return real.begin(user)
+                    }
+                }
+            }, acquire = source::acquire)
+            val id = checkNotNull(vm.state.value.selected).id
+            val context = seedProfileContext(id)
+            vm.refresh(); settled(vm)
+            assertFalse(vm.state.value.contextBlocked)
+            val draft = "d".repeat(513)
+            val options = ChatRequestOptions(systemPrompt = "s".repeat(1024))
+            assertEquals(65537, context.sumOf { it.content.length } + draft.length + options.systemPrompt.length)
+            vm.editDraft(draft)
+            vm.send("provider/model", SESSION_A, options)
+            val rejected = settled(vm)
+
+            assertEquals(draft, rejected.draft)
+            assertTrue(rejected.notice.contains("上下文达到本机安全上限"))
+            assertEquals(0, begins.get())
+            assertEquals(0, probe.requests.get())
+            assertTrue(probe.bodies.isEmpty())
+            assertEquals(1, source.captures.get())
+            assertEquals(1, source.closes.get())
+            runBlocking(Dispatchers.IO) {
+                assertEquals(context, repo.context(id))
+                assertEquals(listOf("user", "assistant"), repo.messages(id).map { it.role })
+                assertNull(db.chatDao().runningOperation(id))
+            }
+        }
+    }
+
+    @Test fun systemPromptContextAndDraftExactlyAtLimitReachHttpAndCommitRoomTurn() {
+        Probe().use { probe ->
+            val begins = AtomicInteger()
+            val vm = vm(turnStore = { repository, id ->
+                val real = repository.turnStore(id)
+                object : ChatTurnStore by real {
+                    override fun begin(user: SessionRecord): String {
+                        begins.incrementAndGet()
+                        return real.begin(user)
+                    }
+                }
+            }, acquire = { lease(probe.config) })
+            val id = checkNotNull(vm.state.value.selected).id
+            val context = seedProfileContext(id)
+            vm.refresh(); settled(vm)
+            val draft = "d".repeat(512)
+            val options = ChatRequestOptions(systemPrompt = "s".repeat(1024), temperature = 0.0, topP = 0.0, maxTokens = 1)
+            assertEquals(65536, context.sumOf { it.content.length } + draft.length + options.systemPrompt.length)
+            vm.editDraft(draft)
+            vm.send("provider/model", SESSION_A, options)
+            assertTrue(probe.started.await(5, TimeUnit.SECONDS))
+            probe.release.countDown()
+            val completed = settled(vm)
+
+            assertEquals("", completed.draft)
+            assertEquals("本轮已保存。", completed.notice)
+            assertEquals(1, begins.get())
+            assertEquals(1, probe.requests.get())
+            val body = requestBody(probe, 0)
+            assertRequestOptions(body, options)
+            assertEquals(listOf(ChatClient.Message("system", options.systemPrompt)) + context + ChatClient.Message("user", draft),
+                requestMessages(body))
+            assertEquals(65536, requestMessages(body).sumOf { it.content.length })
+            runBlocking(Dispatchers.IO) {
+                val messages = repo.messages(id)
+                assertEquals(listOf("user", "assistant", "user", "assistant"), messages.map { it.role })
+                assertTrue(messages.all { it.state == "SUCCEEDED" })
+                assertTrue(messages.none { it.role == "system" || it.text == options.systemPrompt })
+                assertEquals(context + ChatClient.Message("user", draft) + ChatClient.Message("assistant", "answer"), repo.context(id))
+                assertNull(db.chatDao().runningOperation(id))
+            }
+        }
+    }
+
+    private fun requestBody(probe: Probe, index: Int): JsonObject = Json.parseToJsonElement(probe.bodies[index]).jsonObject
+
+    private fun requestMessages(body: JsonObject): List<ChatClient.Message> = body.getValue("messages").jsonArray.map {
+        ChatClient.Message(it.jsonObject.getValue("role").jsonPrimitive.content,
+            it.jsonObject.getValue("content").jsonPrimitive.content)
+    }
+
+    private fun assertRequestOptions(body: JsonObject, options: ChatRequestOptions) {
+        assertEquals(options.temperature, body["temperature"]?.jsonPrimitive?.double)
+        assertEquals(options.topP, body["top_p"]?.jsonPrimitive?.double)
+        assertEquals(options.maxTokens, body["max_tokens"]?.jsonPrimitive?.int)
+    }
+
+    private fun seedProfileContext(id: String): List<ChatClient.Message> = runBlocking(Dispatchers.IO) {
+        val user = "u".repeat(32000)
+        val assistant = "a".repeat(32000)
+        val turns = repo.turnStore(id)
+        val turnId = turns.begin(SessionRecord(1, "user", "chat:provider/model", user))
+        turns.complete(turnId, SessionRecord(2, "assistant", "chat:provider/model:stream", assistant))
+        listOf(ChatClient.Message("user", user), ChatClient.Message("assistant", assistant))
     }
 
     @Test fun cancellationAfterCommittedBeginClosesTurnAndAllowsNextExplicitSend() = runBlocking(Dispatchers.IO) {
@@ -903,6 +1180,7 @@ class ChatViewModelTest {
         val started = CountDownLatch(1)
         val release = CountDownLatch(1)
         val requests = AtomicInteger()
+        val bodies = CopyOnWriteArrayList<String>()
         val config = GatewayConfig(gatewayBaseUrl = "http://127.0.0.1:" + socket.localPort,
             gatewayKey = "synthetic-gateway-secret", readTimeout = Duration.ofSeconds(10))
         private val worker = thread(isDaemon = true) {
@@ -922,7 +1200,13 @@ class ChatViewModelTest {
                     .firstOrNull { it.startsWith("Content-Length:", true) }
                     ?.substringAfter(':')?.trim()?.toInt()
                     ?: 0
-                repeat(length) { input.read() } // Consume exact UTF-8 content-length bytes.
+                val body = ByteArray(length)
+                for (index in body.indices) {
+                    val value = input.read()
+                    if (value < 0) return@use
+                    body[index] = value.toByte()
+                }
+                bodies.add(String(body, Charsets.UTF_8))
                 started.countDown()
                 check(release.await(10, TimeUnit.SECONDS))
                 val reasoningBody = reasoning?.let {
