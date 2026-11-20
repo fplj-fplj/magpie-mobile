@@ -36,7 +36,7 @@ PAGE_BYTES = (
     "<!doctype html><html lang=en><meta charset=utf-8>"
     "<meta name=viewport content='width=device-width,initial-scale=1'>"
     "<title>Magpie external browser probe</title>"
-    f"<h1>{PAGE_MARKER}</h1>"
+    f"<h1 style='font:20px sans-serif;overflow-wrap:anywhere'>{PAGE_MARKER}</h1>"
     "<p>This local page contains no credentials or account data.</p></html>"
 ).encode("utf-8")
 PACKAGE_RE = r"(?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*|android"
@@ -84,6 +84,15 @@ def sanitize_hierarchy(root: ET.Element) -> None:
 
 def now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def capture_timeout(deadline: float | None, maximum: float) -> float:
+    if deadline is None:
+        return maximum
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("page_marker_capture_deadline_reached")
+    return min(maximum, remaining)
 
 
 def components(text: str) -> list[str]:
@@ -312,11 +321,11 @@ class Probe:
             }
         self.flush()
 
-    def foreground(self) -> dict:
-        activities = self.shell(["dumpsys", "activity", "activities"])
+    def foreground(self, *, deadline: float | None = None) -> dict:
+        activities = self.shell(["dumpsys", "activity", "activities"], timeout=capture_timeout(deadline, 30))
         # API 35's `dumpsys window windows` omitted the global focus fields in
         # both real image reports. Read the full dump, retaining only focus lines.
-        windows = self.shell(["dumpsys", "window"])
+        windows = self.shell(["dumpsys", "window"], timeout=capture_timeout(deadline, 30))
         activity_lines = [line.strip() for line in activities["stdout"].splitlines()
                           if any(key in line for key in ("topResumedActivity=", "mResumedActivity:", "ResumedActivity:"))]
         window_lines = [line.strip() for line in windows["stdout"].splitlines()
@@ -560,50 +569,90 @@ class Probe:
         self.reverse_created = True
         self.flush()
 
-    def capture(self, prefix: str) -> dict:
-        evidence = {"foregroundBefore": self.foreground(), "screenshot": None,
+    def capture(self, prefix: str, *, deadline: float | None = None) -> dict:
+        unavailable = {"at": now(), "resumedComponent": None, "focusedComponent": None,
+                       "activityLines": [], "windowLines": [], "commandsSucceeded": False}
+        evidence = {"foregroundBefore": unavailable.copy(), "foregroundAfter": unavailable.copy(), "screenshot": None,
                     "hierarchy": None, "visiblePageMarker": False, "captureErrors": [],
-                    "hierarchySanitized": True}
+                    "hierarchySanitized": True, "hierarchyCompressed": False}
         screen_path = self.output / f"{prefix}.png"
-        try:
-            result = subprocess.run([self.adb, "-s", self.args.serial, "exec-out", "screencap", "-p"],
-                                    capture_output=True, timeout=30, check=False)
-            if (result.returncode == 0 and result.stdout.startswith(b"\x89PNG\r\n\x1a\n")
-                    and len(result.stdout) >= 24 and result.stdout[12:16] == b"IHDR"):
-                screen_path.write_bytes(result.stdout)
-                evidence["screenshot"] = screen_path.name
-                evidence["screenshotWidth"] = int.from_bytes(result.stdout[16:20], "big")
-                evidence["screenshotHeight"] = int.from_bytes(result.stdout[20:24], "big")
-            else:
-                evidence["captureErrors"].append("screenshot_not_valid_png")
-        except (OSError, subprocess.TimeoutExpired) as error:
-            evidence["captureErrors"].append("screenshot_" + type(error).__name__)
         remote = f"/sdcard/magpie-browser-probe-{prefix}.xml"
-        dump = self.shell(["uiautomator", "dump", "--compressed", remote], timeout=45)
-        evidence["hierarchyDump"] = dump
-        if dump["returnCode"] == 0:
-            content = self.adb_command(["exec-out", "cat", remote])
-            if content["returnCode"] == 0:
-                try:
-                    root = ET.fromstring(content["stdout"])
-                    if root.tag != "hierarchy":
-                        raise ValueError("not_ui_hierarchy")
-                    evidence["visiblePageMarker"] = any(
-                        PAGE_MARKER in node.attrib.get("text", "") or PAGE_MARKER in node.attrib.get("content-desc", "")
-                        for node in root.iter("node")
-                    )
-                    sanitize_hierarchy(root)
-                    hierarchy_path = self.output / f"{prefix}.xml"
-                    hierarchy_path.write_text(ET.tostring(root, encoding="unicode"), encoding="utf-8")
-                    evidence["hierarchy"] = hierarchy_path.name
-                except (ET.ParseError, ValueError):
-                    evidence["captureErrors"].append("hierarchy_not_valid_xml")
+        try:
+            evidence["foregroundBefore"] = self.foreground(deadline=deadline)
+            try:
+                result = subprocess.run([self.adb, "-s", self.args.serial, "exec-out", "screencap", "-p"],
+                                        capture_output=True, timeout=capture_timeout(deadline, 30), check=False)
+                if (result.returncode == 0 and result.stdout.startswith(b"\x89PNG\r\n\x1a\n")
+                        and len(result.stdout) >= 24 and result.stdout[12:16] == b"IHDR"):
+                    screen_path.write_bytes(result.stdout)
+                    evidence["screenshot"] = screen_path.name
+                    evidence["screenshotWidth"] = int.from_bytes(result.stdout[16:20], "big")
+                    evidence["screenshotHeight"] = int.from_bytes(result.stdout[20:24], "big")
+                else:
+                    evidence["captureErrors"].append("screenshot_not_valid_png")
+            except (OSError, subprocess.TimeoutExpired) as error:
+                evidence["captureErrors"].append("screenshot_" + type(error).__name__)
+            dump = self.shell(["uiautomator", "dump", remote], timeout=capture_timeout(deadline, 45))
+            evidence["hierarchyDump"] = dump
+            if dump["returnCode"] == 0:
+                content = self.adb_command(["exec-out", "cat", remote], timeout=capture_timeout(deadline, 30))
+                if content["returnCode"] == 0:
+                    try:
+                        root = ET.fromstring(content["stdout"])
+                        if root.tag != "hierarchy":
+                            raise ValueError("not_ui_hierarchy")
+                        evidence["visiblePageMarker"] = any(
+                            PAGE_MARKER in node.attrib.get("text", "") or PAGE_MARKER in node.attrib.get("content-desc", "")
+                            for node in root.iter("node")
+                        )
+                        sanitize_hierarchy(root)
+                        hierarchy_path = self.output / f"{prefix}.xml"
+                        hierarchy_path.write_text(ET.tostring(root, encoding="unicode"), encoding="utf-8")
+                        evidence["hierarchy"] = hierarchy_path.name
+                    except (ET.ParseError, ValueError):
+                        evidence["captureErrors"].append("hierarchy_not_valid_xml")
+                else:
+                    evidence["captureErrors"].append("hierarchy_read_failed")
             else:
-                evidence["captureErrors"].append("hierarchy_read_failed")
-        else:
-            evidence["captureErrors"].append("hierarchy_dump_failed")
-        self.shell(["rm", "-f", remote])  # Only the single exact path created by this attempt.
-        evidence["foregroundAfter"] = self.foreground()
+                evidence["captureErrors"].append("hierarchy_dump_failed")
+            self.shell(["rm", "-f", remote], timeout=capture_timeout(deadline, 30))
+            evidence["foregroundAfter"] = self.foreground(deadline=deadline)
+        except TimeoutError:
+            evidence["captureErrors"].append("page_marker_capture_deadline_reached")
+        return evidence
+
+    def observe_prepared_page(self, prefix: str, evidence: dict, hit_start: int) -> dict:
+        """Read-only sampling after both known Chrome actions; never navigate or tap."""
+        observation = {"maximumSeconds": 30, "maximumAdditionalCaptures": 3,
+                       "samples": [], "startedAt": now(), "status": "not_needed"}
+        self.report["firstRunPreparation"]["pageMarkerObservation"] = observation
+        deadline = time.monotonic() + observation["maximumSeconds"]
+        for index in range(observation["maximumAdditionalCaptures"]):
+            if self.page_ready(evidence, hit_start):
+                observation["status"] = "exact_page_marker_confirmed"
+                break
+            with self.hits_lock:
+                hit_seen = len(self.page_hits) > hit_start
+            if (not hit_seen or evidence["captureErrors"] or not evidence["hierarchy"]
+                    or not all(self.independent_foreground(evidence[key])
+                               and evidence[key]["resumedComponent"] == CHROME_TABBED
+                               and evidence[key]["focusedComponent"] == CHROME_TABBED
+                               for key in ("foregroundBefore", "foregroundAfter"))):
+                observation["status"] = "stopped_without_stable_chrome_http_evidence"
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                observation["status"] = "deadline_reached"
+                break
+            time.sleep(min(1, remaining))
+            evidence = self.capture(f"{prefix}-page-tree-{index + 1:02d}", deadline=deadline)
+            observation["samples"].append(evidence)
+            self.flush()
+        observation["status"] = ("exact_page_marker_confirmed" if self.page_ready(evidence, hit_start)
+                                 else observation["status"] if observation["status"] != "not_needed"
+                                 else "exact_page_marker_not_confirmed")
+        observation["finishedAt"] = now()
+        self.flush()
         return evidence
 
     def page_ready(self, evidence: dict, hit_start: int) -> bool:
@@ -763,6 +812,9 @@ class Probe:
             preparation["afterEvidence"] = after
             if decline["command"]["returnCode"] != 0:
                 return blocked("notification_decline_tap_command_failed", after)
+            after = self.observe_prepared_page(prefix, after, hit_start)
+            decline["afterEvidence"] = after
+            preparation["afterEvidence"] = after
         if not (self.page_ready(after, hit_start)
                 and all(component_package(after[key]["resumedComponent"]) == CHROME_PACKAGE
                         for key in ("foregroundBefore", "foregroundAfter"))):
