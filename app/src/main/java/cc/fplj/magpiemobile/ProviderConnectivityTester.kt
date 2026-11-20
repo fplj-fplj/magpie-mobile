@@ -94,6 +94,7 @@ internal fun ProviderConnectivityTestButton(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun ProviderConnectivityDialog(
     owner: Long,
@@ -374,7 +375,9 @@ private fun ProviderConnectivityDialog(
                         Button(
                             enabled = running || canTest,
                             onClick = if (running) ::close else ::startTest,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f)
+                                .testTag("provider-connectivity-start")
+                                .semantics { testTagsAsResourceId = true },
                         ) {
                             if (running) {
                                 CircularProgressIndicator(

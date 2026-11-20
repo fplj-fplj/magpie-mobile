@@ -458,8 +458,10 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue("UI checks must use an actually implicit saved provider", implicitProvider.chosen.isEmpty())
                     assertEquals(listOf(providerCatalogModel), implicitProvider.models.filter { it.on }.map { it.id })
                     assertTrue("implicit saved selection must expose the actual gateway route", runtimeProviderRoutePresent(auth))
-                    assertTrue("automatic saved model must enable testing", device.findObject(By.text("开始测试")).isEnabled)
-                    device.findObject(By.text("开始测试")).click()
+                    val connectivityStart = By.res("provider-connectivity-start")
+                    await("native test action accessible") { device.hasObject(connectivityStart) }
+                    assertTrue("automatic saved model must enable testing", device.findObject(connectivityStart).isEnabled)
+                    device.findObject(connectivityStart).click()
                     await("three real provider checks in UI", 90_000) {
                         device.hasObject(By.text("三项模型能力检查已通过。"))
                     }
@@ -1770,7 +1772,9 @@ class OfficialPluginsInstrumentedTest {
             device.findObject(By.res("provider-connectivity-entry")).click()
             await("disabled provider test dialog") { device.hasObject(dialog) }
             assertTrue(device.hasObject(By.text("当前提供商没有已保存且启用的模型；保存模型选择后再测试。")))
-            assertFalse("select-none must keep Start disabled", device.findObject(By.text("开始测试")).isEnabled)
+            val start = By.res("provider-connectivity-start")
+            await("disabled provider test action accessible") { device.hasObject(start) }
+            assertFalse("select-none must keep Start disabled", device.findObject(start).isEnabled)
             assertTrue(device.takeScreenshot(File(artifacts, "provider-connectivity-disabled.png")))
             File(artifacts, "provider-auto-models.txt").writeText(
                 "PASS: official save and real vendor Refetch persisted models=[]/noModels=false; " +
