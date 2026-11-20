@@ -25,7 +25,6 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -33,9 +32,10 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -44,6 +44,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import cc.fplj.magpiemobile.theme.MagpieTheme
+import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
@@ -505,23 +506,62 @@ class ProviderPanelInstrumentedTest {
     }
 
     private fun selectAllAndUseSystemAction(device: UiDevice, tag: String, action: String) {
-        compose.onNodeWithTag(tag).performTouchInput { longClick() }
-        compose.waitUntil(5_000) {
-            device.hasObject(By.text("Select all")) || device.hasObject(By.text(action))
+        clipboardMenuStep(device, action.lowercase()) {
+            val field = compose.onNodeWithTag(tag)
+            field.performScrollTo().performClick()
+            field.assert(SemanticsMatcher.expectValue(
+                SemanticsProperties.EditableText, AnnotatedString(SYNTHETIC_KEY)))
+            field.performSemanticsAction(SemanticsActions.SetSelection) {
+                it(0, SYNTHETIC_KEY.length, true)
+            }
+            field.assert(SemanticsMatcher.expectValue(
+                SemanticsProperties.TextSelectionRange, TextRange(0, SYNTHETIC_KEY.length)))
+            // AndroidTextToolbar finishes ActionMode after Select all. Set a known full
+            // selection, then use the field's real long-click action to open a fresh menu.
+            field.performSemanticsAction(SemanticsActions.OnLongClick) { assertTrue(it()) }
+            assertTrue("System $action action did not appear",
+                device.wait(Until.hasObject(By.text(action)), 5_000))
+            device.findObject(By.text(action)).click()
+            compose.waitForIdle()
         }
-        if (device.hasObject(By.text("Select all"))) device.findObject(By.text("Select all")).click()
-        assertTrue("System $action action did not appear", device.wait(Until.hasObject(By.text(action)), 5_000))
-        device.findObject(By.text(action)).click()
-        compose.waitForIdle()
     }
 
     private fun pasteFromSystemClipboard(device: UiDevice) {
-        compose.onNodeWithTag(API_KEY).performTouchInput { longClick() }
-        assertTrue("System Paste action did not appear", device.wait(Until.hasObject(By.text("Paste")), 5_000))
-        device.findObject(By.text("Paste")).click()
-        compose.waitForIdle()
-        compose.onNodeWithTag(API_KEY).assert(SemanticsMatcher.expectValue(
-            SemanticsProperties.EditableText, AnnotatedString(SYNTHETIC_KEY)))
+        clipboardMenuStep(device, "paste") {
+            compose.onNodeWithTag(API_KEY).performScrollTo().performClick()
+                .performSemanticsAction(SemanticsActions.OnLongClick) { assertTrue(it()) }
+            assertTrue("System Paste action did not appear",
+                device.wait(Until.hasObject(By.text("Paste")), 5_000))
+            device.findObject(By.text("Paste")).click()
+            compose.waitForIdle()
+            compose.onNodeWithTag(API_KEY).assert(SemanticsMatcher.expectValue(
+                SemanticsProperties.EditableText, AnnotatedString(SYNTHETIC_KEY)))
+        }
+    }
+
+    private fun clipboardMenuStep(device: UiDevice, step: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (failure: Throwable) {
+            // This fixture only displays a synthetic key. Export before withPanel tears down
+            // the dialog and AGP uninstalls the app, independently of test-class order.
+            val artifacts = File(InstrumentationRegistry.getInstrumentation()
+                .targetContext.getExternalFilesDir(null), "plugin-runtime").apply { mkdirs() }
+            for (extension in listOf("png", "xml")) {
+                try {
+                    val file = File(artifacts, "provider-clipboard-$step-failure.$extension")
+                    if (extension == "png") assertTrue(device.takeScreenshot(file))
+                    else device.dumpWindowHierarchy(file)
+                    val exported = "/data/local/tmp/magpie-plugin-runtime/${file.name}"
+                    device.executeShellCommand("mkdir -p /data/local/tmp/magpie-plugin-runtime")
+                    device.executeShellCommand("cp ${file.absolutePath} $exported")
+                    assertEquals(exported, device.executeShellCommand("ls $exported").trim())
+                } catch (evidenceFailure: Throwable) {
+                    failure.addSuppressed(evidenceFailure)
+                }
+            }
+            throw failure
+        }
     }
 
     private fun assertSensitivePrimaryClip(expected: String) {

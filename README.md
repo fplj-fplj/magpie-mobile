@@ -85,7 +85,7 @@
 
 ## 验证与操作
 
-`Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`，才会把同一轮验证产物发布为 Latest Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
+`Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`；发布门禁还要求同提交最新可信 `Validation` attempt 的 `regression` 与 `runtime-emulator` 均已完成并成功。附件先上传至草稿并核对名称、大小和 SHA-256，再公开为 Latest，已公开版本不覆盖附件或移动 tag。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
 当前已验证可用版本：[`0.1.61-session-editor-fixes` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.61-session-editor-fixes-26032886)，SHA-256 `2cb8814a864a6e9307e956378c1b0ffb3c4baa3726742ece5144d5f2bfe6dfed`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44696120054)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44692276306)均通过；JVM 1,114 项、Android API 35 x86_64 的 19 项实际用例、Go、实际核心参数转发与 RPC/TLS、官方／社区插件及 race 全部通过。插件 A→B→C 连续保存、真实外部冲突、横屏／真实键盘会话入口、密钥重连清理与旧回调零写入均已验证。前两轮失败候选仅留 Actions，修正后完整验收才发布；正式 APK 已从 Release 与正式 artifact 分别下载并逐字节比对，Latest、tag、固定证书及四项附件已核对，详情见 [0.1.61 验收记录](docs/bugfixes-0.1.61.md)。ARM64 包仅核对签名与载荷，实际 Android 运行在 x86_64 模拟器完成。
 

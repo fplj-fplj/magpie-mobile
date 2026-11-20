@@ -24,7 +24,17 @@
 
 第二轮源码 `aa7e9472760ceed218833faa544fcfdb484116d6` 的 [Validation 44738211832](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44738211832) 中，regression job 已通过，Android APK 和测试 APK 编译成功，前 9 项聊天与网关仪器测试通过。第 10 项完整应用插件测试进入提供商页面时，ART 对 `ProvidersPanel` 的生成方法报告 `VerifyError`（`copy1 v1<-v277`，类型为 `MeasurePolicy`），导致进程崩溃，完整 23 项未跑完；这不是可忽略的测试环境失败。
 
-现将完整 API 密钥输入框提取为独立、非 inline 的 Composable，敏感剪贴板管理器和局部 provider 一并移入，减少父方法的生成代码及局部变量。字段状态仍由父页面持有，标签、显示／隐藏、输入法、焦点处理和 `provider-api-key` 标记保持原行为。这是针对生成代码验证问题的最小修复尝试，尚不能据此断言工具链根因，必须通过同提交完整模拟器测试，特别是提供商真实 Copy／Cut／Paste 回归后才能确认。
+现将完整 API 密钥输入框提取为独立、非 inline 的 Composable，敏感剪贴板管理器和局部 provider 一并移入，减少父方法的生成代码及局部变量。字段状态仍由父页面持有，标签、显示／隐藏、输入法、焦点处理和 `provider-api-key` 标记保持原行为。这是针对生成代码验证问题的最小修复，不据此断言工具链根因。
+
+第三轮源码 `622346ce8f44021f6cf2e50c0ea36c283e854e17` 的 [Validation 44776872303](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44776872303) 中，regression job 已通过。实际 JVM XML 报告核对 1,119 项，零失败／错误／跳过；Android 23 项全部执行完毕，22 项通过，未再发生上述 ART 崩溃，实际 `android-errors.txt` 为空。唯一失败是新增剪贴板用例在点击系统 Select all 后等待 Copy：所用 Compose 的平台工具栏会在 Select all 后结束当前 ActionMode，测试误以为同一菜单仍然显示。这不证明生产剪贴板有故障，也不构成该项功能已验收。
+
+现修正测试前提：在真实字段上设置并核对完整选区，再调用字段生产 OnLongClick 打开实际系统菜单，继续由 UiAutomator 点击系统 Copy／Cut／Paste。保留完整剪贴板文本、敏感标记、剪切后清空、两次粘贴恢复及零 POST 断言，超时不变；失败时补录该步骤的截图和 UI hierarchy。JVM／Android 报告 artifact 为 `14650666847`／`14649904096`，下载 ZIP 的 SHA-256 分别为 `93703a25e108bd38405dc142c1c1dfb0b7a16a659558e2d854df6486bb7e7e93`／`d95af303ee05610fdc54253d68f8f69ab0e62a1e5170a6cd1b4ee551e50728ab`，均与 GitHub artifact digest 一致。
+
+## 发布防护
+
+修复手动发布仍可绕过同提交 Validation 的缺口。签名构建和 Actions 产物归档继续独立；发布另须显式勾选 `publish_release`，并通过同一源码 SHA 最新可信 Validation attempt 的完整成功检查，要求 `regression` 与 `runtime-emulator` 均真实完成并成功。不复用旧成功覆盖较新的失败、进行中或不同 attempt 结果，发布证据记录具体验证链接。
+
+新 Release 先创建草稿，四项附件的名称、大小及 SHA-256 经 GitHub API 核对后再公开并标记 Latest，避免上传失败留下不完整 Latest。仅允许补传草稿；既有公开 Release 只读比对，不覆盖其附件或移动 tag。门禁与发布逻辑的离线 API fixture 回归也交由 Actions 执行。
 
 本机只进行了源码与差异静态审查及 `git diff --check`；未运行 Gradle、Kotlin/JVM、Go 或 Android 编译／测试。修复后的候选仍须通过同提交完整 Validation 和签名产物核查，才可发布 Release。
 

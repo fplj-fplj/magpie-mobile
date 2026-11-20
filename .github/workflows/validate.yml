@@ -55,6 +55,8 @@ jobs:
           python3 scripts/check-android-network-build.py
           python3 scripts/check-ui-assets.py
           python3 scripts/test_apk_signature.py
+          python3 scripts/test_release_validation.py
+          python3 scripts/test_release_publication.py
           python3 scripts/test-device-stability.py
 
       - name: Apply hash-pinned Android host adaptation
