@@ -93,7 +93,7 @@ class OfficialPluginsInstrumentedTest {
                     device.waitForIdle()
                     assertTrue(device.takeScreenshot(File(artifacts, "gateway-on-portrait.png")))
                     val client = NativeCoreSession.pluginClient()
-                    assertEquals("0.1.3781-androidhost.2", NativeCoreSession.managementClient().capabilities().coreVersion)
+                    assertEquals("0.1.3781-androidhost.3", NativeCoreSession.managementClient().capabilities().coreVersion)
                     val provider = fixture(fixtures, "provider", PROVIDER, "\"main\":\"index.mjs\"")
                     val middleware = fixture(fixtures, "middleware", MIDDLEWARE, "\"magpie\":{\"middleware\":\"runtime.middleware.mjs\"}", "runtime.middleware.mjs")
                     val hooks = fixture(fixtures, "hooks", HOOKS, "\"magpie\":{\"hooks\":\"runtime.hooks.mjs\"}", "runtime.hooks.mjs")

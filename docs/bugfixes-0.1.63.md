@@ -31,7 +31,11 @@
 
 Python patch fixture 同时核对新增补丁与平台常量的打包约束。Go 中的 Node 回归依赖 Node ≥18，Validation 的 regression job 显式配置 Node 22。该工作仍须与全部 JVM、Go、插件、RPC／TLS、race 和 Android 既有回归一起在 GitHub Actions 执行。
 
-本机只做源码、AST、补丁哈希与差异静态检查，不运行 Gradle、Kotlin/JVM、Go、Android、Node 或 Python 测试。当前不能声称上述新增用例已执行通过。
+本机只做源码、AST、补丁哈希与差异静态检查，不运行 Gradle、Kotlin/JVM、Go、Android、Node 或 Python 测试。
+
+源码 `103ae1fd6bbe13902a40b272867c82095b581912` 的 Validation `44794021147` 已读取实际归档报告：JVM core 645／app 482，共 1,127 项通过，零失败、错误或跳过；Go mobile 47／AndroidHost 31 个顶层用例（含子用例 53／50 个通过事件），包含全部新增 8 项备份用例与实际 Node 网页模块回归。两种标签的聊天参数转发、RPC／TLS 边界、真实官方／社区插件集成与 race 也通过。
+
+同次 Android 报告为 23 项中 1 项失败，错误日志为空：`OfficialPluginsInstrumentedTest` 仍断言旧核心 `androidhost.2`，实际安装载荷已为 `androidhost.3`，导致该项后续插件集成未执行。现已精确更新本次安装测试的预期版本；旧版本解析 fixture 保留。必须在修订提交上重跑完整 Validation，不能把该次 Android 任务计为通过。
 
 ## 真实 Android 浏览器验收门槛
 
