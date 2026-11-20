@@ -97,7 +97,8 @@ class BrowserBackupInstrumentedTest {
                     rejectBrowserFirstRun()
                     device.currentPackageName == CHROME && device.hasObject(By.res(CHROME, "url_bar"))
                 }
-                confirmCleanOfficialPage()
+                confirmOfficialPage(CLEAN_ENTRY_URL)
+                cleanRedirectObserved = true
                 safeHierarchy("browser-backup-clean-entry.xml")
 
                 phase = "opening_official_sync_settings"
@@ -151,7 +152,7 @@ class BrowserBackupInstrumentedTest {
                 assertFixture(session, before = true)
                 assertDownloadUnchanged()
                 assertPrivateArchivesUnchanged(privateArchiveBaseline)
-                confirmCleanOfficialPage()
+                confirmOfficialPage(SYNC_SETTINGS_URL)
                 safeHierarchy("browser-backup-restored.xml")
                 // Import replaces the form; never capture a password form or a ticket URL.
                 val raw = hierarchyBytes()
@@ -237,7 +238,7 @@ class BrowserBackupInstrumentedTest {
             !device.hasObject(By.res(CHROME, "signin_fre_dismiss_button")), FailureReason.BROWSER_SETUP_REQUIRED)
     }
 
-    private fun confirmCleanOfficialPage() {
+    private fun confirmOfficialPage(expectedUrl: Regex) {
         rejectBrowserFirstRun()
         accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
         await(30_000) { device.hasObject(By.res(CHROME, "url_bar")) && webViewOrNull() != null }
@@ -245,28 +246,22 @@ class BrowserBackupInstrumentedTest {
         requireNotNull(device.findObject(By.res(CHROME, "url_bar"))).click()
         await(5_000, FailureReason.CLEAN_OFFICIAL_URL_NOT_REACHED) {
             val actual = device.findObject(By.res(CHROME, "url_bar"))?.text?.trim().orEmpty()
-            CLEAN_URL.matches(actual)
+            expectedUrl.matches(actual)
         }
         device.pressBack() // Omnibox focus/keyboard only; not a fabricated navigation.
         await(5_000) { webViewOrNull() != null }
         accept(namedControl(CHROME, SETTINGS) != null, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED)
-        cleanRedirectObserved = true
     }
 
     private fun revealSyncTab(): UiObject2 {
-        repeat(10) {
-            namedControl(CHROME, SYNC_TAB)?.let { return it }
-            // CSS overflow navigation must be a real accessible horizontal scroller.
-            // No DOM id is treated as an Android resource-id.
-            val row = device.findObjects(By.pkg(CHROME).scrollable(true)).filter {
-                val b = it.visibleBounds
-                b.width() > b.height() * 2 && b.height() > 0
-            }.minByOrNull { it.visibleBounds.height() }
-                ?: throw AcceptanceFailure(FailureReason.SETTINGS_TAB_SCROLLER_NOT_RECOGNIZED)
-            row.scroll(Direction.RIGHT, .7f)
-            SystemClock.sleep(250)
+        // The pinned phone layout wraps its tabs; it has no horizontal tab scroller.
+        // Wait for the real accessible label instead of swiping unrelated content.
+        await(15_000, FailureReason.SYNC_TAB_NOT_REACHED) {
+            accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
+            namedControl(CHROME, SYNC_TAB) != null
         }
-        throw AcceptanceFailure(FailureReason.SYNC_TAB_NOT_REACHED)
+        return namedControl(CHROME, SYNC_TAB)
+            ?: throw AcceptanceFailure(FailureReason.SYNC_TAB_NOT_REACHED)
     }
 
     private fun revealWebControl(names: List<String>, startAtTop: Boolean = false): UiObject2 {
@@ -557,7 +552,7 @@ class BrowserBackupInstrumentedTest {
         FIXTURE_NAME_MISMATCH, FIXTURE_URL_MISMATCH, FIXTURE_MODELS_MISMATCH, FIXTURE_METADATA_MISMATCH,
         NATIVE_PROVIDER_PAGE_NOT_RECOGNIZED, NATIVE_BROWSER_BUTTON_NOT_REACHED,
         BROWSER_SETUP_REQUIRED, INDEPENDENT_BROWSER_NOT_FOREGROUND, CLEAN_OFFICIAL_URL_NOT_REACHED,
-        OFFICIAL_UI_NOT_RECOGNIZED, SETTINGS_TAB_SCROLLER_NOT_RECOGNIZED, SYNC_TAB_NOT_REACHED,
+        OFFICIAL_UI_NOT_RECOGNIZED, SYNC_TAB_NOT_REACHED,
         OFFICIAL_WEB_CONTROL_NOT_REACHED, AMBIGUOUS_ACCESSIBLE_CONTROL,
         PASSWORD_INPUT_REJECTED, PASSWORD_INPUTS_NOT_RECOGNIZED, PRIVATE_EXPORT_PATH_RETURNED, PRIVATE_BACKUP_ARCHIVE_CHANGED,
         MULTIPLE_NEW_DOWNLOADS, STABLE_PUBLIC_DOWNLOAD_NOT_REACHED, DOWNLOAD_HASH_TOOL_FAILED,
@@ -594,7 +589,10 @@ class BrowserBackupInstrumentedTest {
         private val CHOOSE = listOf("Choose…", "选择…")
         private val DOWNLOAD_RETRY = listOf("Download · magpie.magpie-backup", "下载 · magpie.magpie-backup")
         private val DOCUMENTS_PACKAGES = setOf("com.google.android.documentsui", "com.android.documentsui")
-        private val CLEAN_URL = Regex("(?:http://)?127\\.0\\.0\\.1:3430/?")
+        // Fresh entry may show Providers through the official SPA's startup routing.
+        // Both gates reject credentials, tickets, extra parameters, fragments and other origins.
+        private val CLEAN_ENTRY_URL = Regex("(?:http://)?127\\.0\\.0\\.1:3430/?(?:\\?view=providers)?")
+        private val SYNC_SETTINGS_URL = Regex("(?:http://)?127\\.0\\.0\\.1:3430/\\?(?:view=settings&tab=sync|tab=sync&view=settings)")
         private val SAFE_BASENAME = Regex("magpie(?: \\([0-9]+\\))?\\.magpie-backup")
         private val HASH_LINE = Regex("([0-9a-fA-F]{64})[ \\t]+(.+)")
         private val MISSING_DOWNLOAD_DIRECTORY = Regex("find: '?/sdcard/Download'?: No such file or directory")
