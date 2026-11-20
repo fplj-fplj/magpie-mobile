@@ -26,18 +26,27 @@ internal class ProviderOperationController(
         block: suspend ProviderOperation.() -> Unit,
     ): Job {
         val operation = ProviderOperation(acquireLease(session), dispatcher)
+        val finished = AtomicBoolean()
+        fun finish() {
+            if (finished.compareAndSet(false, true)) {
+                try { operation.release() } finally { onFinished() }
+            }
+        }
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 operation.ensureCurrent()
                 operation.block()
             } finally {
-                try { operation.release() } finally { onFinished() }
+                finish()
             }
         }
         // A disposed parent can complete a lazy launch without executing its body/finally.
         job.invokeOnCompletion { cause ->
-            if (cause is CancellationException) operation.cancel()
-            operation.release()
+            try {
+                if (cause is CancellationException) operation.cancel()
+            } finally {
+                finish()
+            }
         }
         job.start()
         return job

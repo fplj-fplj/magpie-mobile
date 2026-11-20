@@ -42,11 +42,11 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ProviderOperationControllerTest {
-    @Test fun cancellationBeforeBodyStartsReleasesTheCapturedLeaseExactlyOnce() = runBlocking {
+    @Test fun cancellationBeforeBodyStartsFinishesBusyStateAndReleasesTheLeaseExactlyOnce() = runBlocking {
         assertPrestartCleanup(alreadyDisposed = false)
     }
 
-    @Test fun launchingInAnAlreadyDisposedScopeDoesNotLeakTheLeaseOrStartHttp() = runBlocking {
+    @Test fun launchingInAnAlreadyDisposedScopeFinishesBusyStateWithoutStartingHttp() = runBlocking {
         assertPrestartCleanup(alreadyDisposed = true)
     }
 
@@ -471,17 +471,35 @@ class ProviderOperationControllerTest {
             val dispatcher = StandardTestDispatcher()
             val scope = CoroutineScope(SupervisorJob() + dispatcher)
             val controller = ProviderOperationController(scope, source::acquire, dispatcher)
+            val busy = AtomicBoolean(true)
+            val finished = AtomicInteger()
+            val entered = AtomicInteger()
+            val releasesAtFinish = AtomicInteger(-1)
             try {
                 if (alreadyDisposed) scope.cancel()
-                val job = controller.launch(SESSION_A) { request { it.getProviders() } }
+                val job = controller.launch(SESSION_A, onFinished = {
+                    releasesAtFinish.set(source.leases.single().closeCount.get())
+                    busy.set(false)
+                    finished.incrementAndGet()
+                }) {
+                    entered.incrementAndGet()
+                    request { it.getProviders() }
+                }
                 if (!alreadyDisposed) job.cancel()
                 dispatcher.scheduler.runCurrent()
                 withTimeout(5000) { job.join() }
 
                 assertTrue(job.isCancelled)
+                assertEquals(0, entered.get())
+                assertFalse(busy.get())
+                assertEquals(1, finished.get())
+                assertEquals(1, releasesAtFinish.get())
                 assertTrue(peer.requests.isEmpty())
                 assertReleasedOnce(source)
                 assertCancelled(source.leases.single().control)
+                job.cancel()
+                dispatcher.scheduler.runCurrent()
+                assertEquals(1, finished.get())
             } finally {
                 scope.cancel()
                 dispatcher.scheduler.runCurrent()

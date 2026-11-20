@@ -54,7 +54,6 @@ fun ProvidersPanel(
     val providerOperations = remember(scope, connection) {
         ProviderOperationController(scope, acquireLease = connection::acquireLease)
     }
-    val sensitiveClipboard = rememberSensitiveClipboardManager()
     val focus = LocalFocusManager.current
     val latestEnabled by rememberUpdatedState(enabled)
     val latestExternalRevision by rememberUpdatedState(externalRevision)
@@ -646,20 +645,14 @@ fun ProvidersPanel(
                                 title = "访问凭据",
                                 supporting = "密钥只保存在本机核心私有目录，不进入列表、日志或导出备份。",
                             ) {
-                                CompositionLocalProvider(LocalClipboardManager provides sensitiveClipboard) {
-                                    OutlinedTextField(
-                                        value = key,
-                                        onValueChange = { key = it },
-                                        enabled = !busy,
-                                        singleLine = true,
-                                        label = { Text(if (snapshot == null) "API 密钥" else "新密钥（留空保留现有密钥）") },
-                                        visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-                                        trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "隐藏" else "显示") } },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                                        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
-                                        modifier = Modifier.fillMaxWidth().testTag("provider-api-key"),
-                                    )
-                                }
+                                ProviderApiKeyField(
+                                    value = key,
+                                    onValueChange = { key = it },
+                                    enabled = !busy,
+                                    creating = snapshot == null,
+                                    showKey = showKey,
+                                    onShowKeyChange = { showKey = it },
+                                )
                                 if (newOriginNeedsKey) {
                                     Text(
                                         "服务来源已改变，请填写新密钥。",
@@ -953,4 +946,36 @@ fun ProvidersPanel(
     )
     if (confirmDisable) AlertDialog(onDismissRequest = { confirmDisable = false }, title = { Text("禁用全部模型？") }, text = { Text("此操作会明确禁用该提供商的全部模型，不是获取目录失败。") },
         confirmButton = { TextButton(colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error), onClick = { confirmDisable = false; submit() }) { Text("确认禁用并保存") } }, dismissButton = { TextButton(onClick = { confirmDisable = false }) { Text("返回选择") } })
+}
+
+/** Keep the clipboard provider and text field out of the large panel's generated method. */
+@Composable
+private fun ProviderApiKeyField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    enabled: Boolean,
+    creating: Boolean,
+    showKey: Boolean,
+    onShowKeyChange: (Boolean) -> Unit,
+) {
+    val sensitiveClipboard = rememberSensitiveClipboardManager()
+    val focus = LocalFocusManager.current
+    CompositionLocalProvider(LocalClipboardManager provides sensitiveClipboard) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            enabled = enabled,
+            singleLine = true,
+            label = { Text(if (creating) "API 密钥" else "新密钥（留空保留现有密钥）") },
+            visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                TextButton(onClick = { onShowKeyChange(!showKey) }) {
+                    Text(if (showKey) "隐藏" else "显示")
+                }
+            },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+            modifier = Modifier.fillMaxWidth().testTag("provider-api-key"),
+        )
+    }
 }
