@@ -275,12 +275,30 @@ class BrowserBackupInstrumentedTest {
             device.hasObject(By.res(CHROME, "url_bar")) && webViewOrNull() != null &&
                 namedControl(CHROME, SETTINGS) != null
         }
-        // Expand Chrome's real omnibox only after the official page has loaded.
-        // Inspect its full displayed URL in memory only; never save a ticket URL.
+        // Chrome 124 opens a search-ready omnibox. Its first current-page suggestion's
+        // exact Edit action refines the full URL into the field without navigating
+        // (EditUrlSuggestionProcessor -> onRefineSuggestion -> setOmniboxEditingText).
+        // Never validate the unfocused display text: Chrome can shorten that value.
         requireNotNull(device.findObject(By.res(CHROME, "url_bar"))).click()
+        var editCurrentUrl: UiObject2? = null
+        await(5_000, FailureReason.CURRENT_URL_EDIT_ACTION_NOT_REACHED) {
+            val dropdowns = device.findObjects(By.res(CHROME, "omnibox_suggestions_dropdown"))
+            accept(dropdowns.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+            val firstSuggestion = dropdowns.singleOrNull()?.children?.firstOrNull()
+            val hasCurrentPageLines = firstSuggestion?.findObject(By.res(CHROME, "line_1")) != null &&
+                firstSuggestion.findObject(By.res(CHROME, "line_2")) != null
+            val actions = if (hasCurrentPageLines) firstSuggestion!!.findObjects(
+                By.pkg(CHROME).clazz("android.widget.ImageView").desc("Edit").enabled(true).clickable(true),
+            ).filter { !it.visibleBounds.isEmpty } else emptyList()
+            accept(actions.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+            editCurrentUrl = actions.singleOrNull()
+            editCurrentUrl != null
+        }
+        requireNotNull(editCurrentUrl).click()
+        // Inspect only the actual focused field, in memory; never save a ticket URL.
         await(5_000, FailureReason.CLEAN_OFFICIAL_URL_NOT_REACHED) {
-            val actual = device.findObject(By.res(CHROME, "url_bar"))?.text?.trim().orEmpty()
-            expectedUrl.matches(actual)
+            val field = device.findObject(By.res(CHROME, "url_bar"))
+            field?.isFocused == true && expectedUrl.matches(field.text?.trim().orEmpty())
         }
         device.pressBack() // Omnibox focus/keyboard only; not a fabricated navigation.
         await(5_000) { webViewOrNull() != null }
@@ -585,7 +603,8 @@ class BrowserBackupInstrumentedTest {
         UNEXPECTED_EXCEPTION, UI_WAIT_EXPIRED, CORE_SESSION_CHANGED, CORE_VERSION_MISMATCH,
         FIXTURE_NAME_MISMATCH, FIXTURE_URL_MISMATCH, FIXTURE_MODELS_MISMATCH, FIXTURE_METADATA_MISMATCH,
         NATIVE_PROVIDER_PAGE_NOT_RECOGNIZED, NATIVE_BROWSER_BUTTON_NOT_REACHED,
-        BROWSER_SETUP_REQUIRED, INDEPENDENT_BROWSER_NOT_FOREGROUND, CLEAN_OFFICIAL_URL_NOT_REACHED,
+        BROWSER_SETUP_REQUIRED, INDEPENDENT_BROWSER_NOT_FOREGROUND, CURRENT_URL_EDIT_ACTION_NOT_REACHED,
+        CLEAN_OFFICIAL_URL_NOT_REACHED,
         OFFICIAL_UI_NOT_RECOGNIZED, SYNC_TAB_NOT_REACHED,
         OFFICIAL_WEB_CONTROL_NOT_REACHED, AMBIGUOUS_ACCESSIBLE_CONTROL,
         PASSWORD_INPUT_REJECTED, PASSWORD_INPUTS_NOT_RECOGNIZED, PRIVATE_EXPORT_PATH_RETURNED, PRIVATE_BACKUP_ARCHIVE_CHANGED,
