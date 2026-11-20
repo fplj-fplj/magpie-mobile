@@ -49,11 +49,16 @@ fun ProvidersPanel(
     cacheViewModel: ProviderListCacheViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
 ) {
     val scope = rememberCoroutineScope()
-    val providerOperations = remember(scope) { ProviderOperationController(scope) }
+    val connection = LocalProviderPanelConnection.current
+    val providerOperations = remember(scope, connection) {
+        ProviderOperationController(scope, acquireLease = connection::acquireLease)
+    }
     val focus = LocalFocusManager.current
     val latestEnabled by rememberUpdatedState(enabled)
+    val latestExternalRevision by rememberUpdatedState(externalRevision)
     var providers by remember { mutableStateOf<ProviderListSnapshot?>(null) }
     var listHealthy by remember { mutableStateOf(false) }
+    var externalRefresh by remember { mutableStateOf(ProviderExternalRefreshState()) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var search by remember { mutableStateOf("") }
@@ -92,9 +97,10 @@ fun ProvidersPanel(
     var serverPin by remember { mutableStateOf("") }
     var editorTab by rememberSaveable { mutableStateOf(0) }
     val editorScrolls = listOf(rememberScrollState(), rememberScrollState(), rememberScrollState())
-    val providerStatus by NativeCoreSession.status.collectAsStateWithLifecycle()
+    val providerStatus by connection.status.collectAsStateWithLifecycle()
     val sessionKey = if (enabled) providerStatus.providerSession else null
-    val canAddProvider = enabled && listHealthy && !busy && !operationBusy && !recoveryRequired
+    val listReady = listHealthy && externalRefresh.isConfirmed(sessionKey, externalRevision)
+    val canAddProvider = enabled && listReady && !busy && !operationBusy && !recoveryRequired
 
     // 导航守卫：busy、open (编辑Dialog打开) 或 recoveryRequired 时均锁住外层 Tab 切换
     val isLocked = busy || open || recoveryRequired
@@ -103,8 +109,20 @@ fun ProvidersPanel(
     }
     fun setBusy(value: Boolean) { busy = value }
 
-    fun current(session: ProviderSessionKey?, sequence: Long): Boolean = latestEnabled && session != null &&
-        session == NativeCoreSession.providerSessionKey() && sequence == operationSequence
+    fun currentSession(): ProviderSessionKey? = if (latestEnabled) connection.currentSession() else null
+    fun current(session: ProviderSessionKey?, sequence: Long): Boolean = session != null &&
+        session == currentSession() && sequence == operationSequence
+    fun listIsReady(): Boolean = listHealthy && externalRefresh.isConfirmed(currentSession(), latestExternalRevision)
+    fun beginListRead(session: ProviderSessionKey, sequence: Long): ProviderExternalRefreshTicket? {
+        if (!current(session, sequence)) return null
+        val ticket = ProviderExternalRefreshTicket(session, latestExternalRevision)
+        val started = externalRefresh.readStarted(ticket, currentSession(), latestExternalRevision)
+        if (started.attempted != ticket) return null
+        externalRefresh = started
+        return ticket
+    }
+    fun listReadCurrent(ticket: ProviderExternalRefreshTicket, sequence: Long): Boolean =
+        current(ticket.session, sequence) && ticket.isCurrent(currentSession(), latestExternalRevision)
     fun errorText(e: Exception): String = when (e) {
         is ProviderAlreadyExistsException -> "标识已被占用，请刷新列表并编辑已有提供商，或修改高级标识。"
         is ProviderRevisionConflictException -> "配置已变化，请重新打开编辑；没有覆盖新配置。"
@@ -136,22 +154,32 @@ fun ProvidersPanel(
         discoveryLoading = false; discoveryDone = false; discoveryError = ""; editorTab = 0
     }
     fun refresh(force: Boolean = false) {
-        if (!enabled || busy || sessionKey == null) return
+        if (!latestEnabled || busy || sessionKey == null || sessionKey != connection.currentSession()) return
         val session = sessionKey; val sequence = ++operationSequence; val pendingAtStart = recovery
         listHealthy = false; setBusy(true)
         scope.launch {
+            var readTicket: ProviderExternalRefreshTicket? = null
             try {
+                val ticket = beginListRead(session, sequence) ?: return@launch
+                readTicket = ticket
+                val externalRead = externalRefresh.needsConfirmation(session, ticket.revision)
+                // force=true alone may join an older in-flight read. Start a new generation.
+                if (externalRead) cacheViewModel.invalidate()
                 val fetch: suspend () -> ProviderListSnapshot = {
-                    withProviderRequest(session) { it.getProviders() }
+                    withProviderRequest(session, acquireLease = connection::acquireLease) { it.getProviders() }
                 }
-                val result = pendingAtStart.read(cacheViewModel, session, sequence, force, fetch)
+                val result = pendingAtStart.read(cacheViewModel, session, sequence, force || externalRead, fetch)
+                if (!listReadCurrent(ticket, sequence)) return@launch
                 val resolved = result.resolve(
-                    currentSession = if (latestEnabled) NativeCoreSession.providerSessionKey() else null,
+                    currentSession = currentSession(),
                     currentSequence = operationSequence,
                     currentRecovery = recovery,
                     editorOpen = open,
                 ) ?: return@launch
                 providers = result.snapshot; listHealthy = !result.snapshot.hasFileError
+                if (listHealthy) {
+                    externalRefresh = externalRefresh.readConfirmed(ticket, currentSession(), latestExternalRevision)
+                }
                 recovery = resolved.recovery
                 if (resolved.recoveryChecked) {
                     if (resolved.retireEditor) retireRecoveredEditor()
@@ -161,12 +189,16 @@ fun ProvidersPanel(
                     message = if (listHealthy) "" else "提供商文件异常，写入暂停"
                 }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { if (current(session, sequence)) { listHealthy = false; message = "列表读取失败：" + errorText(e) } }
+            catch (e: Exception) {
+                if (readTicket?.let { listReadCurrent(it, sequence) } == true) {
+                    listHealthy = false; message = "列表读取失败：" + errorText(e)
+                }
+            }
             finally { if (sequence == operationSequence) setBusy(false) }
         }
     }
     fun newProvider(presetId: String = "", presetName: String = "", url: String = "") {
-        if (!listHealthy || recoveryRequired || busy || operationBusy) return
+        if (!listIsReady() || recoveryRequired || busy || operationBusy) return
         snapshot = null; id = presetId; name = presetName; baseUrl = url; key = ""; serverPin = ""
         idTouched = false; nameTouched = false; localHttp = false; manual = false; showKey = false
         selected = emptyList(); modelOptions = emptyList(); policy = ProviderEditorPolicy(true)
@@ -182,8 +214,16 @@ fun ProvidersPanel(
         if (!enabled || sessionKey == null) { key = ""; discoveryLoading = false; message = "核心已断开，草稿名称、地址与选择已保留；重连后请补充密钥" }
         else refresh(force = false)
     }
-    LaunchedEffect(externalRevision) {
-        if (externalRevision > 0 && !open) refresh(force = true)
+    LaunchedEffect(enabled, sessionKey, externalRevision, open, busy) {
+        if (enabled && sessionKey != null && externalRefresh.needsConfirmation(sessionKey, externalRevision)) {
+            listHealthy = false
+            if (open && !busy && !recoveryRequired && externalRefresh.needsAttempt(sessionKey, externalRevision)) {
+                message = "外部配置已变化；当前草稿已保留，关闭编辑后将刷新提供商列表。"
+            }
+        }
+        if (externalRefresh.automaticTicket(enabled, sessionKey, externalRevision, open, busy) != null) {
+            refresh(force = true)
+        }
     }
     val normalized = try { ProviderBaseUrl.normalize(baseUrl) } catch (_: Exception) { "" }
     val newOriginNeedsKey = snapshot != null && key.isBlank() && normalized.isNotEmpty() && run {
@@ -257,13 +297,13 @@ fun ProvidersPanel(
             requestedRevision = requestedRevision,
             currentRevision = snapshot?.revision,
             editorOpen = open,
-            sessionCurrent = latestEnabled && sessionKey == NativeCoreSession.providerSessionKey(),
+            sessionCurrent = latestEnabled && sessionKey == connection.currentSession(),
         )
         discoveryLoading = true
         try {
             delay(1000) // settle URL/credential/pin changes before checking the current draft
             if (!requestIsCurrent()) return@LaunchedEffect
-            val catalog = withProviderRequest(sessionKey) { client ->
+            val catalog = withProviderRequest(sessionKey, acquireLease = connection::acquireLease) { client ->
                 // The IO worker may have waited while an input callback fenced this draft.
                 if (!requestIsCurrent()) throw CancellationException("Model directory draft changed")
                 val activeRequest = ProviderModelDiscoveryRequest(
@@ -294,7 +334,7 @@ fun ProvidersPanel(
         } finally { if (sequence == catalogSequence) discoveryLoading = false }
     }
     fun submit() {
-        if (busy || operationBusy || recoveryRequired || !listHealthy || !enabled || sessionKey == null) return
+        if (busy || operationBusy || recoveryRequired || !listIsReady() || !latestEnabled || sessionKey == null) return
         val session = sessionKey; val sequence = ++operationSequence
         val initial = snapshot; val inputKey = key; val inputName = name; val inputId = id
         val inputUrl = baseUrl; val inputModels = selected; val editedModels = policy.editedModels(); val allow = localHttp; val inputPin = serverPin
@@ -337,10 +377,17 @@ fun ProvidersPanel(
                     if (current(session, sequence)) {
                         recovery = ProviderWriteRecoveryState(); close(); onProvidersChanged()
                         message = "已保存；正在自动刷新目录，尚未验证真实推理"
+                        val ticket = beginListRead(session, sequence) ?: return@launch
+                        listHealthy = false
                         val latest = cacheViewModel.readForRecovery(session) {
-                            withProviderRequest(session) { it.getProviders() }
+                            withProviderRequest(session, acquireLease = connection::acquireLease) { it.getProviders() }
                         }
-                        if (current(session, sequence)) { providers = latest; listHealthy = !latest.hasFileError; message = "配置已保存" }
+                        if (listReadCurrent(ticket, sequence)) {
+                            providers = latest; listHealthy = !latest.hasFileError; message = "配置已保存"
+                            if (listHealthy) {
+                                externalRefresh = externalRefresh.readConfirmed(ticket, currentSession(), latestExternalRevision)
+                            }
+                        }
                     }
                 } catch (e: CancellationException) { throw e } // pending nonsecret marker survives cancellation/recreation
                 catch (e: Exception) {
@@ -359,6 +406,7 @@ fun ProvidersPanel(
         }
     }
     fun openProvider(provider: ProviderSummary) {
+        if (!listIsReady() || busy || operationBusy || recoveryRequired) return
         if (!provider.editable) { onExternalEditor?.invoke(); return }
         val session = sessionKey ?: return; val sequence = ++operationSequence; setBusy(true)
         try {
@@ -449,7 +497,7 @@ fun ProvidersPanel(
         )
         val all = providers?.providers.orEmpty()
         val matches = all.filter { it.name.contains(search, true) || it.id.contains(search, true) }
-        if (listHealthy && all.isEmpty()) {
+        if (listReady && all.isEmpty()) {
             ProviderFormGroup(
                 title = "还没有提供商",
                 supporting = "选择 OpenAI、DeepSeek、OpenRouter，或添加自定义兼容连接。",
@@ -476,7 +524,7 @@ fun ProvidersPanel(
         matches.take(50).forEach { provider ->
             ProviderRow(
                 provider = provider,
-                enabled = enabled && !busy && !operationBusy && listHealthy &&
+                enabled = enabled && !busy && !operationBusy && listReady &&
                     !recoveryRequired && (provider.editable || onExternalEditor != null),
                 onClick = { openProvider(provider) },
             )
@@ -558,7 +606,10 @@ fun ProvidersPanel(
                                     enabled = !busy,
                                     singleLine = true,
                                     label = { Text("提供商名称") },
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("provider-name")
+                                        .semantics { testTagsAsResourceId = true },
                                 )
                                 OutlinedTextField(
                                     value = baseUrl,
@@ -758,17 +809,23 @@ fun ProvidersPanel(
                                     OutlinedTextField(
                                         value = manualText,
                                         onValueChange = {
-                                            manualText = it
-                                            selected = policy.manual(
-                                                it.split(',', '\n')
-                                                    .map(String::trim)
-                                                    .filter(String::isNotEmpty),
-                                            )
-                                            selectionMutation++
+                                            if (!busy) {
+                                                manualText = it
+                                                selected = policy.manual(
+                                                    it.split(',', '\n')
+                                                        .map(String::trim)
+                                                        .filter(String::isNotEmpty),
+                                                )
+                                                selectionMutation++
+                                            }
                                         },
+                                        enabled = !busy,
                                         minLines = 3,
                                         label = { Text("模型 ID，每行一个") },
-                                        modifier = Modifier.fillMaxWidth(),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("provider-manual-models")
+                                            .semantics { testTagsAsResourceId = true },
                                     )
                                 }
                             }
@@ -838,7 +895,7 @@ fun ProvidersPanel(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         ProviderConnectivityTestButton(
-                            enabled = enabled && !operationBusy && !busy && listHealthy && !recoveryRequired,
+                            enabled = enabled && !operationBusy && !busy && listReady && !recoveryRequired,
                             owner = sessionKey?.owner,
                             providerId = snapshot?.id,
                             providerName = name.ifBlank { "提供商" },
@@ -848,7 +905,7 @@ fun ProvidersPanel(
                             modifier = Modifier.weight(1f),
                         )
                         Button(
-                            enabled = enabled && !operationBusy && !busy && listHealthy &&
+                            enabled = enabled && !operationBusy && !busy && listReady &&
                                 !recoveryRequired && normalized.isNotEmpty() &&
                                 !newOriginNeedsKey && !discoveryLoading &&
                                 (snapshot != null || key.isNotBlank()) &&

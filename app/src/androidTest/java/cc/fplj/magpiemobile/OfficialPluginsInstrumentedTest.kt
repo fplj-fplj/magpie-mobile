@@ -8,6 +8,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -550,6 +552,7 @@ class OfficialPluginsInstrumentedTest {
                     // navigation action so Back cannot be consumed by the keyboard.
                     device.findObject(By.desc("返回提供商列表")).click()
                     await("provider editor closed") { !device.hasObject(By.text("保存连接")) }
+                    verifyProviderExternalReturn(scenario, artifacts)
                     device.findObject(By.text("聊天")).click()
                     await("chat model selector visible") { device.hasObject(By.res("chat-model-selector")) }
                     device.findObject(By.res("chat-model-selector")).click()
@@ -822,6 +825,104 @@ class OfficialPluginsInstrumentedTest {
                 }
             }
         }
+    }
+
+    /** Real Go edit and Dashboard ON_RESUME; browser return is controlled, no browser UI is opened. */
+    private fun verifyProviderExternalReturn(scenario: ActivityScenario<MainActivity>, artifacts: File) {
+        val row = By.res("provider-row:android-runtime")
+        val nameField = By.res("provider-name").enabled(true)
+        val nativeDraft = "Preserved native draft"
+        val externalName = "Android runtime external"
+        val pendingNotice = "外部配置已变化；当前草稿已保留，关闭编辑后将刷新提供商列表。"
+        lateinit var externalEditor: ExternalEditorViewModel
+        scenario.onActivity { activity ->
+            externalEditor = ViewModelProvider(activity)[ExternalEditorViewModel::class.java]
+        }
+        val previousRevision = externalEditor.state.value.returnRevision
+        await("saved provider row before external return") {
+            if (device.hasObject(row)) true else {
+                device.swipe(device.displayWidth / 2, device.displayHeight * 7 / 10,
+                    device.displayWidth / 2, device.displayHeight * 3 / 10, 20)
+                false
+            }
+        }
+        device.findObject(row).click()
+        await("existing provider name input") { device.hasObject(nameField) }
+        device.findObject(nameField).text = nativeDraft
+        scenario.onActivity { activity ->
+            activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                .hideSoftInputFromWindow(activity.window.decorView.windowToken, 0)
+        }
+        await("native provider draft committed") { device.findObject(nameField)?.text == nativeDraft }
+        // Obtain the real one-use link through the production VM. Do not retain or log it.
+        // The callback deliberately does not launch a browser; STARTED -> RESUMED below
+        // exercises the real Dashboard observer without depending on installed browser UI.
+        scenario.onActivity { externalEditor.open { } }
+        await("production external editor armed for return") {
+            var armed = false
+            scenario.onActivity { armed = externalEditor.awaitingReturn && !externalEditor.state.value.opening }
+            armed
+        }
+        val session = requireNotNull(NativeCoreSession.providerSessionKey())
+        runBlocking {
+            withProviderRequest(session) { client ->
+                val draft = ProviderEditDraft(client.editable("android-runtime"), name = externalName)
+                try { client.edit(draft) } finally { draft.clearSecret() }
+            }
+        }
+        scenario.moveToState(Lifecycle.State.STARTED)
+        scenario.moveToState(Lifecycle.State.RESUMED)
+        await("Dashboard resume consumes real external return") {
+            externalEditor.state.value.returnRevision == previousRevision + 1
+        }
+        scenario.onActivity { assertFalse(externalEditor.awaitingReturn) }
+        assertEquals(nativeDraft, device.findObject(nameField)?.text)
+        runBlocking {
+            withProviderRequest(session) { client ->
+                assertEquals("Native draft must not autosave on return", externalName,
+                    client.editable("android-runtime").name)
+            }
+        }
+        assertTrue(device.takeScreenshot(File(artifacts, "provider-external-return-draft.png")))
+        await("external return pending notice inside retained editor") {
+            if (device.hasObject(By.text(pendingNotice))) true else {
+                device.swipe(device.displayWidth / 2, device.displayHeight * 7 / 10,
+                    device.displayWidth / 2, device.displayHeight * 3 / 10, 20)
+                false
+            }
+        }
+        assertFalse("Unconfirmed list must block saving a stale revision",
+            device.findObject(By.res("provider-save")).isEnabled)
+        assertTrue(device.takeScreenshot(File(artifacts, "provider-external-return-pending.png")))
+        device.findObject(By.desc("返回提供商列表")).click()
+        await("external return closes native editor") { !device.hasObject(By.res("provider-save")) }
+        await("external return automatically refreshes the provider row") {
+            device.findObject(row)?.findObject(By.text(externalName)) != null &&
+                device.findObject(row)?.isEnabled == true
+        }
+        assertTrue(device.takeScreenshot(File(artifacts, "provider-external-return-refreshed.png")))
+        device.findObject(row).click()
+        // The editor retains its tab ScrollState across closing; the pending notice above
+        // may have left the connection form at the bottom. Reveal the name before reading it.
+        await("reopened provider name field visible") {
+            if (device.hasObject(nameField)) true else {
+                device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 10,
+                    device.displayWidth / 2, device.displayHeight * 7 / 10, 20)
+                false
+            }
+        }
+        await("reopened provider uses fresh canonical external name") {
+            device.findObject(nameField)?.text == externalName
+        }
+        device.findObject(By.desc("返回提供商列表")).click()
+        await("reopened provider editor closed") { !device.hasObject(By.res("provider-save")) }
+        File(artifacts, "provider-external-return.txt").writeText(
+            "PASS: installed Go canonical provider edit; real Activity-owned ExternalEditorViewModel " +
+                "obtained its one-use link without retaining it; controlled STARTED -> RESUMED " +
+                "triggered the production Dashboard return observer. Native draft stayed unchanged, " +
+                "pending notice blocked stale saving, closing the editor automatically refreshed " +
+                "the row and reopening read the new canonical name. No browser UI was launched.\n",
+        )
     }
 
     /** Actual profile form -> retained Activity VM -> UI send -> installed Go -> local upstream. */
