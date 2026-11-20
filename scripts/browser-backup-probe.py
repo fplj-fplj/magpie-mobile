@@ -646,7 +646,7 @@ class Probe:
     def observe_prepared_page(self, prefix: str, evidence: dict, hit_start: int) -> dict:
         """Read-only sampling after both known Chrome actions; never navigate or tap."""
         observation = {"maximumSeconds": 30, "maximumAdditionalCaptures": 3,
-                       "samples": [], "startedAt": now(), "status": "not_needed"}
+                       "initialEvidence": evidence, "samples": [], "startedAt": now(), "status": "not_needed"}
         self.report["firstRunPreparation"]["pageMarkerObservation"] = observation
         deadline = time.monotonic() + observation["maximumSeconds"]
         for index in range(observation["maximumAdditionalCaptures"]):
@@ -655,7 +655,12 @@ class Probe:
                 break
             with self.hits_lock:
                 hit_seen = len(self.page_hits) > hit_start
-            if (not hit_seen or evidence["captureErrors"] or not evidence["hierarchy"]
+            # Run 44821057937 showed the actual safe page after both known
+            # actions, but uiautomator exited 137 after reporting its dump.
+            # Preserve that failed sample and reacquire, without any UI action.
+            # A later complete capture must still satisfy page_ready in full.
+            if (not hit_seen or not evidence["screenshot"]
+                    or set(evidence["captureErrors"]) - {"hierarchy_dump_failed"}
                     or not all(self.independent_foreground(evidence[key])
                                and evidence[key]["resumedComponent"] == CHROME_TABBED
                                and evidence[key]["focusedComponent"] == CHROME_TABBED

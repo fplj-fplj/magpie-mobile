@@ -539,19 +539,24 @@ class BrowserBackupInstrumentedTest {
         // A matching basename in another provider/root is not sufficient evidence.
         clickNamed(pickerPackage, listOf("Show roots", "显示根目录", "显示根目录列表"))
         clickNamed(pickerPackage, listOf("Downloads", "下载内容", "下载"))
-        var selected = false
-        repeat(12) {
-            if (!selected) {
-                val file = namedControl(pickerPackage, listOf(download.name))
-                if (file != null) { file.click(); selected = true } else {
-                    val list = device.findObjects(By.pkg(pickerPackage).scrollable(true))
-                        .maxByOrNull { it.visibleBounds.height() }
-                        ?: throw AcceptanceFailure(FailureReason.DOCUMENTS_UI_LIST_NOT_RECOGNIZED)
-                    list.scroll(Direction.DOWN, .65f)
-                }
+        var scrollAttempts = 0
+        // Root navigation is asynchronous; a loading or single-file directory
+        // need not expose a scrollable node. Wait for the real exact file row.
+        await(30_000, FailureReason.DOWNLOADED_FILE_NOT_REACHED_IN_PICKER) {
+            check(device.currentPackageName == pickerPackage) { "unexpected file picker foreground" }
+            val file = namedControl(pickerPackage, listOf(download.name))
+            if (file != null) {
+                file.click()
+                true
+            } else {
+                if (scrollAttempts < 12) device.findObjects(By.pkg(pickerPackage).scrollable(true))
+                    .maxByOrNull { it.visibleBounds.height() }?.let { list ->
+                        scrollAttempts += 1
+                        list.scroll(Direction.DOWN, .65f)
+                    }
+                false
             }
         }
-        accept(selected, FailureReason.DOWNLOADED_FILE_NOT_REACHED_IN_PICKER)
         var openClicked = false
         await(15_000) {
             if (device.currentPackageName == CHROME && webViewOrNull() != null) true else {
@@ -667,7 +672,9 @@ class BrowserBackupInstrumentedTest {
         private const val B_MODEL = "backup-after"
         private const val WRONG_PHRASE_ERROR = "wrong passphrase, or the file was changed"
         private val SETTINGS = listOf("Settings", "设置")
-        private val SYNC_TAB = listOf("Sync and backup", "同步与备份")
+        // The fixed official .warm-tabs CSS applies text-transform: uppercase;
+        // retain both static forms within the Settings-only tab selector.
+        private val SYNC_TAB = listOf("Sync and backup", "SYNC AND BACKUP", "同步与备份")
         private val EXPORT_OPEN = listOf("Export…", "导出…")
         private val EXPORT_SUBMIT = listOf("Export", "导出")
         private val IMPORT_OPEN = listOf("Import…", "导入…")

@@ -50,7 +50,7 @@ def command(args):
     return completed.stdout.decode("utf-8", errors="strict")
 
 safe_labels = {
-    "Settings", "设置", "Sync and backup", "同步与备份", "Export…", "导出…", "Export", "导出",
+    "Settings", "设置", "Sync and backup", "SYNC AND BACKUP", "同步与备份", "Export…", "导出…", "Export", "导出",
     "Import…", "导入…", "Import", "导入", "Choose…", "选择…", "Download · magpie.magpie-backup",
     "下载 · magpie.magpie-backup", "Files", "文件", "Browse", "浏览", "Downloads", "下载内容", "下载",
     "Open", "打开", "Show roots", "显示根目录", "显示根目录列表", "Passphrase", "passphrase", "口令",
