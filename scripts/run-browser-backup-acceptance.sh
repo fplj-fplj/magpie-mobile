@@ -53,7 +53,7 @@ safe_labels = {
     "Settings", "设置", "Sync and backup", "SYNC AND BACKUP", "同步与备份", "Export…", "导出…", "Export", "导出",
     "Import…", "导入…", "Import", "导入", "Choose…", "选择…", "Download · magpie.magpie-backup",
     "下载 · magpie.magpie-backup", "Files", "文件", "Browse", "浏览", "Downloads", "下载内容", "下载",
-    "Open", "打开", "Show roots", "显示根目录", "显示根目录列表", "Passphrase", "passphrase", "口令",
+    "Open", "打开", "Close", "关闭", "Show roots", "显示根目录", "显示根目录列表", "Passphrase", "passphrase", "口令",
     "again", "再输入一次", "No file chosen", "未选择文件", "Cancel", "取消", "Download", "Download anyway",
     "仍然下载", "wrong passphrase, or the file was changed", "", "[redacted]",
 }

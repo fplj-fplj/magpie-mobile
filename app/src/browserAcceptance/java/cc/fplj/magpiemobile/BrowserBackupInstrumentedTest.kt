@@ -106,10 +106,11 @@ class BrowserBackupInstrumentedTest {
                     phase = "opening_official_sync_settings"
                     clickNamed(CHROME, SETTINGS)
                     revealSyncTab().click()
-                    revealWebControl(EXPORT_OPEN).click()
+                    clickWebControl(EXPORT_OPEN)
+                    awaitWebFormOpened(EXPORT_OPEN)
                     phase = "exporting_via_official_web_form"
                     setRealPasswordFields(listOf(phrase, phrase))
-                    revealWebControl(EXPORT_SUBMIT).click()
+                    clickWebControl(EXPORT_SUBMIT)
                     downloaded = awaitRealDownload(baseline)
                     assertPrivateArchivesUnchanged(privateArchiveBaseline)
                     safeHierarchy("browser-backup-after-download.xml")
@@ -123,8 +124,9 @@ class BrowserBackupInstrumentedTest {
                     assertFixture(session, before = false)
 
                     phase = "choosing_real_download_from_official_import"
-                    revealWebControl(IMPORT_OPEN, startAtTop = true).click()
-                    revealWebControl(CHOOSE).click()
+                    clickWebControl(IMPORT_OPEN, startAtTop = true)
+                    awaitWebFormOpened(IMPORT_OPEN)
+                    clickWebControl(CHOOSE)
                     chooseActualDownload(requireNotNull(downloaded))
                     await(30_000) { hasWebName(requireNotNull(downloaded).name) }
                     assertDownloadUnchanged()
@@ -132,7 +134,7 @@ class BrowserBackupInstrumentedTest {
 
                     phase = "wrong_phrase_must_preserve_B"
                     setRealPasswordFields(listOf(wrongPhrase))
-                    revealWebControl(IMPORT_SUBMIT).click()
+                    clickWebControl(IMPORT_SUBMIT)
                     await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
                         accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
                         hasWebText(WRONG_PHRASE_ERROR)
@@ -149,7 +151,7 @@ class BrowserBackupInstrumentedTest {
                     // Its filename may be above the viewport after the error. The
                     // successful restore below must use this already-selected file.
                     setRealPasswordFields(listOf(phrase))
-                    revealWebControl(IMPORT_SUBMIT).click()
+                    clickWebControl(IMPORT_SUBMIT)
                     await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
                     assertFixture(session, before = true)
                     assertDownloadUnchanged()
@@ -358,6 +360,69 @@ class BrowserBackupInstrumentedTest {
             SystemClock.sleep(200)
         }
         throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
+    }
+
+    private fun clickWebControl(names: List<String>, startAtTop: Boolean = false) {
+        revealWebControl(names, startAtTop)
+        // Chrome's real AX default action avoids UiObject2's center-coordinate
+        // tap on an animated or clipped button. Never inject JS or retry a click.
+        await(15_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
+            val nodes = webButtonNodes(names)
+            try {
+                accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+                nodes.singleOrNull()?.let {
+                    accept(it.performAction(AccessibilityNodeInfo.ACTION_CLICK),
+                        FailureReason.OFFICIAL_WEB_CLICK_REJECTED)
+                    true
+                } ?: false
+            } finally { nodes.forEach { it.recycle() } }
+        }
+    }
+
+    private fun awaitWebFormOpened(opener: List<String>) {
+        // ACTION_CLICK only acknowledges receipt. Require the official toggle
+        // state; setRealPasswordFields then requires the actual password inputs.
+        await(15_000, FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED) {
+            val openers = webButtonNodes(opener)
+            try {
+                val closers = webButtonNodes(CLOSE)
+                try {
+                    accept(openers.size <= 1 && closers.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+                    openers.isEmpty() && closers.size == 1
+                } finally { closers.forEach { it.recycle() } }
+            } finally { openers.forEach { it.recycle() } }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun webButtonNodes(names: List<String>): List<AccessibilityNodeInfo> {
+        accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
+        val matches = mutableListOf<AccessibilityNodeInfo>()
+        var webViews = 0
+        fun visit(node: AccessibilityNodeInfo, insideDocument: Boolean) {
+            val isDocument = node.packageName?.toString() == CHROME && node.isVisibleToUser &&
+                node.className?.toString() == "android.webkit.WebView"
+            if (isDocument) webViews += 1
+            val inDocument = insideDocument || isDocument
+            if (inDocument && node.packageName?.toString() == CHROME && node.isVisibleToUser &&
+                node.className?.toString() == "android.widget.Button" && node.isEnabled && node.isClickable &&
+                (node.text?.toString() in names || node.contentDescription?.toString() in names)) {
+                matches += AccessibilityNodeInfo.obtain(node)
+            }
+            for (i in 0 until node.childCount) node.getChild(i)?.let {
+                try { visit(it, inDocument) } finally { it.recycle() }
+            }
+        }
+        try {
+            instrumentation.uiAutomation.rootInActiveWindow?.let {
+                try { visit(it, false) } finally { it.recycle() }
+            }
+            accept(webViews <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+            return matches
+        } catch (failure: Throwable) {
+            matches.forEach { it.recycle() }
+            throw failure
+        }
     }
 
     private fun webViewOrNull(): UiObject2? = device.findObject(By.pkg(CHROME).clazz("android.webkit.WebView"))
@@ -644,7 +709,8 @@ class BrowserBackupInstrumentedTest {
         BROWSER_SETUP_REQUIRED, INDEPENDENT_BROWSER_NOT_FOREGROUND, CURRENT_URL_EDIT_ACTION_NOT_REACHED,
         CLEAN_OFFICIAL_URL_NOT_REACHED,
         OFFICIAL_UI_NOT_RECOGNIZED, OFFICIAL_PAGE_NOT_RESTORED, SYNC_TAB_NOT_REACHED,
-        OFFICIAL_WEB_CONTROL_NOT_REACHED, AMBIGUOUS_ACCESSIBLE_CONTROL,
+        OFFICIAL_WEB_CONTROL_NOT_REACHED, OFFICIAL_WEB_CLICK_REJECTED, OFFICIAL_WEB_FORM_NOT_REACHED,
+        AMBIGUOUS_ACCESSIBLE_CONTROL,
         PASSWORD_INPUT_REJECTED, PASSWORD_INPUTS_NOT_RECOGNIZED, PRIVATE_EXPORT_PATH_RETURNED, PRIVATE_BACKUP_ARCHIVE_CHANGED,
         MULTIPLE_NEW_DOWNLOADS, STABLE_PUBLIC_DOWNLOAD_NOT_REACHED, DOWNLOAD_HASH_TOOL_FAILED,
         DOWNLOADED_FILE_CHANGED, DOCUMENTS_UI_LIST_NOT_RECOGNIZED, DOWNLOADED_FILE_NOT_REACHED_IN_PICKER,
@@ -679,6 +745,7 @@ class BrowserBackupInstrumentedTest {
         private val EXPORT_SUBMIT = listOf("Export", "导出")
         private val IMPORT_OPEN = listOf("Import…", "导入…")
         private val IMPORT_SUBMIT = listOf("Import", "导入")
+        private val CLOSE = listOf("Close", "关闭")
         private val CHOOSE = listOf("Choose…", "选择…")
         private val DOWNLOAD_RETRY = listOf("Download · magpie.magpie-backup", "下载 · magpie.magpie-backup")
         private val DOCUMENTS_PACKAGES = setOf("com.google.android.documentsui", "com.android.documentsui")
@@ -695,7 +762,7 @@ class BrowserBackupInstrumentedTest {
         private val SAFE_STRUCTURAL_ATTRIBUTES = setOf("rotation", "index", "resource-id", "class", "package", "bounds",
             "checkable", "checked", "clickable", "enabled", "focusable", "focused", "scrollable",
             "long-clickable", "password", "selected", "display-id", "drawing-order", "visible-to-user")
-        private val SAFE_LABELS = (SETTINGS + SYNC_TAB + EXPORT_OPEN + EXPORT_SUBMIT + IMPORT_OPEN +
+        private val SAFE_LABELS = (SETTINGS + SYNC_TAB + CLOSE + EXPORT_OPEN + EXPORT_SUBMIT + IMPORT_OPEN +
             IMPORT_SUBMIT + CHOOSE + DOWNLOAD_RETRY + listOf("Files", "文件", "Browse", "浏览", "Downloads",
             "下载内容", "下载", "Open", "打开", "Show roots", "显示根目录", "显示根目录列表", "Passphrase",
             "passphrase", "口令", "again", "再输入一次", "No file chosen", "未选择文件", "Cancel", "取消",
