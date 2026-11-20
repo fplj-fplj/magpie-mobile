@@ -10,7 +10,7 @@ import kotlinx.serialization.json.jsonObject
  * SSE 流式聊天解析器（plan.md §3 聊天测试「流式」的纯协议层，无 HTTP/Android 依赖）。
  *
  * 输入：按行送入 OpenAI Chat Completions SSE（data: {...} / data: [DONE] / 空行分隔）。
- * 输出：正文与 reasoning_content 分别回调并分别拼接；[DONE] 结束返回完整正文。
+ * 输出：正文与 reasoning_content（兼容 reasoning 别名）分别回调并分别拼接；[DONE] 结束返回完整正文。
  * 错误事件只上抛固定安全分类，不携带上游自由文本/JSON；失败保留已收增量。
  */
 class SseChatParser internal constructor(
@@ -100,7 +100,12 @@ class SseChatParser internal constructor(
         // JsonNull 也是 JsonPrimitive；只接受真正的 JSON 字符串，避免把 null/数字
         // 误拼进正文或思考内容。两类增量分别保存，顺序为 reasoning → content。
         val content = delta?.get("content").stringOrNull()
-        val reasoning = delta?.get("reasoning_content").stringOrNull()
+        val reasoningContent = delta?.get("reasoning_content").stringOrNull()
+        // Some relays use reasoning instead. Choose one field per event, preserving whitespace
+        // deltas and existing empty-string callbacks without duplicating mirrored thinking.
+        val reasoning = reasoningContent?.takeIf { it.isNotEmpty() }
+            ?: delta?.get("reasoning").stringOrNull()
+            ?: reasoningContent
         if (content == null && reasoning == null) null else StreamEvent(content, reasoning)
     } catch (e: CancellationException) {
         throw e

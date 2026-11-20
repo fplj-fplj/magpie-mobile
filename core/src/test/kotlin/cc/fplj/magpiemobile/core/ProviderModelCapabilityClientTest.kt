@@ -316,6 +316,44 @@ class ProviderModelCapabilityClientTest {
     }
 
     @Test
+    fun reasoningAliasOnlyStreamPassesAndKeepsProviderScopedDetails() {
+        capabilityResponses(stream = {
+            "data: {\"choices\":[{\"delta\":{\"content\":null,\"reasoning_content\":null,\"reasoning\":\"stream thought\"}}]}\n\n" +
+                "data: [DONE]\n\n"
+        })
+        val progress = CopyOnWriteArrayList<ProviderCapabilityResult>()
+
+        val report = client().run("saved", "vendor/model", progress::add)
+
+        assertTrue(report.results.all { it.status == ProviderCapabilityStatus.PASSED })
+        val stream = report.results.single { it.check == ProviderCapabilityCheck.STREAMING }
+        assertEquals("", stream.preview)
+        assertEquals("stream thought", stream.reasoning)
+        assertEquals(stream, progress.last { it.check == ProviderCapabilityCheck.STREAMING })
+        assertEquals("saved/vendor/model", assertNotNull(report.route).gatewayModelId)
+        assertEquals(3, chatRequests.size)
+        assertTrue(chatRequests.all { it.contains("\"model\":\"saved/vendor/model\"") })
+    }
+
+    @Test
+    fun mixedReasoningNamesInStreamAreNotDuplicatedAndStaySeparateFromAnswer() {
+        capabilityResponses(stream = {
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"first \",\"reasoning\":\"first \"}}]}\n\n" +
+                "data: {\"choices\":[{\"delta\":{\"reasoning\":\"second\"}}]}\n\n" +
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"reasoning\":\" \"}}]}\n\n" +
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"third\",\"reasoning\":\"ignored\",\"content\":\"stream ok\"}}]}\n\n" +
+                "data: [DONE]\n\n"
+        })
+
+        val report = client().run("saved", "vendor/model")
+
+        assertTrue(report.results.all { it.status == ProviderCapabilityStatus.PASSED })
+        assertEquals("stream ok", report.results[1].preview)
+        assertEquals("first second third", report.results[1].reasoning)
+        assertEquals(3, chatRequests.size)
+    }
+
+    @Test
     fun leadingWhitespaceBeyondPreviewLimitDoesNotHideRealStreamContent() {
         capabilityResponses(stream = {
             "data: {\"choices\":[{\"delta\":{\"content\":\"${" ".repeat(400)}\",\"reasoning_content\":\"${" ".repeat(2_100)}\"}}]}\n\n" +
@@ -417,6 +455,20 @@ class ProviderModelCapabilityClientTest {
         assertTrue(content.length + reasoning.length > 16 * 1024)
         capabilityResponses(stream = {
             "data: {\"choices\":[{\"delta\":{\"content\":\"$content\",\"reasoning_content\":\"$reasoning\"}}]}\n\n" +
+                "data: [DONE]\n\n"
+        })
+        val progress = CopyOnWriteArrayList<ProviderCapabilityResult>()
+
+        val report = client().run("saved", "vendor/model", progress::add)
+
+        assertStreamResponseLimit(report, progress, secret)
+    }
+
+    @Test
+    fun oversizedReasoningAliasFailsWithoutPublishingPartialTextAndToolCheckStillRuns() {
+        val secret = "fixture-reasoning-alias-overflow"
+        capabilityResponses(stream = {
+            "data: {\"choices\":[{\"delta\":{\"content\":\"$secret\",\"reasoning\":\"${"r".repeat(16 * 1024)}\"}}]}\n\n" +
                 "data: [DONE]\n\n"
         })
         val progress = CopyOnWriteArrayList<ProviderCapabilityResult>()
