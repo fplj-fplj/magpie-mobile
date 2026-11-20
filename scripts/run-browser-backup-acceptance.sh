@@ -100,12 +100,13 @@ try:
             require(record.get("status") in {"PASS", "FAIL"} and record.get("phase") in safe_phases, "UNSAFE_TEST_RESULT_STATUS")
             require(record.get("failureType") is None or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,100}", record["failureType"]), "UNSAFE_FAILURE_TYPE")
             require(record.get("failureReason") is None or re.fullmatch(r"[A-Z][A-Z0-9_]{0,100}", record["failureReason"]), "UNSAFE_FAILURE_REASON")
+            require(record.get("failureLine") is None or (type(record["failureLine"]) is int and 1 <= record["failureLine"] <= 20_000), "UNSAFE_FAILURE_LINE")
             require(record.get("browserPackage") == "com.android.chrome" and record.get("keyEqualityClaimed") is False, "TEST_RESULT_SCOPE_MISMATCH")
             for field in ("cleanRedirectObserved", "realDownloadObserved", "downloadRetryClicked"):
                 require(type(record.get(field)) is bool, "TEST_RESULT_BOOLEAN_MISSING")
             require(type(record.get("privateArchiveChecks")) is int and 0 <= record["privateArchiveChecks"] <= 3, "INVALID_PRIVATE_ARCHIVE_CHECK_COUNT")
             curated = {key: record.get(key) for key in (
-                "status", "phase", "failureType", "failureReason", "cleanRedirectObserved", "realDownloadObserved",
+                "status", "phase", "failureType", "failureReason", "failureLine", "cleanRedirectObserved", "realDownloadObserved",
                 "downloadRetryClicked", "privateArchiveChecks", "browserPackage", "keyEqualityClaimed")}
             download = record.get("download")
             if download is not None:

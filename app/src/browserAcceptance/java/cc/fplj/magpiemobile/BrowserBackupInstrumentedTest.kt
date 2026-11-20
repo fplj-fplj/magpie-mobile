@@ -57,6 +57,7 @@ class BrowserBackupInstrumentedTest {
         secrets += listOf(phrase, wrongPhrase, fixtureKey)
         var failureType: String? = null
         var failureReason: FailureReason? = null
+        var failureLine: Int? = null
         try {
             check(phrase != wrongPhrase) { "distinct runtime phrases required" }
             check(android.os.Build.FINGERPRINT.startsWith("google/sdk_gphone") &&
@@ -187,6 +188,10 @@ class BrowserBackupInstrumentedTest {
             // Do not propagate the original exception: framework/HTTP text can include inputs.
             failureType = failure.javaClass.simpleName
             failureReason = (failure as? AcceptanceFailure)?.reason ?: FailureReason.UNEXPECTED_EXCEPTION
+            // Source location only: exception messages/causes can contain form inputs.
+            failureLine = failure.stackTrace.firstOrNull {
+                it.className == BrowserBackupInstrumentedTest::class.java.name
+            }?.lineNumber?.takeIf { it in 1..20_000 }
         }
         try {
             if (!failureHierarchyCaptured) safeHierarchy("browser-backup-final-sanitized.xml")
@@ -200,6 +205,7 @@ class BrowserBackupInstrumentedTest {
                 .put("phase", phase)
                 .put("failureType", failureType ?: JSONObject.NULL)
                 .put("failureReason", failureReason?.name ?: JSONObject.NULL)
+                .put("failureLine", failureLine ?: JSONObject.NULL)
                 .put("cleanRedirectObserved", cleanRedirectObserved)
                 .put("realDownloadObserved", downloaded != null)
                 .put("downloadRetryClicked", downloadRetryClicked)
@@ -352,13 +358,22 @@ class BrowserBackupInstrumentedTest {
     }
 
     private fun revealWebControl(names: List<String>, startAtTop: Boolean = false): UiObject2 {
-        if (startAtTop) repeat(4) { webView().scroll(Direction.UP, .8f) }
+        if (startAtTop) for (attempt in 0 until 4) {
+            val accepted = scrollWebSettings(Direction.UP)
+            SystemClock.sleep(200)
+            if (!accepted) break
+        }
         repeat(12) {
             namedControl(CHROME, names)?.let { return it }
             check(device.currentPackageName == CHROME) { "unexpected foreground while locating web control" }
-            webView().scroll(Direction.DOWN, .6f)
+            val accepted = scrollWebSettings(Direction.DOWN)
             SystemClock.sleep(200)
+            if (!accepted) {
+                namedControl(CHROME, names)?.let { return it }
+                throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
+            }
         }
+        namedControl(CHROME, names)?.let { return it }
         throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
     }
 
@@ -394,8 +409,13 @@ class BrowserBackupInstrumentedTest {
         }
     }
 
+    private fun webButtonNodes(names: List<String>): List<AccessibilityNodeInfo> = webNodes { node ->
+        node.className?.toString() == "android.widget.Button" && node.isEnabled && node.isClickable &&
+            (node.text?.toString() in names || node.contentDescription?.toString() in names)
+    }
+
     @Suppress("DEPRECATION")
-    private fun webButtonNodes(names: List<String>): List<AccessibilityNodeInfo> {
+    private fun webNodes(matchesNode: (AccessibilityNodeInfo) -> Boolean): List<AccessibilityNodeInfo> {
         accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
         val matches = mutableListOf<AccessibilityNodeInfo>()
         var webViews = 0
@@ -404,9 +424,7 @@ class BrowserBackupInstrumentedTest {
                 node.className?.toString() == "android.webkit.WebView"
             if (isDocument) webViews += 1
             val inDocument = insideDocument || isDocument
-            if (inDocument && node.packageName?.toString() == CHROME && node.isVisibleToUser &&
-                node.className?.toString() == "android.widget.Button" && node.isEnabled && node.isClickable &&
-                (node.text?.toString() in names || node.contentDescription?.toString() in names)) {
+            if (inDocument && node.packageName?.toString() == CHROME && node.isVisibleToUser && matchesNode(node)) {
                 matches += AccessibilityNodeInfo.obtain(node)
             }
             for (i in 0 until node.childCount) node.getChild(i)?.let {
@@ -425,8 +443,40 @@ class BrowserBackupInstrumentedTest {
         }
     }
 
+    @Suppress("DEPRECATION")
+    private fun scrollWebSettings(direction: Direction): Boolean {
+        val action = when (direction) {
+            Direction.UP -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            Direction.DOWN -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            else -> throw AcceptanceFailure(FailureReason.OFFICIAL_SETTINGS_SCROLLER_NOT_RECOGNIZED)
+        }
+        val tabs = webNodes { node ->
+            node.className?.toString() == "android.widget.TabWidget" && node.isEnabled &&
+                node.text?.toString() in SETTINGS
+        }
+        try {
+            accept(tabs.size == 1, FailureReason.OFFICIAL_SETTINGS_SCROLLER_NOT_RECOGNIZED)
+            var ancestor = tabs.single().parent
+            try {
+                while (true) {
+                    val node = ancestor ?: break
+                    if (node.packageName?.toString() != CHROME ||
+                        node.className?.toString() == "android.webkit.WebView") break
+                    if (node.isScrollable && node.isEnabled && node.isVisibleToUser) {
+                        // Scroll the real settings container, never gesture on Chrome's
+                        // non-scrollable WebView or pull the whole browser page down.
+                        return node.actionList.any { it.id == action } && node.performAction(action)
+                    }
+                    val parent = node.parent
+                    ancestor = parent
+                    node.recycle()
+                }
+                throw AcceptanceFailure(FailureReason.OFFICIAL_SETTINGS_SCROLLER_NOT_RECOGNIZED)
+            } finally { ancestor?.recycle() }
+        } finally { tabs.forEach { it.recycle() } }
+    }
+
     private fun webViewOrNull(): UiObject2? = device.findObject(By.pkg(CHROME).clazz("android.webkit.WebView"))
-    private fun webView(): UiObject2 = requireNotNull(webViewOrNull()) { "real browser document missing" }
 
     private fun clickNamed(pkg: String, names: List<String>) {
         await(15_000) { namedControl(pkg, names) != null }
@@ -459,28 +509,40 @@ class BrowserBackupInstrumentedTest {
     private fun hasImportSuccess(): Boolean = hasWebText("Providers:") || hasWebText("供应商：")
 
     private fun setRealPasswordFields(values: List<String>) {
-        // A previous submit/error can leave the fields above the viewport.
-        repeat(4) { webView().scroll(Direction.UP, .8f) }
-        repeat(10) {
-            val nodes = passwordNodes()
-            try {
-                if (nodes.size == values.size) {
-                    nodes.zip(values).forEach { (node, value) ->
-                        val arguments = Bundle().apply {
-                            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
-                        }
-                        // Standard accessibility text entry into actual Chrome password inputs.
-                        // This does not execute page JS or inject any browser File/URI object.
-                        accept(node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments),
-                            FailureReason.PASSWORD_INPUT_REJECTED)
-                    }
-                    return
-                }
-            } finally { nodes.forEach { it.recycle() } }
-            webView().scroll(Direction.DOWN, .45f)
+        // File selection may return with the real inputs already visible. Enter
+        // them before scrolling; a previous error can instead leave them above.
+        if (setVisiblePasswordFields(values)) return
+        for (attempt in 0 until 4) {
+            val accepted = scrollWebSettings(Direction.UP)
             SystemClock.sleep(200)
+            if (setVisiblePasswordFields(values)) return
+            if (!accepted) break
+        }
+        repeat(10) {
+            val accepted = scrollWebSettings(Direction.DOWN)
+            SystemClock.sleep(200)
+            if (setVisiblePasswordFields(values)) return
+            if (!accepted) throw AcceptanceFailure(FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
         }
         throw AcceptanceFailure(FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun setVisiblePasswordFields(values: List<String>): Boolean {
+        val nodes = passwordNodes()
+        try {
+            if (nodes.size != values.size) return false
+            nodes.zip(values).forEach { (node, value) ->
+                val arguments = Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
+                }
+                // Standard accessibility entry into actual Chrome password inputs;
+                // no page JS or browser File/URI object is injected.
+                accept(node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments),
+                    FailureReason.PASSWORD_INPUT_REJECTED)
+            }
+            return true
+        } finally { nodes.forEach { it.recycle() } }
     }
 
     @Suppress("DEPRECATION")
@@ -710,6 +772,7 @@ class BrowserBackupInstrumentedTest {
         CLEAN_OFFICIAL_URL_NOT_REACHED,
         OFFICIAL_UI_NOT_RECOGNIZED, OFFICIAL_PAGE_NOT_RESTORED, SYNC_TAB_NOT_REACHED,
         OFFICIAL_WEB_CONTROL_NOT_REACHED, OFFICIAL_WEB_CLICK_REJECTED, OFFICIAL_WEB_FORM_NOT_REACHED,
+        OFFICIAL_SETTINGS_SCROLLER_NOT_RECOGNIZED,
         AMBIGUOUS_ACCESSIBLE_CONTROL,
         PASSWORD_INPUT_REJECTED, PASSWORD_INPUTS_NOT_RECOGNIZED, PRIVATE_EXPORT_PATH_RETURNED, PRIVATE_BACKUP_ARCHIVE_CHANGED,
         MULTIPLE_NEW_DOWNLOADS, STABLE_PUBLIC_DOWNLOAD_NOT_REACHED, DOWNLOAD_HASH_TOOL_FAILED,
