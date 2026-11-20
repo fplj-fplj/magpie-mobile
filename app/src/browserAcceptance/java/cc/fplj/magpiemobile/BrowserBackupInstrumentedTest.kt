@@ -22,6 +22,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,6 +49,9 @@ class BrowserBackupInstrumentedTest {
     private var privateArchiveChecks = 0
     private var passed = false
     private var failureHierarchyCaptured = false
+    private var webControlOrdinal = 0
+    private var webControlTrace = JSONArray()
+    private var lastWebObservation: JSONObject? = null
 
     @Test fun officialBrowserBackupRoundTripUsesRealDownloadedFile() {
         // Never pass these via instrumentation arguments or write their values to evidence.
@@ -211,6 +215,9 @@ class BrowserBackupInstrumentedTest {
                 .put("downloadRetryClicked", downloadRetryClicked)
                 .put("privateArchiveChecks", privateArchiveChecks)
                 .put("browserPackage", CHROME)
+                .put("webControlOrdinal", webControlOrdinal)
+                .put("webControlTrace", webControlTrace)
+                .put("lastWebObservation", lastWebObservation ?: JSONObject.NULL)
                 .put("scope", "Real Chrome UI, public Downloads, real system picker, production same-session RPC")
                 .put("keyEqualityClaimed", false)
             downloaded?.let {
@@ -361,15 +368,28 @@ class BrowserBackupInstrumentedTest {
         // Chrome's real AX default action avoids UiObject2's center-coordinate
         // tap on an animated or clipped button. Never inject JS or retry a click.
         var showRequested = false
+        var gestures = 0
+        var lastMotionAt = 0L
+        var previousScrollTarget: Rect? = null
+        beginWebControl()
         await(15_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
             val nodes = webButtonNodes(names)
             try {
                 accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
                 nodes.singleOrNull()?.let { node ->
+                    observeWebNode(node)
                     if (!webNodeOnScreen(node)) {
                         if (!showRequested) {
                             showWebNode(node)
                             showRequested = true
+                            lastMotionAt = SystemClock.elapsedRealtime()
+                        } else if (gestures < 6 && SystemClock.elapsedRealtime() - lastMotionAt >= 750) {
+                            val bounds = Rect().also { node.getBoundsInScreen(it) }
+                            accept(previousScrollTarget != bounds, FailureReason.OFFICIAL_WEB_SCROLL_NO_PROGRESS)
+                            previousScrollTarget = bounds
+                            scrollRealWebPane(node)
+                            gestures += 1
+                            lastMotionAt = SystemClock.elapsedRealtime()
                         }
                         false
                     } else {
@@ -433,8 +453,90 @@ class BrowserBackupInstrumentedTest {
 
     private fun showWebNode(node: AccessibilityNodeInfo) {
         val action = AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id
-        accept(node.actionList.any { it.id == action } && node.performAction(action),
-            FailureReason.OFFICIAL_WEB_SHOW_REJECTED)
+        val accepted = node.actionList.any { it.id == action } && node.performAction(action)
+        recordWebAction("SHOW", node, accepted)
+        accept(accepted, FailureReason.OFFICIAL_WEB_SHOW_REJECTED)
+    }
+
+    private data class WebPane(val bounds: Rect, val canScrollUp: Boolean)
+
+    @Suppress("DEPRECATION")
+    private fun webPane(node: AccessibilityNodeInfo): WebPane? {
+        var ancestor = node.parent
+        var pane: Rect? = null
+        var canScrollUp = false
+        try {
+            while (true) {
+                val parent = ancestor ?: return null
+                if (parent.packageName?.toString() != CHROME || !parent.isVisibleToUser) return null
+                val bounds = Rect().also { parent.getBoundsInScreen(it) }
+                if (parent.className?.toString() == "android.webkit.WebView") {
+                    val viewport = pane ?: return null
+                    if (!viewport.intersect(bounds) ||
+                        !viewport.intersect(0, 0, device.displayWidth, device.displayHeight)) return null
+                    return WebPane(viewport, canScrollUp)
+                }
+                if (parent.isScrollable) {
+                    if (!parent.isEnabled || bounds.isEmpty) return null
+                    if (pane == null) {
+                        pane = bounds
+                        // BACKWARD can mean horizontal movement in Chrome. Only
+                        // explicit UP proves this pane can absorb a downward finger swipe.
+                        canScrollUp = parent.actionList.any {
+                            it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
+                        }
+                    } else if (!pane.intersect(bounds)) return null
+                }
+                ancestor = parent.parent
+                parent.recycle()
+            }
+        } finally { ancestor?.recycle() }
+    }
+
+    private fun scrollRealWebPane(node: AccessibilityNodeInfo) {
+        val pane = webPane(node) ?: throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED)
+        val viewport = pane.bounds
+        val target = Rect().also { node.getBoundsInScreen(it) }
+        val down = target.top >= viewport.bottom
+        val up = target.bottom <= viewport.top && pane.canScrollUp
+        accept(down || up, FailureReason.OFFICIAL_WEB_SCROLL_DIRECTION_NOT_PROVEN)
+        accept(viewport.width() >= 100 && viewport.height() >= 200,
+            FailureReason.OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED)
+        // A real gesture strictly inside the actual scrolling pane, never a
+        // guessed root WebView pull-to-refresh or a coordinate button tap.
+        val x = viewport.centerX()
+        val high = viewport.top + viewport.height() / 4
+        val low = viewport.bottom - viewport.height() / 4
+        val accepted = device.swipe(x, if (down) low else high, x, if (down) high else low, 30)
+        recordWebAction(if (down) "PANE_DOWN" else "PANE_UP", node, accepted)
+        accept(accepted, FailureReason.OFFICIAL_WEB_SCROLL_GESTURE_REJECTED)
+    }
+
+    private fun beginWebControl() {
+        webControlOrdinal += 1
+        webControlTrace = JSONArray()
+        lastWebObservation = null
+    }
+
+    private fun webObservation(node: AccessibilityNodeInfo): JSONObject {
+        val target = Rect().also { node.getBoundsInScreen(it) }
+        val pane = webPane(node)
+        fun rect(value: Rect?) = JSONArray(listOf(value?.left ?: 0, value?.top ?: 0,
+            value?.right ?: 0, value?.bottom ?: 0))
+        return JSONObject()
+            .put("targetBounds", rect(target)).put("paneBounds", rect(pane?.bounds))
+            .put("offscreen", node.extras.getBoolean("AccessibilityNodeInfo.offscreen", false))
+            .put("paneCanScrollUp", pane?.canScrollUp == true)
+            .put("onScreen", webNodeOnScreen(node))
+    }
+
+    private fun observeWebNode(node: AccessibilityNodeInfo) {
+        lastWebObservation = webObservation(node)
+    }
+
+    private fun recordWebAction(operation: String, node: AccessibilityNodeInfo, accepted: Boolean) {
+        check(webControlTrace.length() < 8) { "bounded web action evidence required" }
+        webControlTrace.put(webObservation(node).put("operation", operation).put("accepted", accepted))
     }
 
     @Suppress("DEPRECATION")
@@ -449,6 +551,10 @@ class BrowserBackupInstrumentedTest {
             while (true) {
                 val parent = ancestor ?: return false
                 if (parent.packageName?.toString() != CHROME) return false
+                if (parent.isScrollable) {
+                    val viewport = Rect().also { parent.getBoundsInScreen(it) }
+                    if (!parent.isVisibleToUser || viewport.isEmpty || !bounds.intersect(viewport)) return false
+                }
                 if (parent.className?.toString() == "android.webkit.WebView") {
                     val viewport = Rect().also { parent.getBoundsInScreen(it) }
                     return parent.isVisibleToUser && !viewport.isEmpty && bounds.intersect(viewport)
@@ -494,13 +600,36 @@ class BrowserBackupInstrumentedTest {
     private fun setRealPasswordFields(values: List<String>) {
         // First use the actual visible fields. If necessary, ask Chrome to show
         // the real last field, then require the complete field set on screen.
-        if (setVisiblePasswordFields(values)) return
-        val nodes = passwordNodes()
-        try {
-            accept(nodes.size == values.size, FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
-            showWebNode(nodes.last())
-        } finally { nodes.forEach { it.recycle() } }
-        await(15_000, FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED) { setVisiblePasswordFields(values) }
+        beginWebControl()
+        var showRequested = false
+        var gestures = 0
+        var lastMotionAt = 0L
+        var previousScrollTarget: Rect? = null
+        await(15_000, FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED) {
+            if (setVisiblePasswordFields(values)) true else {
+                val nodes = passwordNodes()
+                try {
+                    accept(nodes.size == values.size, FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
+                    val hidden = nodes.firstOrNull { !webNodeOnScreen(it) }
+                    hidden?.let { node ->
+                        observeWebNode(node)
+                        if (!showRequested) {
+                            showWebNode(node)
+                            showRequested = true
+                            lastMotionAt = SystemClock.elapsedRealtime()
+                        } else if (gestures < 6 && SystemClock.elapsedRealtime() - lastMotionAt >= 750) {
+                            val bounds = Rect().also { node.getBoundsInScreen(it) }
+                            accept(previousScrollTarget != bounds, FailureReason.OFFICIAL_WEB_SCROLL_NO_PROGRESS)
+                            previousScrollTarget = bounds
+                            scrollRealWebPane(node)
+                            gestures += 1
+                            lastMotionAt = SystemClock.elapsedRealtime()
+                        }
+                    }
+                    false
+                } finally { nodes.forEach { it.recycle() } }
+            }
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -737,7 +866,8 @@ class BrowserBackupInstrumentedTest {
         CLEAN_OFFICIAL_URL_NOT_REACHED,
         OFFICIAL_UI_NOT_RECOGNIZED, OFFICIAL_PAGE_NOT_RESTORED, SYNC_TAB_NOT_REACHED,
         OFFICIAL_WEB_CONTROL_NOT_REACHED, OFFICIAL_WEB_CLICK_REJECTED, OFFICIAL_WEB_FORM_NOT_REACHED,
-        OFFICIAL_WEB_SHOW_REJECTED,
+        OFFICIAL_WEB_SHOW_REJECTED, OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED,
+        OFFICIAL_WEB_SCROLL_DIRECTION_NOT_PROVEN, OFFICIAL_WEB_SCROLL_GESTURE_REJECTED, OFFICIAL_WEB_SCROLL_NO_PROGRESS,
         AMBIGUOUS_ACCESSIBLE_CONTROL,
         PASSWORD_INPUT_REJECTED, PASSWORD_INPUTS_NOT_RECOGNIZED, PRIVATE_EXPORT_PATH_RETURNED, PRIVATE_BACKUP_ARCHIVE_CHANGED,
         MULTIPLE_NEW_DOWNLOADS, STABLE_PUBLIC_DOWNLOAD_NOT_REACHED, DOWNLOAD_HASH_TOOL_FAILED,

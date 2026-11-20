@@ -108,6 +108,28 @@ try:
             curated = {key: record.get(key) for key in (
                 "status", "phase", "failureType", "failureReason", "failureLine", "cleanRedirectObserved", "realDownloadObserved",
                 "downloadRetryClicked", "privateArchiveChecks", "browserPackage", "keyEqualityClaimed")}
+            ordinal = record.get("webControlOrdinal")
+            require(type(ordinal) is int and 0 <= ordinal <= 20, "INVALID_WEB_CONTROL_ORDINAL")
+            observation_keys = {"targetBounds", "paneBounds", "offscreen", "paneCanScrollUp", "onScreen"}
+            def curate_observation(value, action=False):
+                keys = observation_keys | ({"operation", "accepted"} if action else set())
+                require(type(value) is dict and set(value) == keys, "UNSAFE_WEB_CONTROL_OBSERVATION")
+                for field in ("targetBounds", "paneBounds"):
+                    bounds = value[field]
+                    require(type(bounds) is list and len(bounds) == 4 and
+                            all(type(n) is int and -100_000 <= n <= 100_000 for n in bounds), "UNSAFE_WEB_CONTROL_BOUNDS")
+                for field in ("offscreen", "paneCanScrollUp", "onScreen"):
+                    require(type(value[field]) is bool, "UNSAFE_WEB_CONTROL_BOOLEAN")
+                if action:
+                    require(value["operation"] in {"SHOW", "PANE_DOWN", "PANE_UP"} and
+                            type(value["accepted"]) is bool, "UNSAFE_WEB_CONTROL_ACTION")
+                return {key: value[key] for key in sorted(keys)}
+            trace = record.get("webControlTrace")
+            require(type(trace) is list and len(trace) <= 8, "UNBOUNDED_WEB_CONTROL_TRACE")
+            curated["webControlOrdinal"] = ordinal
+            curated["webControlTrace"] = [curate_observation(value, action=True) for value in trace]
+            observation = record.get("lastWebObservation")
+            curated["lastWebObservation"] = None if observation is None else curate_observation(observation)
             download = record.get("download")
             if download is not None:
                 require(isinstance(download, dict) and re.fullmatch(r"magpie(?: \([0-9]+\))?\.magpie-backup", download.get("name", "")), "UNSAFE_DOWNLOAD_NAME")
