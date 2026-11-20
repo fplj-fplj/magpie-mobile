@@ -16,7 +16,7 @@
 
 ## 验证设计与边界
 
-本地仅 Python 静态契约、语法、资源、补丁哈希和 `git diff --check`；没有本地 Gradle、Go、JVM 或 Android 编译、运行测试。下面列出测试设计，实际通过结果与发布核验在云端完成后追加。
+本地仅 Python 静态契约、语法、资源、补丁哈希和 `git diff --check`；没有本地 Gradle、Go、JVM 或 Android 编译、运行测试。以下为测试边界，实际同提交云端证据见下文。
 
 - Go 使用生产调用的私有 transport factory，测试只注入 trust roots 与 fixture dial；精确 pin verifier 始终由生产 factory 设置，没有 RPC 可选安全绕过或全局可变 hook。
 - host integration 启动 Actions 编译的真实 mobile 与 androidhost 核心，通过受鉴权的正式管理 RPC 读取模型目录。runner 的 `/etc/hosts` 仅把保留测试域 `catalog.magpie.test` 映射到本地临时 TLS 服务；child core 的 SSL_CERT_FILE 只增加一个临时 fixture trust root。不改变生产验证器和 App 配置。
@@ -28,3 +28,38 @@
 ## 后续已确认问题
 
 本批只修目录 TLS pin。重复 STOP 新建空 Service 的清理 owner 竞争、ChatProfile 请求参数与失败草稿保留，以及提供商外部返回刷新／保存中手动模型输入等问题保留为后续批次，不宣称已修复。
+
+## 已取得的同提交云端证据
+
+验证源码：`39f0778999af7739a8631bfacc59ce9f8e3793f4`。仅说明文档的后续提交不改变该 App 源码或正式 tag 目标。
+
+- [完整 Validation](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44645456554)：regression 与 runtime-emulator 均成功。
+- [签名候选，publish_release=false](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44645457612)：成功，候选仅归档到 Actions。
+- 已下载并核对 GitHub artifact SHA-256。JVM XML：core 607、app 379，共 986 项，本轮新增 16 项，失败／错误／跳过均为 0。相关 suite 为 ProviderModelDiscoveryTest 36、ProviderEditorPolicyTest 21、ProviderOperationControllerTest 20。
+- Go JSON：mobile 47 个顶层测试、53 个通过事件（含子用例）；androidhost 23 个顶层测试、25 个通过事件。没有 fail 事件。本轮新增 9 个 provider TLS 顶层测试和 3 个 GUI 顶层测试，生产握手 factory 继续参与真实 TLS 测试。
+- `mobile-discovery-tls.json` 与 `androidhost-discovery-tls.json` 均为 passed=true，每种真实核心完成 8 组完整 RPC 检查：正确自签 pin、错误自签 pin、受信证书错误 pin、普通 TLS、存储 pin 三态／过期版本、跨源、404／重定向、非法组合及配置不变。错误 pin 的服务端 HTTP handler 与 Authorization 到达数确实为零。
+- 真实官方／社区 provider、tools、middleware、async hooks、PowerContext、npm／GitHub 插件与更新验证均通过；plugin/gui race 回归通过。
+- Android API 35 x86_64：1 项综合测试，XML 总耗时 135.789 秒，0 失败／错误／跳过。实际 APK 内 Go 接受显式空 pin；拒绝非法格式／HTTP+pin，真实上游请求数不增加，提供商 revision 不变。完整插件、聊天／目录／连接撤销和安全启停的既有综合路径继续通过。
+- 已检查最终 `provider-invalid-pin.png` 与 `provider-editor-advanced.png`：错误与空值提示位于原高级页表单，暖纸色、文楷、原页脚和键盘避让保持。测试通过现有“返回提供商列表”按钮退出，避免输入法消费返回键。
+- 签名候选实际 APK v2 证书 SHA-256：`dee1d3f485ee17a6184178eaab318d6333fb8b67e7276146a30a03e1f9ee09d6`。包内 ARM64 PIE 核心 SHA-256：`bf755425a0006c1c4e502c77f5d46c6e5bacc0411f96a6437f8b9ba64b1c3abf`。候选 APK 为 103,511,416 字节，SHA-256 `2dadc8f4dd09488b2990b0e249d5d9907088c2d5852affd9579097b06397bbff`。
+
+首轮 `7fbfd407` 的签名候选和 regression 已通过，但 Android 在新增指纹提示检查之后，最后一次返回键被输入法消费，退出编辑器等待超时，因此未发布。交叉审查另补了 IO 排队期间修改 pin 的 worker 入口检查，以及两个真实 helper／双 dispatcher 回归；最终提交完整重跑通过，没有跳过断言或放宽 TLS 规则。
+
+已下载并核对 artifact digest 的证据：
+
+| 证据 | Artifact ID | 所属 run |
+| --- | ---: | ---: |
+| JVM 报告 | 14588571504 | 44645456554 |
+| Android 运行与截图 | 14589360712 | 44645456554 |
+| Go／RPC TLS／插件／race | 14589266442 | 44645456554 |
+| 签名候选 | 14589235166 | 44645457612 |
+
+## 正式发布核验
+
+- [正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44647056590)成功，仍为上述已验证源码 `39f0778999af7739a8631bfacc59ce9f8e3793f4`。
+- [Release `v0.1.55-discovery-tls-pin-39f07789`](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.55-discovery-tls-pin-39f07789)，ID `452118828`，已核实为 Latest、非草稿、非预发布；正式 tag 精确指向已验证提交。
+- 附件恰为 APK、APK `.sha256`、`build-info.txt`、`mobile-core-build-info.txt` 四项。build-info 中 commit、正式 run ID、固定签名均正确。
+- 正式 APK：`magpie-mobile-0.1.55-discovery-tls-pin.apk`，103,511,416 字节，SHA-256 `3d5fa976d53014cbcd44c3cfd17dac43789ac8b33dd505bb95a28c4d270e2c17`。
+- 已下载并核对正式签名 artifact `14589536975`（所属 run `44647056590`），检查其中实际 APK 的 v2 证书和 ARM64 PIE 载荷；正式 APK 字节哈希与 Release asset digest、附件 checksum 完全一致。不是以候选哈希代替正式文件。
+- 正式 APK 继续使用固定证书 `dee1d3f485ee17a6184178eaab318d6333fb8b67e7276146a30a03e1f9ee09d6`；包内核心 `bf755425a0006c1c4e502c77f5d46c6e5bacc0411f96a6437f8b9ba64b1c3abf`。ARM64 为签名／载荷核验，没有宣称 ARM64 真机执行。
+- Release 说明已补充同提交实际验证结果，并重新 GET 读回确认正文完全一致、四项附件仍完整；没有以待验证描述替代已完成验收。

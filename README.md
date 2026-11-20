@@ -74,7 +74,7 @@
 
 `Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`，才会把同一轮验证产物发布为 Latest Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
-当前已验证可用版本：[`0.1.54-gateway-diagnostics` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.54-gateway-diagnostics-d2db8c69)，SHA-256 `70e8b10ed6901650414bdbd7a86b36aa9295c2d0e8fb64146124484285c4afa7`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44638961265)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44637208011)均通过；JVM 970 项、Go、真实官方／社区插件、race 与 Android API 35 模拟器运行结果均为 0 失败。本轮候选仅归档到 Actions，完整验证通过后才发布 Release；已核实 Latest、正式 tag、固定签名、四项附件与下载后的正式 APK 哈希，完整证据及尚未修复的后续范围见 [0.1.54 验收记录](docs/bugfixes-0.1.54.md)。
+当前已验证可用版本：[`0.1.55-discovery-tls-pin` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.55-discovery-tls-pin-39f07789)，SHA-256 `3d5fa976d53014cbcd44c3cfd17dac43789ac8b33dd505bb95a28c4d270e2c17`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44647056590)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44645456554)均通过；JVM 986 项、Go、两种真实核心的完整 RPC/TLS 矩阵、官方／社区插件、race 与 Android API 35 模拟器运行结果均为 0 失败。自动目录读取已遵循证书指纹，错误 pin 的上游 HTTP／Authorization 到达数为零。本轮候选仅归档到 Actions，完整验证通过后才发布 Release；已核实 Latest、正式 tag、固定签名、四项附件与下载后的正式 APK 哈希，完整证据及尚未修复的后续范围见 [0.1.55 验收记录](docs/bugfixes-0.1.55.md)。
 
 官方插件完整通过基线仍可通过 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)追溯；对应历史 Release 条目已按清理策略移除，运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 
