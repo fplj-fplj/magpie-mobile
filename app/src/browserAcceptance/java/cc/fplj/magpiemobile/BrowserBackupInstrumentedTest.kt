@@ -125,7 +125,7 @@ class BrowserBackupInstrumentedTest {
                     assertFixture(session, before = false)
 
                     phase = "choosing_real_download_from_official_import"
-                    clickWebControl(IMPORT_OPEN, startAtTop = true)
+                    clickWebControl(IMPORT_OPEN)
                     awaitWebFormOpened(IMPORT_OPEN)
                     clickWebControl(CHOOSE)
                     chooseActualDownload(requireNotNull(downloaded))
@@ -357,38 +357,26 @@ class BrowserBackupInstrumentedTest {
         return requireNotNull(tab)
     }
 
-    private fun revealWebControl(names: List<String>, startAtTop: Boolean = false): UiObject2 {
-        if (startAtTop) for (attempt in 0 until 4) {
-            val accepted = scrollWebSettings(Direction.UP)
-            SystemClock.sleep(200)
-            if (!accepted) break
-        }
-        repeat(12) {
-            namedControl(CHROME, names)?.let { return it }
-            check(device.currentPackageName == CHROME) { "unexpected foreground while locating web control" }
-            val accepted = scrollWebSettings(Direction.DOWN)
-            SystemClock.sleep(200)
-            if (!accepted) {
-                namedControl(CHROME, names)?.let { return it }
-                throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
-            }
-        }
-        namedControl(CHROME, names)?.let { return it }
-        throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
-    }
-
-    private fun clickWebControl(names: List<String>, startAtTop: Boolean = false) {
-        revealWebControl(names, startAtTop)
+    private fun clickWebControl(names: List<String>) {
         // Chrome's real AX default action avoids UiObject2's center-coordinate
         // tap on an animated or clipped button. Never inject JS or retry a click.
+        var showRequested = false
         await(15_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
             val nodes = webButtonNodes(names)
             try {
                 accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
-                nodes.singleOrNull()?.let {
-                    accept(it.performAction(AccessibilityNodeInfo.ACTION_CLICK),
-                        FailureReason.OFFICIAL_WEB_CLICK_REJECTED)
-                    true
+                nodes.singleOrNull()?.let { node ->
+                    if (!webNodeOnScreen(node)) {
+                        if (!showRequested) {
+                            showWebNode(node)
+                            showRequested = true
+                        }
+                        false
+                    } else {
+                        accept(node.performAction(AccessibilityNodeInfo.ACTION_CLICK),
+                            FailureReason.OFFICIAL_WEB_CLICK_REJECTED)
+                        true
+                    }
                 } ?: false
             } finally { nodes.forEach { it.recycle() } }
         }
@@ -443,37 +431,32 @@ class BrowserBackupInstrumentedTest {
         }
     }
 
+    private fun showWebNode(node: AccessibilityNodeInfo) {
+        val action = AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id
+        accept(node.actionList.any { it.id == action } && node.performAction(action),
+            FailureReason.OFFICIAL_WEB_SHOW_REJECTED)
+    }
+
     @Suppress("DEPRECATION")
-    private fun scrollWebSettings(direction: Direction): Boolean {
-        val action = when (direction) {
-            Direction.UP -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-            Direction.DOWN -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-            else -> throw AcceptanceFailure(FailureReason.OFFICIAL_SETTINGS_SCROLLER_NOT_RECOGNIZED)
-        }
-        val tabs = webNodes { node ->
-            node.className?.toString() == "android.widget.TabWidget" && node.isEnabled &&
-                node.text?.toString() in SETTINGS
-        }
+    private fun webNodeOnScreen(node: AccessibilityNodeInfo): Boolean {
+        // Chrome keeps scrolled-off AX nodes visibleToUser. Its offscreen extra
+        // and actual viewport intersection must both be checked after SHOW.
+        if (!node.isVisibleToUser || node.extras.getBoolean("AccessibilityNodeInfo.offscreen", false)) return false
+        val bounds = Rect().also { node.getBoundsInScreen(it) }
+        if (bounds.isEmpty || !bounds.intersect(0, 0, device.displayWidth, device.displayHeight)) return false
+        var ancestor = node.parent
         try {
-            accept(tabs.size == 1, FailureReason.OFFICIAL_SETTINGS_SCROLLER_NOT_RECOGNIZED)
-            var ancestor = tabs.single().parent
-            try {
-                while (true) {
-                    val node = ancestor ?: break
-                    if (node.packageName?.toString() != CHROME ||
-                        node.className?.toString() == "android.webkit.WebView") break
-                    if (node.isScrollable && node.isEnabled && node.isVisibleToUser) {
-                        // Scroll the real settings container, never gesture on Chrome's
-                        // non-scrollable WebView or pull the whole browser page down.
-                        return node.actionList.any { it.id == action } && node.performAction(action)
-                    }
-                    val parent = node.parent
-                    ancestor = parent
-                    node.recycle()
+            while (true) {
+                val parent = ancestor ?: return false
+                if (parent.packageName?.toString() != CHROME) return false
+                if (parent.className?.toString() == "android.webkit.WebView") {
+                    val viewport = Rect().also { parent.getBoundsInScreen(it) }
+                    return parent.isVisibleToUser && !viewport.isEmpty && bounds.intersect(viewport)
                 }
-                throw AcceptanceFailure(FailureReason.OFFICIAL_SETTINGS_SCROLLER_NOT_RECOGNIZED)
-            } finally { ancestor?.recycle() }
-        } finally { tabs.forEach { it.recycle() } }
+                ancestor = parent.parent
+                parent.recycle()
+            }
+        } finally { ancestor?.recycle() }
     }
 
     private fun webViewOrNull(): UiObject2? = device.findObject(By.pkg(CHROME).clazz("android.webkit.WebView"))
@@ -509,29 +492,22 @@ class BrowserBackupInstrumentedTest {
     private fun hasImportSuccess(): Boolean = hasWebText("Providers:") || hasWebText("供应商：")
 
     private fun setRealPasswordFields(values: List<String>) {
-        // File selection may return with the real inputs already visible. Enter
-        // them before scrolling; a previous error can instead leave them above.
+        // First use the actual visible fields. If necessary, ask Chrome to show
+        // the real last field, then require the complete field set on screen.
         if (setVisiblePasswordFields(values)) return
-        for (attempt in 0 until 4) {
-            val accepted = scrollWebSettings(Direction.UP)
-            SystemClock.sleep(200)
-            if (setVisiblePasswordFields(values)) return
-            if (!accepted) break
-        }
-        repeat(10) {
-            val accepted = scrollWebSettings(Direction.DOWN)
-            SystemClock.sleep(200)
-            if (setVisiblePasswordFields(values)) return
-            if (!accepted) throw AcceptanceFailure(FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
-        }
-        throw AcceptanceFailure(FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
+        val nodes = passwordNodes()
+        try {
+            accept(nodes.size == values.size, FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
+            showWebNode(nodes.last())
+        } finally { nodes.forEach { it.recycle() } }
+        await(15_000, FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED) { setVisiblePasswordFields(values) }
     }
 
     @Suppress("DEPRECATION")
     private fun setVisiblePasswordFields(values: List<String>): Boolean {
         val nodes = passwordNodes()
         try {
-            if (nodes.size != values.size) return false
+            if (nodes.size != values.size || nodes.any { !webNodeOnScreen(it) }) return false
             nodes.zip(values).forEach { (node, value) ->
                 val arguments = Bundle().apply {
                     putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
@@ -545,20 +521,9 @@ class BrowserBackupInstrumentedTest {
         } finally { nodes.forEach { it.recycle() } }
     }
 
-    @Suppress("DEPRECATION")
     private fun passwordNodes(): List<AccessibilityNodeInfo> {
-        val matches = mutableListOf<AccessibilityNodeInfo>()
-        fun visit(node: AccessibilityNodeInfo) {
-            if (node.packageName?.toString() == CHROME && node.isVisibleToUser && node.isPassword &&
-                node.className?.toString() == "android.widget.EditText") {
-                matches += AccessibilityNodeInfo.obtain(node)
-            }
-            for (i in 0 until node.childCount) node.getChild(i)?.let {
-                try { visit(it) } finally { it.recycle() }
-            }
-        }
-        instrumentation.uiAutomation.rootInActiveWindow?.let {
-            try { visit(it) } finally { it.recycle() }
+        val matches = webNodes { node ->
+            node.isPassword && node.isEnabled && node.className?.toString() == "android.widget.EditText"
         }
         return matches.sortedWith(compareBy({ node -> Rect().also { node.getBoundsInScreen(it) }.top },
             { node -> Rect().also { node.getBoundsInScreen(it) }.left }))
@@ -772,7 +737,7 @@ class BrowserBackupInstrumentedTest {
         CLEAN_OFFICIAL_URL_NOT_REACHED,
         OFFICIAL_UI_NOT_RECOGNIZED, OFFICIAL_PAGE_NOT_RESTORED, SYNC_TAB_NOT_REACHED,
         OFFICIAL_WEB_CONTROL_NOT_REACHED, OFFICIAL_WEB_CLICK_REJECTED, OFFICIAL_WEB_FORM_NOT_REACHED,
-        OFFICIAL_SETTINGS_SCROLLER_NOT_RECOGNIZED,
+        OFFICIAL_WEB_SHOW_REJECTED,
         AMBIGUOUS_ACCESSIBLE_CONTROL,
         PASSWORD_INPUT_REJECTED, PASSWORD_INPUTS_NOT_RECOGNIZED, PRIVATE_EXPORT_PATH_RETURNED, PRIVATE_BACKUP_ARCHIVE_CHANGED,
         MULTIPLE_NEW_DOWNLOADS, STABLE_PUBLIC_DOWNLOAD_NOT_REACHED, DOWNLOAD_HASH_TOOL_FAILED,
