@@ -16,13 +16,13 @@
 
 ## 验证设计与状态
 
-本地仅源码、接口、资源与空白检查，不运行 Gradle、Kotlin/JVM、Go 或 Android 编译及运行测试。所有编译和执行交由 GitHub Actions；同一源码的完整 Validation 与签名候选成功且实际报告／产物核对后，才触发正式发布。当前尚未把本轮候选发布到 Release。
+本地仅源码、接口、资源、ZIP/APK 与空白检查，不运行 Gradle、Kotlin/JVM、Go 或 Android 编译及运行测试。所有编译和执行交由 GitHub Actions；同一源码的完整 Validation 与签名候选成功且实际报告／产物核对后，才触发正式发布。前两轮失败候选未发布，最终同提交验收结果如下。
 
 新增密钥真实 HTTP 测试覆盖排队前切换同 owner 新 epoch／替代 owner、创建预读 GET 后阻止旧 POST、headers 前／body 中途的实际 Socket 取消、一次性正常请求和禁止重放；VM 用例覆盖串行、迟到结果、明文清理、旧 UI 回调、部分失败及明确只读核对。插件基线新增独立状态确认用例，并使用真实 Panel／VM／lease／HTTP 验证同详情 A→B→C、外部更新阻止草稿覆盖、HTTP 400 后显式重试。
 
 新增 Android 聊天回归使用真实横屏／输入法、Compose、ViewModel 与内存 Room，验证离线新建／历史、26 轮记录分页往返、40 轮上下文上限时仍可新建且保留旧记录、键盘菜单重读不丢草稿。密钥页面另检查重连关闭旧限制弹窗、在新读取完成后执行旧 OnClick 仍零写入，以及断开后页面明文和名称草稿不恢复。
 
-完整验收继续保留 JVM、两种实际 Go 核心、参数转发、目录 RPC/TLS、官方／社区三类插件、MCP／Hooks／SSE、race 和 API 35 x86_64 Android 综合用例。ARM64 仅核对正式包签名及载荷，不能表述为真机运行通过。实际数量、run、artifact、SHA 和正式发布结果待云端完成后独立核对并补录。
+完整验收继续保留 JVM、两种实际 Go 核心、参数转发、目录 RPC/TLS、官方／社区三类插件、MCP／Hooks／SSE、race 和 API 35 x86_64 Android 综合用例。ARM64 仅核对正式包签名及载荷，不能表述为真机运行通过。
 
 ## 首轮结果与后续修正
 
@@ -32,6 +32,35 @@
 
 第二轮源码 `ab6966b35a27e8cb7852d87315f9551f0b88a8e2` 的 Validation `44690277828` 仍未通过，不能发布。JVM core 645 项通过，app 469 项中一项失败：未知 POST 的异常链断言原先要求 cause 必须为空，但协程边界返回了同类型的安全异常 cause；HTTP 400 后继续读取／再次保存和外部取消关闭实际 Socket 的新增用例已通过。已与所用协程版本的异常复制逻辑核对，测试改为逐层要求精确安全类型、固定文案、无 suppressed 传输异常及无循环，继续保留只读核对和唯一 POST 断言，生产异常分类不变。Android job 在解析 `com.squareup.okhttp3:okhttp:4.12.0` 的 compileClasspath 时失败，尚未启动模拟器；同源码签名候选 `44690340179` 构建成功不构成 Android 运行验收。该日志只有未找到依赖坐标，没有 HTTP 状态，不能断言是 Maven 服务或缓存中的哪一项导致；下一轮保留原依赖版本完整重跑。
 
+## 最终同提交完整验收
+
+2026-11-20，最终源码 `26032886888e1b0c0043c5bf7ac5f52c5a4cc26f` 的 [Validation 44692276306](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44692276306) 与 [签名候选 44692482522](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44692482522) 均成功。独立 GET 核对两者源码 SHA 和 conclusion，下载实际报告并逐一核对 artifact digest。依赖版本、仓库与工作流均未因上轮单 runner 的解析异常而修改，本轮正常完成解析、编译与 Android 执行。
+
+| 验证 | 实际结果 |
+| --- | --- |
+| JVM core／app | 645＋469＝1,114 项，零失败／错误／跳过；较 0.1.60 增加 34 项 |
+| Go mobile／androidhost | 47／23 个顶层用例，含子用例共 53／25 个通过事件，无失败 |
+| 两种实际核心的参数转发 | 各 4 组 JSON 检查通过 |
+| 两种实际核心的目录 RPC／TLS | 各 8 组检查通过 |
+| 官方／社区插件及 race | 三类插件、真实 MCP、Hooks、SSE、社区包与两包 race 均通过 |
+| Android API 35 x86_64 | 19 项全部通过，零失败／错误／跳过，总计 208.091 秒 |
+
+实际 Go/Bun Android 综合用例耗时 116.474 秒。四项新聊天页面回归、两项密钥页面回归、三项插件参数页面回归及原有九项提供商页面回归均执行通过；键盘前提文件记录真实系统 `imeVisible=true / imeBottom=883`，未注入假输入法。插件连续保存证据确认同详情 A→B→C 仅两次已鉴权 POST；真实外部 D 被读回后，未保存 C 保留且第二次 POST 被阻止。实际截图核对横屏／键盘会话菜单、连续保存结果和已安装应用的真实键盘布局，无 Pixel Launcher 弹窗；隔离 ChatPanel fixture 未提供完整系统栏宿主，不把它的顶栏位置作为正式 Activity 的布局证据。
+
+报告 artifact ID：JVM `14608864172`、Android `14609725638`、核心集成 `14610166072`、签名候选 `14609540729`。前三者 ZIP SHA-256 分别为 `743ea2ff5441a52b4ff70b44f564ad3dbc3671ffe8e2f63fa176fe03a06e598d`、`d3a727b4b4e0527b8663fc0e77a945a55d9ab316bf4b5cf3f23b99d6bf031ccf`、`a1410c009edd749ed9c5cf82dcd8843b51346158caf5e611113a70a933b77219`。
+
+候选 ZIP SHA-256 为 `d8c29f039ff445a50095338d5ae4177c1c7f9a0836cdecefdc095aadbb532a61`；候选 APK 为 103,602,524 字节、SHA-256 `a5b282da9a62cc2b10018e9931379b5b1b8b837decf30cc806905800be75ddb9`。实际读取 APK v2 证书并确认固定 SHA-256 `dee1d3f485ee17a6184178eaab318d6333fb8b67e7276146a30a03e1f9ee09d6`，内嵌 ARM64 PIE 核心 SHA-256 `bf755425a0006c1c4e502c77f5d46c6e5bacc0411f96a6437f8b9ba64b1c3abf` 与 CI 核心哈希一致。候选核对完成后才触发正式发布；正式重建包另行核验，不能假设与候选 APK 字节相同。
+
+## 正式发布
+
+上述核对全部完成后，触发 [正式流程 44696120054](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44696120054)，build 与 publish 均成功。发布为 [v0.1.61-session-editor-fixes-26032886](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.61-session-editor-fixes-26032886)，Release ID `452395171`。独立 GET 确认 Latest、非草稿／非预发布、tag 直接指向完整验收源码 `26032886888e1b0c0043c5bf7ac5f52c5a4cc26f`，四项附件齐全。
+
+正式签名 artifact `14611280424` 的 ZIP SHA-256 为 `9e2552c95fa6183a317887858f314ace7c5e48d29e603cd619819e0e72d209ba`。已分别下载该 artifact 和 Release 的实际 APK，逐字节比对一致：103,602,524 字节、SHA-256 `2cb8814a864a6e9307e956378c1b0ffb3c4baa3726742ece5144d5f2bfe6dfed`；与 Release asset digest 和下载的 checksum 附件一致。实际 APK v2 证书、内嵌 ARM64 PIE 核心仍与上述固定哈希一致，build-info 包含最终源码和正式 run。候选与正式 APK 哈希不同，二者均分别核验，没有复用候选哈希充当正式下载校验值。
+
+四项附件 ID：APK `770916230`、checksum `770916235`、build-info `770916233`、mobile-core-build-info `770916237`。核心构建信息另行下载并核对 asset digest，与正式 artifact 内容一致。Release 说明补录实际验收结果后独立 GET 读回完全一致，四项附件 ID 和 digest 均未改变；文档另行提交，不移动正式 tag 或重复编译已验收应用。
+
 ## 后续独立巡查
 
-只读审计还确认官方网页备份导出只返回应用私有路径的 Android 适配缺口，以及删除非当前会话会使当前更早消息页回到最新的分页问题。这两项另轮处理，本轮未宣称修复；备份应保持官方加密格式并提供真实可取出的文件桥接，不把尚未接入的原生占位入口当成已完成导出功能。
+只读审计还确认官方网页备份导出只返回应用私有路径的 Android 适配缺口，以及删除非当前会话会使当前更早消息页回到最新的分页问题。后者不丢草稿或失败预览，但修复也须保留已加载超过 30 项的历史列表范围。另确认原生密钥／内嵌密钥 cURL 复制没有设置系统敏感标记，接入卡的同步复制按钮缺少点击时轮次核对；Caller Keys 本轮新增的异步回调轮次保护已存在，不将其重复报为缺陷。截图只出现合成密钥，不涉及实际凭据；敏感标记也不能被表述为对第三方输入法的绝对保密保证。
+
+以上另轮处理，本轮未宣称修复。备份应保持官方加密格式并提供真实可取出的文件桥接，不把尚未接入的原生占位入口当成已完成导出功能；剪贴板修复须覆盖原生显式复制与显示密钥后的系统 Copy/Cut，同时准确区分外部浏览器自身的复制边界。
