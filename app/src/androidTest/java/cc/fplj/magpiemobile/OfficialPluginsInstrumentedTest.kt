@@ -955,6 +955,29 @@ class OfficialPluginsInstrumentedTest {
             }
             return requireNotNull(device.findObject(selector))
         }
+        fun clickProfileSave() {
+            val selector = By.res("chat-profile-save").enabled(true).clickable(true)
+            val minimumHeight = (40 * context.resources.displayMetrics.density).toInt()
+            var previousBounds: Rect? = null
+            var stablePolls = 0
+            await("profile save fully visible with stable bounds") {
+                val bounds = device.findObject(selector)?.visibleBounds
+                if (bounds != null && bounds.height() >= minimumHeight) {
+                    if (bounds == previousBounds) stablePolls++ else stablePolls = 0
+                    previousBounds = Rect(bounds)
+                    stablePolls >= 3
+                } else {
+                    previousBounds = null
+                    stablePolls = 0
+                    device.swipe(device.displayWidth / 2, device.displayHeight * 7 / 10,
+                        device.displayWidth / 2, device.displayHeight * 3 / 10, 20)
+                    false
+                }
+            }
+            // Reacquire after layout settles; never click an object located before the
+            // temperature error supporting text was removed. Submit only once.
+            requireNotNull(device.findObject(selector)).click()
+        }
         try {
             await("profile settings after portrait restoration") { device.hasObject(By.desc("模型与对话配置")) }
             device.findObject(By.desc("模型与对话配置")).click()
@@ -966,7 +989,10 @@ class OfficialPluginsInstrumentedTest {
             reveal(By.res("chat-profile-name")).text = profileName
             reveal(By.res("chat-profile-prompt")).text = prompt
             reveal(By.res("chat-profile-temperature")).text = "abc"
-            reveal(By.res("chat-profile-save").enabled(true).clickable(true)).click()
+            await("invalid profile temperature input committed") {
+                device.findObject(By.res("chat-profile-temperature"))?.text == "abc"
+            }
+            clickProfileSave()
             reveal(By.text(ChatProfileFormState.TEMPERATURE_ERROR))
             assertTrue(device.hasObject(By.res("chat-profile-form")))
             assertTrue(device.takeScreenshot(File(artifacts, "chat-profile-invalid-temperature.png")))
@@ -976,7 +1002,11 @@ class OfficialPluginsInstrumentedTest {
             assertEquals("abc", reveal(By.res("chat-profile-temperature")).text)
             assertFalse(profiles.state.value.profiles.any { it.id == profileId })
             reveal(By.res("chat-profile-temperature")).text = "0"
-            reveal(By.res("chat-profile-save").enabled(true).clickable(true)).click()
+            await("valid zero input committed and inline temperature error removed") {
+                device.findObject(By.res("chat-profile-temperature"))?.text == "0" &&
+                    !device.hasObject(By.text(ChatProfileFormState.TEMPERATURE_ERROR))
+            }
+            clickProfileSave()
             await("profile saved only after a valid form submission") {
                 !device.hasObject(By.res("chat-profile-form")) && profiles.state.value.activeProfile.id == profileId
             }
@@ -1028,6 +1058,22 @@ class OfficialPluginsInstrumentedTest {
                     "PASS: real UI send captured the retained Activity profile; installed Go forwarded system, explicit zero sampling and positive token limit exactly once\n" +
                     "PASS: alias did not replace confirmed model; Room context contains only user/assistant, never the system prompt\n",
             )
+        } catch (failure: Throwable) {
+            // Record the form before the cleanup closes its dialog. Fixture inputs are
+            // synthetic; record only safe VM status here, never profile prompt contents.
+            device.takeScreenshot(File(artifacts, "chat-profile-failure.png"))
+            device.dumpWindowHierarchy(File(artifacts, "chat-profile-failure-ui.xml"))
+            val state = profiles.state.value
+            File(artifacts, "chat-profile-failure-state.txt").writeText(
+                "activeProfile=${state.activeProfile.id}\nprofileCount=${state.profiles.size}\n" +
+                    "canWriteProfiles=${state.canWriteProfiles}\nerror=${state.error}\n" +
+                    "storageError=${state.storageError}\nsaveBounds=${uiBounds("chat-profile-save")}\n" +
+                    "temperature=${device.findObject(By.res("chat-profile-temperature"))?.text}\n" +
+                    "temperatureErrorVisible=${device.hasObject(By.text(ChatProfileFormState.TEMPERATURE_ERROR))}\n" +
+                    "formVisible=${device.hasObject(By.res("chat-profile-form"))}\n" +
+                    "targetProfilePresent=${state.profiles.any { it.id == profileId }}\n",
+            )
+            throw failure
         } finally {
             scenario.onActivity { profiles.selectProfile(ChatProfile.DEFAULT.id) }
             device.findObject(By.text("关闭"))?.click()
