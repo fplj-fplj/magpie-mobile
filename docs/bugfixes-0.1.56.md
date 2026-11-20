@@ -25,4 +25,24 @@ requestStop 有租约时只建立屏障；没有租约时在同一锁内完成�
 
 ## 云端验收
 
-待同提交完整 Validation、签名候选与正式发布核验完成后补充真实结果；候选不提前上传 Release。
+验证源码为 `428c0c9b30d81774f0a186e58b574ffcca66eef7`。
+
+- 完整 Validation 的 regression 与 runtime-emulator 均通过。JVM 共 1,002 项，core 607 项，app 395 项，新增 16 项，失败、错误和跳过均为 0。GatewayRuntimeTest 19 项，GatewayServiceLifecycleTest 9 项，GatewayServiceReporterTest 8 项。[Validation](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44650145650)
+- Go mobile 47 个顶层测试、53 个通过事件，androidhost 23 个顶层测试、25 个通过事件。两种核心各通过 8 组真实管理 RPC/TLS 验证。真实官方与社区插件集成和 plugin/gui race 回归均通过。
+- Android API 35 x86_64 综合测试通过，XML 耗时 108.362 秒，无失败、错误或跳过。`gateway-stop-replay-cleanup.txt` 记录三次实际通知重发与 STOP revision 前进、原租约和诊断保留、Activity 无 Service 停止、受控迟到 shell 进程退出后按原凭证解锁。真实 Go 和 Bun 关闭后无残留进程或监听端口。
+- 签名候选通过，发布任务按候选设置跳过。实际候选 APK 为 103,512,764 字节，SHA-256 `a4f694b6cea25388d8bd4fea502353b2ebbb66d8e00b630187cdbce349b7d71a`。下载后核对了 APK v2 固定签名和 ARM64 PIE 核心。[签名候选](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44650174408)
+
+| 已下载并核对摘要的证据 | Artifact ID |
+| --- | ---: |
+| JVM 报告 | 14590177359 |
+| Android 运行与截图 | 14590712529 |
+| Go、RPC/TLS、插件及 race | 14590263804 |
+| 签名候选 | 14591196302 |
+
+## 正式发布核验
+
+- [正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44652080580)通过，仍为已验证的源码 `428c0c9b30d81774f0a186e58b574ffcca66eef7`。后续提交仅记录验收，不修改应用源码。
+- [Release v0.1.56-gateway-cleanup-lease-428c0c9b](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.56-gateway-cleanup-lease-428c0c9b)，ID `452149163`，为 Latest、非草稿、非预发布。正式 tag 精确指向上述已验证提交，附件恰为 APK、APK checksum、build-info 和 core build-info 四项。
+- 正式 APK `magpie-mobile-0.1.56-gateway-cleanup-lease.apk` 为 103,512,764 字节，SHA-256 `d46cd8fd1b353fc13ef674efe725540ba6d7c1d656f5a96184db8d9095e2f1f0`。已下载并核对正式 artifact `14591557418` 的 SHA-256，实际 APK 字节与 Release asset digest 和 checksum 一致。正式重建哈希不同于候选，以上均为正式文件的核验结果。
+- 实际 APK v2 签名证书 SHA-256 为固定 `dee1d3f485ee17a6184178eaab318d6333fb8b67e7276146a30a03e1f9ee09d6`，包内 ARM64 PIE 核心 SHA-256 为 `bf755425a0006c1c4e502c77f5d46c6e5bacc0411f96a6437f8b9ba64b1c3abf`。ARM64 只检查签名／载荷，不宣称真机运行。
+- Release 说明已补入实际同提交验证结果，并独立 GET 读回确认正文完全一致，四项附件仍保留。
