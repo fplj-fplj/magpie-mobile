@@ -23,11 +23,12 @@ jobs:
         target: [google_apis, google_apis_playstore]
     env:
       PROBE_TARGET: ${{ matrix.target }}
-      # Outside checkout: checkout's cleanup must not erase the seeded report.
-      PROBE_OUTPUT: ${{ runner.temp }}/magpie-browser-probe/${{ matrix.target }}
     steps:
       - name: Seed a report before checkout or emulator setup
         shell: bash
+        env:
+          # runner context is available to steps, not job-level env.
+          PROBE_OUTPUT: ${{ runner.temp }}/magpie-browser-probe/${{ matrix.target }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -78,6 +79,8 @@ jobs:
       - name: Inspect a fresh image with a real external browser
         id: emulator
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          PROBE_OUTPUT: ${{ runner.temp }}/magpie-browser-probe/${{ matrix.target }}
         with:
           api-level: 35
           arch: x86_64
@@ -96,6 +99,7 @@ jobs:
         if: always()
         shell: bash
         env:
+          PROBE_OUTPUT: ${{ runner.temp }}/magpie-browser-probe/${{ matrix.target }}
           CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
           KVM_OUTCOME: ${{ steps.kvm.outcome }}
           EMULATOR_OUTCOME: ${{ steps.emulator.outcome }}
@@ -136,6 +140,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: browser-environment-${{ matrix.target }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ env.PROBE_OUTPUT }}/
+          path: ${{ runner.temp }}/magpie-browser-probe/${{ matrix.target }}/
           if-no-files-found: error
           retention-days: 7
