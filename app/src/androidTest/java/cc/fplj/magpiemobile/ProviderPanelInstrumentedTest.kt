@@ -102,6 +102,11 @@ class ProviderPanelInstrumentedTest {
             withPanel(peer) {
                 assertProviderSummary("启用 1 / 目录 1")
                 openEditor()
+                // This case exercises saving an edited manual model, after the initial
+                // catalog has settled. waitUntil advances LaunchedEffect's virtual
+                // debounce clock; observing the POST alone does not prove adoption.
+                compose.waitUntil(10_000) { peer.modelDirectoryCount == 1 }
+                awaitEnabled(SAVE)
                 compose.onNodeWithText("高级").performClick()
                 compose.onNodeWithText("手动补充模型 ID").performScrollTo().performClick()
                 compose.onNodeWithTag(MANUAL).performScrollTo().performTextReplacement(BEFORE_SAVE)
