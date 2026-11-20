@@ -2,10 +2,10 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
-## 当前源码候选版本：0.1.62-chat-session-clipboard-fixes（待 GitHub Actions 验证）
+## 当前已验证版本：0.1.62-chat-session-clipboard-fixes
 
-- **本轮候选修复**：删除非当前会话或重命名当前会话时保留聊天旧页、草稿、失败预览与已加载历史范围；原生密钥和含密钥 cURL 的复制核对连接轮次并设置敏感标记，提供商字段的系统 Copy/Cut 也携带该标记。修复提供商页面 ART 崩溃及启动前取消的忙碌状态收尾，并加固同提交验证与完整附件发布门禁。`2439c2c` 的 Actions 已通过 JVM 1,119 项、Android 23 项及完整核心／插件验证；随后巡查发现删除当前会话后读取失败时可能跨会话恢复旧草稿，正在纳入修复并等待最终提交重新验收，尚未发布。详见 [0.1.62 候选记录](docs/bugfixes-0.1.62.md)。
-- **最近已验证版本**：0.1.61-session-editor-fixes。同提交 JVM 1,114 项、Android 19 项及完整 Go／插件验收通过，正式签名包和 Release 已核对，详见 [0.1.61 记录](docs/bugfixes-0.1.61.md)。
+- **本轮已验证修复**：删除非当前会话或重命名当前会话时保留聊天旧页、草稿、失败预览与已加载历史范围；删除已提交而读取失败时撤销旧发送上下文，跨会话恢复只使用目标自己的草稿。原生密钥和含密钥 cURL 的复制核对连接轮次并设置敏感标记，提供商字段的系统 Copy/Cut 也携带该标记。修复提供商页面 ART 崩溃及启动前取消的忙碌状态收尾，并加固同提交验证与完整附件发布门禁。最终 `9097163` 的 JVM 1,127 项、Android 23 项及完整核心／插件验收通过；正式 APK 已分别从 Release 和正式 artifact 下载并逐字节比对，固定签名、载荷、tag、Latest 与四项附件均已核对。详见 [0.1.62 验收记录](docs/bugfixes-0.1.62.md)。
+- **上一已验证版本**：0.1.61-session-editor-fixes。同提交 JVM 1,114 项、Android 19 项及完整 Go／插件验收通过，正式签名包和 Release 已核对，详见 [0.1.61 记录](docs/bugfixes-0.1.61.md)。
 - **提供商模型摘要**：已保存 `models[].on` 决定“启用 E / 目录 D”，明确区分未保存草稿。0.1.60 的 JVM 1,080 项、Android 10 项及完整 Go／插件验收通过，详见 [0.1.60 验收记录](docs/bugfixes-0.1.60.md)。
 - **自动选择模型的连通测试**：原生候选按已保存列表的实际 `models[].on` 识别，空显式 `chosen` 不再误报无模型。停用、未就绪和明确禁用继续不可测，未保存草稿与发现目录不进入候选，保留真实网关路由核验。详见 [0.1.59 修复与验收记录](docs/bugfixes-0.1.59.md)。
 - **提供商保存与外部返回**：保存期间锁定手动模型输入并拒绝旧回调，外部返回保留草稿、合并待办，关闭编辑或当前请求退出后自动补读最新列表；未确认前阻止旧配置保存。0.1.58 的 JVM 1,071 项及完整 Actions 验收通过，详见 [0.1.58 修复记录](docs/bugfixes-0.1.58.md)。
@@ -34,7 +34,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
-| [docs/bugfixes-0.1.62.md](docs/bugfixes-0.1.62.md) | 聊天删除分页保持、系统敏感剪贴板和连接轮次复制保护；Actions 验证待完成 |
+| [docs/bugfixes-0.1.62.md](docs/bugfixes-0.1.62.md) | 聊天分页与跨会话草稿隔离、系统敏感剪贴板及完整验收／正式发布 |
 | [docs/bugfixes-0.1.61.md](docs/bugfixes-0.1.61.md) | 插件连续保存、紧凑会话菜单、密钥连接隔离与完整验收／正式发布 |
 | [docs/bugfixes-0.1.60.md](docs/bugfixes-0.1.60.md) | 已保存启用／目录摘要、草稿文案与十项 Android 用例及正式发布 |
 | [docs/bugfixes-0.1.59.md](docs/bugfixes-0.1.59.md) | 自动选择模型的原生连通测试、已保存启用集合及真实网关验收 |
@@ -87,7 +87,7 @@
 
 `Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`；发布门禁还要求同提交最新可信 `Validation` attempt 的 `regression` 与 `runtime-emulator` 均已完成并成功。附件先上传至草稿并核对名称、大小和 SHA-256，再公开为 Latest，已公开版本不覆盖附件或移动 tag。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
-当前已验证可用版本：[`0.1.61-session-editor-fixes` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.61-session-editor-fixes-26032886)，SHA-256 `2cb8814a864a6e9307e956378c1b0ffb3c4baa3726742ece5144d5f2bfe6dfed`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44696120054)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44692276306)均通过；JVM 1,114 项、Android API 35 x86_64 的 19 项实际用例、Go、实际核心参数转发与 RPC/TLS、官方／社区插件及 race 全部通过。插件 A→B→C 连续保存、真实外部冲突、横屏／真实键盘会话入口、密钥重连清理与旧回调零写入均已验证。前两轮失败候选仅留 Actions，修正后完整验收才发布；正式 APK 已从 Release 与正式 artifact 分别下载并逐字节比对，Latest、tag、固定证书及四项附件已核对，详情见 [0.1.61 验收记录](docs/bugfixes-0.1.61.md)。ARM64 包仅核对签名与载荷，实际 Android 运行在 x86_64 模拟器完成。
+当前已验证可用版本：[`0.1.62-chat-session-clipboard-fixes` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.62-chat-session-clipboard-fixes-90971632)，SHA-256 `714414357bd77e97c3035bbd1afcac0c4dd06f8ed0d169b5b0e0d4c08e8184f6`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44791102942)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44787218390/attempts/1)均通过；JVM 1,127 项、Android API 35 x86_64 的 23 项实际用例、Go、实际核心参数转发与 RPC/TLS、官方／社区插件及 race 全部通过。真实 Room 验证写入提交后读失败、事务回滚及返回分派取消时的会话隔离，系统 Copy/Cut/Paste 和旧轮次复制保护均通过。失败候选仅留 Actions，最终完整验收和签名候选核对后才发布；正式 APK 已从 Release 与正式 artifact 分别下载并逐字节比对，Latest、tag、固定证书及四项附件已核对，详情见 [0.1.62 验收记录](docs/bugfixes-0.1.62.md)。ARM64 包仅核对签名与载荷，实际 Android 运行在 x86_64 模拟器完成。官方网页备份文件桥接继续独立开发，尚未计入本版验收。
 
 官方插件完整通过基线仍可通过 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)追溯；对应历史 Release 条目已按清理策略移除，运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 
