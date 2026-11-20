@@ -28,6 +28,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/bugfixes-0.1.57.md](docs/bugfixes-0.1.57.md) | 聊天预设实际请求、失败草稿保留与原子存储验收 |
 | [docs/bugfixes-0.1.56.md](docs/bugfixes-0.1.56.md) | 重复停止、独立清理凭证与实际 Android 通知重发验收 |
 | [docs/bugfixes-0.1.55.md](docs/bugfixes-0.1.55.md) | 模型目录证书指纹、三态请求与真实核心 TLS 验收 |
 | [docs/bugfixes-0.1.54.md](docs/bugfixes-0.1.54.md) | 运行中安全日志、停止后最终诊断与实际退出码 |
@@ -75,7 +76,7 @@
 
 `Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`，才会把同一轮验证产物发布为 Latest Release。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
-当前已验证可用版本：[`0.1.56-gateway-cleanup-lease` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.56-gateway-cleanup-lease-428c0c9b)，SHA-256 `d46cd8fd1b353fc13ef674efe725540ba6d7c1d656f5a96184db8d9095e2f1f0`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44652080580)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44650145650)均通过；JVM 1,002 项、Go、两种实际核心的 RPC/TLS、官方／社区插件、race 与 Android API 35 模拟器运行结果均为 0 失败。重复通知停止和无 Service 的界面停止不能提前释放旧控制器的清理屏障，只有实际清理完成后原凭证才能解锁。本轮候选仅归档到 Actions，完整验证通过后才发布 Release；已核实 Latest、正式 tag、固定签名、四项附件与下载后的正式 APK 哈希，完整证据及后续范围见 [0.1.56 验收记录](docs/bugfixes-0.1.56.md)。
+当前已验证可用版本：[`0.1.57-chat-profiles` 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.57-chat-profiles-0c499662)，SHA-256 `dfb5a2044e85f0b354441e0270a449c65e5c33c33c8f016a4db30bd36b1bba29`。[正式构建与发布](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44656977105)和[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/44655555549)均通过；JVM 1,060 项、Go、实际核心参数转发与 RPC/TLS、官方／社区插件、race 和 Android API 35 综合回归均通过。预设参数进入真实聊天请求，保存失败保留表单，损坏库不会静默覆盖；原生页面发送、上游参数和 Room 隔离均已验收。本轮候选仅归档到 Actions，完整验证通过后才发布 Release；已核实 Latest、正式 tag、固定签名、四项附件与下载后的正式 APK 哈希，完整证据及后续范围见 [0.1.57 验收记录](docs/bugfixes-0.1.57.md)。
 
 官方插件完整通过基线仍可通过 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)追溯；对应历史 Release 条目已按清理策略移除，运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 
