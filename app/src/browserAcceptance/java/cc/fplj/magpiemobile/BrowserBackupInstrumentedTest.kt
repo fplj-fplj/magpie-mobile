@@ -300,9 +300,28 @@ class BrowserBackupInstrumentedTest {
             val field = device.findObject(By.res(CHROME, "url_bar"))
             field?.isFocused == true && expectedUrl.matches(field.text?.trim().orEmpty())
         }
-        device.pressBack() // Omnibox focus/keyboard only; not a fabricated navigation.
-        await(5_000) { webViewOrNull() != null }
-        accept(namedControl(CHROME, SETTINGS) != null, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED)
+        // On this Chrome/Android combination the first Back can dismiss only the IME.
+        // Send at most two, each guarded by the still-focused native suggestion UI;
+        // never send Back after the page is visible and risk traversing its history.
+        var backPresses = 0
+        var nextBackAt = 0L
+        await(5_000, FailureReason.OFFICIAL_PAGE_NOT_RESTORED) {
+            accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
+            val field = device.findObject(By.res(CHROME, "url_bar"))
+            val suggestionsVisible = device.hasObject(By.res(CHROME, "omnibox_suggestions_dropdown"))
+            if (field != null && !field.isFocused && !suggestionsVisible && webViewOrNull() != null &&
+                namedControl(CHROME, SETTINGS) != null) {
+                true
+            } else {
+                val now = SystemClock.elapsedRealtime()
+                if (field?.isFocused == true && suggestionsVisible && backPresses < 2 && now >= nextBackAt) {
+                    device.pressBack()
+                    backPresses += 1
+                    nextBackAt = SystemClock.elapsedRealtime() + 1_000
+                }
+                false
+            }
+        }
     }
 
     private fun revealSyncTab(): UiObject2 {
@@ -605,7 +624,7 @@ class BrowserBackupInstrumentedTest {
         NATIVE_PROVIDER_PAGE_NOT_RECOGNIZED, NATIVE_BROWSER_BUTTON_NOT_REACHED,
         BROWSER_SETUP_REQUIRED, INDEPENDENT_BROWSER_NOT_FOREGROUND, CURRENT_URL_EDIT_ACTION_NOT_REACHED,
         CLEAN_OFFICIAL_URL_NOT_REACHED,
-        OFFICIAL_UI_NOT_RECOGNIZED, SYNC_TAB_NOT_REACHED,
+        OFFICIAL_UI_NOT_RECOGNIZED, OFFICIAL_PAGE_NOT_RESTORED, SYNC_TAB_NOT_REACHED,
         OFFICIAL_WEB_CONTROL_NOT_REACHED, AMBIGUOUS_ACCESSIBLE_CONTROL,
         PASSWORD_INPUT_REJECTED, PASSWORD_INPUTS_NOT_RECOGNIZED, PRIVATE_EXPORT_PATH_RETURNED, PRIVATE_BACKUP_ARCHIVE_CHANGED,
         MULTIPLE_NEW_DOWNLOADS, STABLE_PUBLIC_DOWNLOAD_NOT_REACHED, DOWNLOAD_HASH_TOOL_FAILED,
@@ -643,7 +662,9 @@ class BrowserBackupInstrumentedTest {
         private val DOWNLOAD_RETRY = listOf("Download · magpie.magpie-backup", "下载 · magpie.magpie-backup")
         private val DOCUMENTS_PACKAGES = setOf("com.google.android.documentsui", "com.android.documentsui")
         // Fresh entry may show Providers through the official SPA's startup routing.
-        // Both gates reject credentials, tickets, extra parameters, fragments and other origins.
+        // Both gates reject tickets, extra parameters, fragments and other origins.
+        // CoreManagementClient independently rejects userinfo before the production ACTION_VIEW;
+        // Chrome's editing formatter is not evidence of userinfo absence.
         private val CLEAN_ENTRY_URL = Regex("(?:http://)?127\\.0\\.0\\.1:3430/?(?:\\?view=providers)?")
         private val SYNC_SETTINGS_URL = Regex("(?:http://)?127\\.0\\.0\\.1:3430/\\?(?:view=settings&tab=sync|tab=sync&view=settings)")
         private val SAFE_BASENAME = Regex("magpie(?: \\([0-9]+\\))?\\.magpie-backup")
