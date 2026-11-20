@@ -10,6 +10,8 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
@@ -71,7 +73,20 @@ class PluginOperationFailureCancellationTest {
             try {
                 val failure = failedSave(operation, B)
                 assertTrue("A missing POST response must remain unknown", failure is PluginWriteUnknownException)
-                assertNull(failure.cause)
+                // Coroutine stacktrace recovery can wrap a copy around the original safe failure.
+                // Every cause must still be the same sanitized category, with no raw I/O attached.
+                val seen = Collections.newSetFromMap(IdentityHashMap<Throwable, Boolean>())
+                var current: Throwable? = failure
+                while (current != null) {
+                    val diagnostic = current
+                    assertTrue("Unknown-write exception chain must be acyclic", seen.add(diagnostic))
+                    assertTrue("Unknown-write causes must keep their sanitized category",
+                        diagnostic.javaClass == PluginWriteUnknownException::class.java)
+                    assertTrue("Unknown-write diagnostics must contain only the fixed safe message",
+                        diagnostic.message == "插件写入结果未知；不得重放，请重新只读核对")
+                    assertTrue("Unknown-write diagnostics must not retain suppressed transport failures", diagnostic.suppressed.isEmpty())
+                    current = diagnostic.cause
+                }
                 operation.ensureCurrent()
                 lease.control.ensureActive()
                 assertEquals(A, operation.plugins().entries.single().options.toString())
