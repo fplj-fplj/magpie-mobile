@@ -173,6 +173,78 @@ class StreamingChatTurnStoreTest {
     }
 
     @Test
+    fun reasoningAliasesPersistOnceAndNeverEnterTheNextRequestsContext() {
+        val bodies = Collections.synchronizedList(mutableListOf<String>())
+        server.createContext("/v1/chat/completions") { ex ->
+            bodies.add(ex.requestBody.bufferedReader().readText())
+            respond(ex,
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"first \",\"reasoning\":\"first \"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"reasoning\":\"second\"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"reasoning\":\" \"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{\"reasoning_content\":null,\"reasoning\":\"third\",\"content\":\"reply\"}}]}\n\n" +
+                    "data: [DONE]\n\n")
+        }
+        val turns = RecordingTurnStore()
+        val initial = pair()
+        val s = session(turns, initial)
+        val reasonings = mutableListOf<String>()
+        val deltas = mutableListOf<String>()
+
+        assertEquals("reply", s.sendWithReasoning("new user",
+            onReasoning = reasonings::add, onDelta = deltas::add))
+
+        assertEquals(listOf("first ", "second", " ", "third"), reasonings)
+        assertEquals(listOf("reply"), deltas)
+        assertEquals(SessionRecord(123L, "assistant", "chat:m:stream", "reply", "first second third"),
+            turns.completed.getValue("turn-1"))
+        val firstTurnMessages = initial + listOf(
+            ChatClient.Message("user", "new user"), ChatClient.Message("assistant", "reply"))
+        assertEquals(firstTurnMessages, s.messages())
+        assertEquals("reply", s.send("follow-up"))
+        assertEquals(2, bodies.size)
+        assertEquals(firstTurnMessages + ChatClient.Message("user", "follow-up"), messages(bodies[1]))
+        assertFalse(bodies[1].contains("\"reasoning\""))
+        assertFalse(bodies[1].contains("\"reasoning_content\""))
+        assertFalse(bodies[1].contains("first second third"))
+        assertEquals(2, turns.completed.size)
+        assertTrue(turns.failures.isEmpty())
+    }
+
+    @Test
+    fun reasoningAliasCallbackCancellationRollsBackWithoutAnswerCommitOrReplay() {
+        val requests = AtomicInteger()
+        server.createContext("/v1/chat/completions") { ex ->
+            requests.incrementAndGet()
+            respond(ex,
+                "data: {\"choices\":[{\"delta\":{\"reasoning\":\"thought\",\"content\":\"reply\"}}]}\n\n" +
+                    "data: [DONE]\n\n")
+        }
+        val cancellation = CancellationException("private callback cancellation")
+        val turns = RecordingTurnStore()
+        val initial = pair()
+        val s = session(turns, initial, requestControl = ChatRequestControl())
+        val reasonings = mutableListOf<String>()
+        val deltas = mutableListOf<String>()
+
+        val actual = assertFailsWith<CancellationException> {
+            s.sendWithReasoning("new user", onReasoning = {
+                reasonings.add(it)
+                throw cancellation
+            }, onDelta = deltas::add)
+        }
+
+        assertSame(cancellation, actual)
+        assertEquals(listOf("thought"), reasonings)
+        assertTrue(deltas.isEmpty())
+        assertEquals(initial, s.messages())
+        assertTrue(turns.completeAttempts.isEmpty())
+        assertEquals(setOf("turn-1"), turns.failures.keys)
+        assertEquals("Chat failed; partial characters=0", turns.failures.getValue("turn-1").text)
+        assertEquals(1, requests.get())
+        s.reset()
+    }
+
+    @Test
     fun beginFailuresMakeZeroHttpCallsNeverFailAndRetainOnlyRecoveredHistory() {
         val n = AtomicInteger(0)
         server.createContext("/v1/chat/completions") { ex ->

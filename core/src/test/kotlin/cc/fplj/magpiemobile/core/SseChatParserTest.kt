@@ -88,6 +88,107 @@ class SseChatParserTest {
     }
 
     @Test
+    fun reasoningAliasFillsMissingNullEmptyAndNonStringPrimaryValues() {
+        for (primary in listOf(null, "null", "\"\"", "42", "false", "[]", "{}")) {
+            val reasonings = mutableListOf<String>()
+            val p = SseChatParser(onReasoning = reasonings::add, onDelta = {})
+            val primaryField = primary?.let { "\"reasoning_content\":$it," }.orEmpty()
+
+            assertFalse(p.feedLine(
+                "data: {\"choices\":[{\"delta\":{${primaryField}\"reasoning\":\"thought\",\"content\":null}}]}",
+            ))
+            assertTrue(p.feedLine("data: [DONE]"))
+
+            assertEquals(listOf("thought"), reasonings)
+            assertEquals("thought", p.fullReasoningText())
+            assertEquals("", p.fullText())
+        }
+    }
+
+    @Test
+    fun reasoningContentWinsWithoutDuplicateAliasAndPreservesWhitespaceAcrossMixedDeltas() {
+        val events = mutableListOf<String>()
+        val p = SseChatParser(
+            onReasoning = { events.add("reasoning:$it") },
+            onDelta = { events.add("content:$it") },
+        )
+        p.feedLine("""data: {"choices":[{"delta":{"reasoning_content":"first","reasoning":"first"}}]}""")
+        p.feedLine("""data: {"choices":[{"delta":{"reasoning_content":" \n","reasoning":"ignored"}}]}""")
+        p.feedLine("""data: {"choices":[{"delta":{"reasoning":"second"}}]}""")
+        p.feedLine("""data: {"choices":[{"delta":{"reasoning_content":"","reasoning":" "}}]}""")
+        p.feedLine("""data: {"choices":[{"delta":{"reasoning_content":"third","reasoning":"ignored","content":"answer"}}]}""")
+
+        assertTrue(p.feedLine("data: [DONE]"))
+        assertEquals("first \nsecond third", p.fullReasoningText())
+        assertEquals("answer", p.fullText())
+        assertEquals(listOf("reasoning:first", "reasoning: \n", "reasoning:second", "reasoning: ",
+            "reasoning:third", "content:answer"), events)
+    }
+
+    @Test
+    fun nonStringReasoningAliasIsIgnoredWithoutChangingContentOrPrimaryReasoning() {
+        for (alias in listOf("null", "42", "false", "[]", "{}")) {
+            val reasonings = mutableListOf<String>()
+            val deltas = mutableListOf<String>()
+            val p = SseChatParser(onReasoning = reasonings::add, onDelta = deltas::add)
+            p.feedLine("data: {\"choices\":[{\"delta\":{\"reasoning\":$alias,\"content\":null}}]}")
+            p.feedLine("data: {\"choices\":[{\"delta\":{\"reasoning\":$alias,\"content\":\"answer\"}}]}")
+            p.feedLine("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"primary\",\"reasoning\":$alias}}]}")
+
+            assertTrue(p.feedLine("data: [DONE]"))
+            assertEquals(listOf("primary"), reasonings)
+            assertEquals(listOf("answer"), deltas)
+            assertEquals("primary", p.fullReasoningText())
+            assertEquals("answer", p.fullText())
+        }
+    }
+
+    @Test
+    fun reasoningAliasSharesReasoningAndCombinedBudgetsWithPrimaryDeltas() {
+        for (limits in listOf(
+            StreamingChatLimits(maxReasoningChars = 2),
+            StreamingChatLimits(maxCombinedChars = 4),
+        )) {
+            val events = mutableListOf<String>()
+            val p = SseChatParser(
+                limits = limits,
+                onReasoning = { events.add("reasoning:$it") },
+                onDelta = { events.add("content:$it") },
+            )
+            p.feedLine(deltaLine(content = "a", reasoning = "r"))
+            p.feedLine("""data: {"choices":[{"delta":{"reasoning":"s","content":"b"}}]}""")
+
+            val failure = assertFailsWith<StreamingChatException> {
+                p.feedLine("""data: {"choices":[{"delta":{"reasoning":"t","content":"c"}}]}""")
+            }
+
+            assertLimitFailure(failure, content = "ab", reasoning = "rs")
+            assertEquals("ab", p.fullText())
+            assertEquals("rs", p.fullReasoningText())
+            assertEquals(listOf("reasoning:r", "content:a", "reasoning:s", "content:b"), events)
+        }
+    }
+
+    @Test
+    fun reasoningAliasCallbackCancellationStopsTheSameEventsContentCallback() {
+        val cancellation = CancellationException("fixture cancellation")
+        val deltas = mutableListOf<String>()
+        val p = SseChatParser(
+            onReasoning = { throw cancellation },
+            onDelta = deltas::add,
+        )
+
+        val actual = assertFailsWith<CancellationException> {
+            p.feedLine("""data: {"choices":[{"delta":{"reasoning":"thought","content":"answer"}}]}""")
+        }
+
+        assertSame(cancellation, actual)
+        assertEquals("thought", p.fullReasoningText())
+        assertEquals("", p.fullText())
+        assertTrue(deltas.isEmpty())
+    }
+
+    @Test
     fun errorEventThrows() {
         val p = SseChatParser { }
         val e = assertFailsWith<ChatException> {
