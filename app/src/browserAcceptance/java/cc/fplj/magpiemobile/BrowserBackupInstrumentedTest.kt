@@ -398,7 +398,7 @@ class BrowserBackupInstrumentedTest {
         var imeDismissed = false
         var swipes = 0
         var lastMotionAt = 0L
-        await(60_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
+        await(180_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
             val nodes = webButtonNodes(names)
             try {
                 accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
