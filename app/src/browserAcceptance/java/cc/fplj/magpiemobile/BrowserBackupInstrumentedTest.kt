@@ -458,11 +458,17 @@ class BrowserBackupInstrumentedTest {
         accept(accepted, FailureReason.OFFICIAL_WEB_SHOW_REJECTED)
     }
 
-    private data class WebPane(val bounds: Rect, val canScrollUp: Boolean, val canScrollDown: Boolean)
+    private data class WebPane(
+        val node: AccessibilityNodeInfo,
+        val bounds: Rect,
+        val canScrollUp: Boolean,
+        val canScrollDown: Boolean,
+    )
 
     @Suppress("DEPRECATION")
     private fun webPane(node: AccessibilityNodeInfo): WebPane? {
         var ancestor = node.parent
+        var paneNode: AccessibilityNodeInfo? = null
         var pane: Rect? = null
         var canScrollUp = false
         var canScrollDown = false
@@ -473,14 +479,17 @@ class BrowserBackupInstrumentedTest {
                 val bounds = Rect().also { parent.getBoundsInScreen(it) }
                 if (parent.className?.toString() == "android.webkit.WebView") {
                     val viewport = pane ?: return null
+                    val captured = paneNode ?: return null
                     if (!viewport.intersect(bounds) ||
                         !viewport.intersect(0, 0, device.displayWidth, device.displayHeight)) return null
-                    return WebPane(viewport, canScrollUp, canScrollDown)
+                    paneNode = null
+                    return WebPane(captured, viewport, canScrollUp, canScrollDown)
                 }
                 if (parent.isScrollable) {
                     if (!parent.isEnabled || bounds.isEmpty) return null
                     if (pane == null) {
                         pane = bounds
+                        paneNode = AccessibilityNodeInfo.obtain(parent)
                         // BACKWARD can also mean horizontal movement in Chrome.
                         // Record only the exact vertical actions for the pane.
                         canScrollUp = parent.actionList.any {
@@ -494,7 +503,10 @@ class BrowserBackupInstrumentedTest {
                 ancestor = parent.parent
                 parent.recycle()
             }
-        } finally { ancestor?.recycle() }
+        } finally {
+            ancestor?.recycle()
+            paneNode?.recycle()
+        }
     }
 
     private fun scrollRealWebPane(node: AccessibilityNodeInfo) {
@@ -505,33 +517,13 @@ class BrowserBackupInstrumentedTest {
         val up = target.bottom <= viewport.top
         accept((down && pane.canScrollDown) || (up && pane.canScrollUp),
             FailureReason.OFFICIAL_WEB_SCROLL_DIRECTION_NOT_PROVEN)
-        val paneNode = scrollablePaneNode(node, viewport) ?:
-            throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED)
         try {
             val action = if (down) AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id
                 else AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
-            val accepted = paneNode.actionList.any { it.id == action } && paneNode.performAction(action)
+            val accepted = pane.node.actionList.any { it.id == action } && pane.node.performAction(action)
             recordWebAction(if (down) "PANE_DOWN" else "PANE_UP", node, accepted)
             accept(accepted, FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
-        } finally { paneNode.recycle() }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun scrollablePaneNode(node: AccessibilityNodeInfo, expected: Rect): AccessibilityNodeInfo? {
-        var ancestor = node.parent
-        try {
-            while (true) {
-                val parent = ancestor ?: return null
-                if (parent.packageName?.toString() != CHROME || !parent.isVisibleToUser) return null
-                if (parent.isScrollable) {
-                    val bounds = Rect().also { parent.getBoundsInScreen(it) }
-                    if (bounds != expected || !parent.isEnabled) return null
-                    return AccessibilityNodeInfo.obtain(parent)
-                }
-                ancestor = parent.parent
-                parent.recycle()
-            }
-        } finally { ancestor?.recycle() }
+        } finally { pane.node.recycle() }
     }
 
     private fun beginWebControl() {
@@ -545,12 +537,14 @@ class BrowserBackupInstrumentedTest {
         val pane = webPane(node)
         fun rect(value: Rect?) = JSONArray(listOf(value?.left ?: 0, value?.top ?: 0,
             value?.right ?: 0, value?.bottom ?: 0))
-        return JSONObject()
-            .put("targetBounds", rect(target)).put("paneBounds", rect(pane?.bounds))
-            .put("offscreen", node.extras.getBoolean("AccessibilityNodeInfo.offscreen", false))
-            .put("paneCanScrollUp", pane?.canScrollUp == true)
-            .put("paneCanScrollDown", pane?.canScrollDown == true)
-            .put("onScreen", webNodeOnScreen(node))
+        try {
+            return JSONObject()
+                .put("targetBounds", rect(target)).put("paneBounds", rect(pane?.bounds))
+                .put("offscreen", node.extras.getBoolean("AccessibilityNodeInfo.offscreen", false))
+                .put("paneCanScrollUp", pane?.canScrollUp == true)
+                .put("paneCanScrollDown", pane?.canScrollDown == true)
+                .put("onScreen", webNodeOnScreen(node))
+        } finally { pane?.node?.recycle() }
     }
 
     private fun observeWebNode(node: AccessibilityNodeInfo) {
