@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Xml
-import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -139,11 +138,11 @@ class BrowserBackupInstrumentedTest {
                     safeHierarchy("browser-backup-real-file-selected.xml")
 
                     phase = "wrong_phrase_must_preserve_B"
-                    setRealPasswordFields(listOf(wrongPhrase))
                     // Import's submit button follows the choice rows in the page.
                     // Chrome exposes only part of that form to accessibility until
                     // the real scrollable page is moved.
-                    revealWebControlByKeyboard(IMPORT_SUBMIT)
+                    revealWebControlByGesture(IMPORT_SUBMIT)
+                    setRealPasswordFields(listOf(wrongPhrase))
                     clickWebControl(IMPORT_SUBMIT)
                     await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
                         accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
@@ -160,8 +159,8 @@ class BrowserBackupInstrumentedTest {
                     // Keep the same selected real file; no re-export, alternate URI or API import.
                     // Its filename may be above the viewport after the error. The
                     // successful restore below must use this already-selected file.
+                    revealWebControlByGesture(IMPORT_SUBMIT)
                     setRealPasswordFields(listOf(phrase))
-                    revealWebControlByKeyboard(IMPORT_SUBMIT)
                     clickWebControl(IMPORT_SUBMIT)
                     await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
                     assertFixture(session, before = true)
@@ -417,19 +416,10 @@ class BrowserBackupInstrumentedTest {
         }
     }
 
-    private fun revealWebControlByKeyboard(names: List<String>) {
-        var tabs = 0
-        var lastTabAt = 0L
+    private fun revealWebControlByGesture(names: List<String>) {
+        var attempts = 0
+        var lastGestureAt = 0L
         beginWebControl()
-        val passwords = passwordNodes()
-        try {
-            accept(passwords.size == 1, FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
-            val password = passwords.single()
-            accept(password.performAction(AccessibilityNodeInfo.ACTION_FOCUS) ||
-                password.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS),
-                FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
-        } finally { passwords.forEach { it.recycle() } }
-
         await(20_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
             val nodes = webButtonNodes(names)
             try {
@@ -437,14 +427,26 @@ class BrowserBackupInstrumentedTest {
                 if (nodes.size == 1) return@await true
             } finally { nodes.forEach { it.recycle() } }
 
-            accept(tabs < 8, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
-            if (SystemClock.elapsedRealtime() - lastTabAt >= 500) {
-                // Tab follows the official DOM focus order; Chrome brings the newly
-                // focused control into the viewport. Require the semantic button to
-                // appear before allowing the following click.
-                device.pressKeyCode(KeyEvent.KEYCODE_TAB)
-                tabs += 1
-                lastTabAt = SystemClock.elapsedRealtime()
+            val web = webViewOrNull()
+            if (web != null && attempts < 2 &&
+                SystemClock.elapsedRealtime() - lastGestureAt >= 750) {
+                val panes = web.findObjects(By.scrollable(true)).filter {
+                    it.isEnabled && !it.visibleBounds.isEmpty
+                }
+                accept(panes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+                val bounds = panes.singleOrNull()?.visibleBounds
+                if (bounds != null) {
+                    // Chrome advertises this page pane as scrollable but its semantic
+                    // scroll action is a no-op. Move less than half a viewport so the
+                    // password and the following button can remain visible together.
+                    accept(device.swipe(bounds.centerX(),
+                        bounds.top + bounds.height() * 75 / 100,
+                        bounds.centerX(),
+                        bounds.top + bounds.height() * 40 / 100,
+                        80), FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
+                    attempts += 1
+                    lastGestureAt = SystemClock.elapsedRealtime()
+                }
             }
             false
         }
