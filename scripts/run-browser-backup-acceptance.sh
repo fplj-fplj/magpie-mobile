@@ -60,7 +60,7 @@ safe_labels = {
 safe_phases = {
     "initializing", "starting_gateway", "creating_A_via_production_RPC", "opening_production_browser_button",
     "opening_official_sync_settings", "exporting_via_official_web_form", "changing_A_to_B_via_same_connection_RPC",
-    "preparing_official_import_viewport", "choosing_real_download_from_official_import",
+    "preparing_official_browser_viewport", "choosing_real_download_from_official_import",
     "wrong_phrase_must_preserve_B", "correct_phrase_must_restore_A", "passed",
 }
 safe_xml_names = {

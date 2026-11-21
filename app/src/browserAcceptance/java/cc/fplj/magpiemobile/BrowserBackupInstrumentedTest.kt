@@ -74,7 +74,12 @@ class BrowserBackupInstrumentedTest {
                 )
             }
             device.setOrientationNatural()
-            ActivityScenario.launch(MainActivity::class.java).use {
+            phase = "preparing_official_browser_viewport"
+            val originalDensity = displayDensity()
+            var browserFailure: Throwable? = null
+            try {
+                applyReducedDisplayDensity(originalDensity)
+                ActivityScenario.launch(MainActivity::class.java).use {
                 try {
                     phase = "starting_gateway"
                     await(30_000) { device.hasObject(By.res("gateway-power-switch")) }
@@ -130,56 +135,39 @@ class BrowserBackupInstrumentedTest {
                     }
                     assertFixture(session, before = false)
 
-                    phase = "preparing_official_import_viewport"
-                    val originalDensity = displayDensity()
-                    var importFailure: Throwable? = null
-                    try {
-                        applyReducedDisplayDensity(originalDensity)
-                        awaitOfficialImportViewport()
+                    phase = "choosing_real_download_from_official_import"
+                    clickWebControl(IMPORT_OPEN)
+                    awaitWebFormOpened(IMPORT_OPEN)
+                    clickWebControl(CHOOSE)
+                    chooseActualDownload(requireNotNull(downloaded))
+                    awaitStableImportForm(requireNotNull(downloaded).name)
+                    assertDownloadUnchanged()
+                    safeHierarchy("browser-backup-real-file-selected.xml")
 
-                        phase = "choosing_real_download_from_official_import"
-                        clickWebControl(IMPORT_OPEN)
-                        awaitWebFormOpened(IMPORT_OPEN)
-                        clickWebControl(CHOOSE)
-                        chooseActualDownload(requireNotNull(downloaded))
-                        awaitStableImportForm(requireNotNull(downloaded).name)
-                        assertDownloadUnchanged()
-                        safeHierarchy("browser-backup-real-file-selected.xml")
-
-                        phase = "wrong_phrase_must_preserve_B"
-                        setRealPasswordFields(listOf(wrongPhrase))
-                        clickVisibleWebControl(IMPORT_SUBMIT)
-                        await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
-                            accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
-                            hasWebText(WRONG_PHRASE_ERROR)
-                        }
-                        assertFixture(session, before = false)
-                        SystemClock.sleep(500)
-                        assertFixture(session, before = false)
-                        assertDownloadUnchanged()
-                        assertPrivateArchivesUnchanged(privateArchiveBaseline)
-                        safeHierarchy("browser-backup-wrong-phrase-rejected.xml")
-
-                        phase = "correct_phrase_must_restore_A"
-                        // Keep the same selected real file; no re-export, alternate URI or API import.
-                        // Its filename may be above the viewport after the error. The
-                        // successful restore below must use this already-selected file.
-                        setRealPasswordFields(listOf(phrase))
-                        clickVisibleWebControl(IMPORT_SUBMIT)
-                        await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
-                        assertFixture(session, before = true)
-                        assertDownloadUnchanged()
-                        assertPrivateArchivesUnchanged(privateArchiveBaseline)
-                    } catch (failure: Throwable) {
-                        importFailure = failure
-                        throw failure
-                    } finally {
-                        try {
-                            restoreDisplayDensity(originalDensity)
-                        } catch (restoreFailure: Throwable) {
-                            importFailure?.addSuppressed(restoreFailure) ?: throw restoreFailure
-                        }
+                    phase = "wrong_phrase_must_preserve_B"
+                    setRealPasswordFields(listOf(wrongPhrase))
+                    clickVisibleWebControl(IMPORT_SUBMIT)
+                    await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
+                        accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
+                        hasWebText(WRONG_PHRASE_ERROR)
                     }
+                    assertFixture(session, before = false)
+                    SystemClock.sleep(500)
+                    assertFixture(session, before = false)
+                    assertDownloadUnchanged()
+                    assertPrivateArchivesUnchanged(privateArchiveBaseline)
+                    safeHierarchy("browser-backup-wrong-phrase-rejected.xml")
+
+                    phase = "correct_phrase_must_restore_A"
+                    // Keep the same selected real file; no re-export, alternate URI or API import.
+                    // Its filename may be above the viewport after the error. The
+                    // successful restore below must use this already-selected file.
+                    setRealPasswordFields(listOf(phrase))
+                    clickVisibleWebControl(IMPORT_SUBMIT)
+                    await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
+                    assertFixture(session, before = true)
+                    assertDownloadUnchanged()
+                    assertPrivateArchivesUnchanged(privateArchiveBaseline)
                     confirmOfficialPage(SYNC_SETTINGS_URL)
                     safeHierarchy("browser-backup-restored.xml")
                     // Import replaces the form; never capture a password form or a ticket URL.
@@ -205,6 +193,16 @@ class BrowserBackupInstrumentedTest {
                         // Keep the operation failure; the outer fallback can still collect.
                     }
                     throw failure
+                }
+                }
+            } catch (failure: Throwable) {
+                browserFailure = failure
+                throw failure
+            } finally {
+                try {
+                    restoreDisplayDensity(originalDensity)
+                } catch (restoreFailure: Throwable) {
+                    browserFailure?.addSuppressed(restoreFailure) ?: throw restoreFailure
                 }
             }
         } catch (failure: Throwable) {
@@ -1172,7 +1170,7 @@ class BrowserBackupInstrumentedTest {
             FailureReason.DISPLAY_DENSITY_CHANGE_REJECTED)
         shellRead("wm density $reduced")
         await(15_000, FailureReason.DISPLAY_DENSITY_CHANGE_REJECTED) {
-            device.currentPackageName == CHROME && displayDensity().effective == reduced
+            displayDensity().effective == reduced
         }
     }
 
@@ -1180,16 +1178,6 @@ class BrowserBackupInstrumentedTest {
         shellRead(original.override?.let { "wm density $it" } ?: "wm density reset")
         await(15_000, FailureReason.DISPLAY_DENSITY_RESTORE_REJECTED) {
             displayDensity() == original
-        }
-    }
-
-    private fun awaitOfficialImportViewport() {
-        await(20_000, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED) {
-            if (device.currentPackageName != CHROME || webViewOrNull() == null ||
-                !hasWebText("SYNC AND BACKUP")) return@await false
-            val pane = currentWebPane() ?: return@await false
-            pane.node.recycle()
-            true
         }
     }
 
