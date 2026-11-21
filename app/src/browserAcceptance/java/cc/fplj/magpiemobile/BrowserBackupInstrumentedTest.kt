@@ -115,6 +115,7 @@ class BrowserBackupInstrumentedTest {
                     awaitWebFormOpened(EXPORT_OPEN)
                     phase = "exporting_via_official_web_form"
                     setRealPasswordFields(listOf(phrase, phrase))
+                    revealWebControlByScroll(EXPORT_SUBMIT)
                     clickWebControl(EXPORT_SUBMIT)
                     downloaded = awaitRealDownload(baseline)
                     assertPrivateArchivesUnchanged(privateArchiveBaseline)
