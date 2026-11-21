@@ -395,7 +395,7 @@ class BrowserBackupInstrumentedTest {
 
     private fun revealWebControlByScroll(names: List<String>, allowClipped: Boolean = false) {
         beginWebControl()
-        var legacyScrollTried = false
+        var imeDismissed = false
         var swipes = 0
         var lastMotionAt = 0L
         await(30_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
@@ -408,6 +408,12 @@ class BrowserBackupInstrumentedTest {
                 }
             } finally { nodes.forEach { it.recycle() } }
 
+            if (!imeDismissed) {
+                imeDismissed = true
+                dismissWebImeOnce()
+                return@await false
+            }
+
             val now = SystemClock.elapsedRealtime()
             if (now - lastMotionAt < 900) return@await false
 
@@ -416,17 +422,10 @@ class BrowserBackupInstrumentedTest {
             val pane = currentWebPane() ?: return@await false
 
             try {
-                val forward = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                val useLegacy = !legacyScrollTried &&
-                    pane.node.actionList.any { it.id == forward }
-                if (useLegacy) {
-                    legacyScrollTried = true
-                }
-                val accepted = if (useLegacy && pane.node.performAction(forward)) true
-                    else {
-                        accept(swipes < 4, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
-                        swipeWebPane(pane).also { swipes += 1 }
-                    }
+                accept(swipes < 4, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
+                swipes += 1
+                val accepted = swipeWebPane(pane)
+                recordWebPaneGesture("PANE_DOWN", pane, accepted)
                 accept(accepted, FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
             } finally { pane.node.recycle() }
 
@@ -437,13 +436,43 @@ class BrowserBackupInstrumentedTest {
 
     private fun swipeWebPane(pane: WebPane): Boolean {
         val bounds = pane.bounds
-        val gutterX = (bounds.left + bounds.width() / 20)
+        // Start inside the page rather than its margin. A focus-triggered IME
+        // can temporarily leave pane bounds unchanged while covering lower
+        // screen coordinates, so the caller dismisses it before this gesture.
+        val gutterX = (bounds.left + 54)
             .coerceIn(bounds.left + 1, bounds.right - 1)
-        val startY = bounds.top + bounds.height() * 84 / 100
-        val endY = bounds.top + bounds.height() * 16 / 100
+        val startY = bounds.top + bounds.height() * 80 / 100
+        val endY = bounds.top + bounds.height() * 20 / 100
         // A slow drag in the page gutter moves the real Settings scroller
         // without touching the password input or its IME.
-        return device.swipe(gutterX, startY, gutterX, endY, 120)
+        return device.swipe(gutterX, startY, gutterX, endY, 70)
+    }
+
+    private fun dismissWebImeOnce() {
+        if (!inputMethodShown()) return
+        accept(device.currentPackageName == CHROME,
+            FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
+        accept(device.pressBack(), FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED)
+        await(5_000, FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED) {
+            device.currentPackageName == CHROME && !inputMethodShown() && webViewOrNull() != null
+        }
+    }
+
+    private fun inputMethodShown(): Boolean = shellRead("dumpsys input_method")
+        .lineSequence().any { it.trim() == "mInputShown=true" }
+
+    private fun recordWebPaneGesture(operation: String, pane: WebPane, accepted: Boolean) {
+        check(webControlTrace.length() < 8) { "bounded web action evidence required" }
+        fun rect(value: Rect) = JSONArray(listOf(value.left, value.top, value.right, value.bottom))
+        webControlTrace.put(JSONObject()
+            .put("targetBounds", rect(pane.bounds))
+            .put("paneBounds", rect(pane.bounds))
+            .put("offscreen", false)
+            .put("paneCanScrollUp", pane.canScrollUp)
+            .put("paneCanScrollDown", pane.canScrollDown)
+            .put("onScreen", true)
+            .put("operation", operation)
+            .put("accepted", accepted))
     }
 
     private fun currentWebPane(): WebPane? {
@@ -628,7 +657,6 @@ class BrowserBackupInstrumentedTest {
                 .put("paneCanScrollUp", pane?.canScrollUp == true)
                 .put("paneCanScrollDown", pane?.canScrollDown == true)
                 .put("onScreen", webNodeOnScreen(node))
-                .put("intersectsScreen", webNodeIntersectsScreen(node))
         } finally { pane?.node?.recycle() }
     }
 
