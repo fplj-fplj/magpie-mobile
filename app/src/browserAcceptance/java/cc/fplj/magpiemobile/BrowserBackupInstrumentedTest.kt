@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Xml
-import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -140,7 +139,8 @@ class BrowserBackupInstrumentedTest {
 
                     phase = "wrong_phrase_must_preserve_B"
                     setRealPasswordFields(listOf(wrongPhrase))
-                    clickWebControlByKeyboard(IMPORT_SUBMIT)
+                    revealWebControlByScroll(IMPORT_SUBMIT)
+                    clickVisibleWebControl(IMPORT_SUBMIT)
                     await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
                         accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
                         hasWebText(WRONG_PHRASE_ERROR)
@@ -157,7 +157,8 @@ class BrowserBackupInstrumentedTest {
                     // Its filename may be above the viewport after the error. The
                     // successful restore below must use this already-selected file.
                     setRealPasswordFields(listOf(phrase))
-                    clickWebControlByKeyboard(IMPORT_SUBMIT)
+                    revealWebControlByScroll(IMPORT_SUBMIT)
+                    clickVisibleWebControl(IMPORT_SUBMIT)
                     await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
                     assertFixture(session, before = true)
                     assertDownloadUnchanged()
@@ -412,123 +413,97 @@ class BrowserBackupInstrumentedTest {
         }
     }
 
-    private fun clickWebControlByKeyboard(names: List<String>) {
+    private fun clickVisibleWebControl(names: List<String>) {
         beginWebControl()
-        focusRealPassword()
-
-        val initialFocus = focusedWebControlIdentity()
-        accept(initialFocus != null, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
-        var previousFocus = requireNotNull(initialFocus)
-        var tabsSent = 0
-        var awaitingFocusChange = false
-        var lastTabAt = 0L
-        var visiblePolls = 0
-
-        await(30_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
-            accept(hasSingleVisibleWebView(), FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED)
+        await(15_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
             val nodes = webButtonNodes(names)
             try {
                 accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
                 val node = nodes.singleOrNull()
                 if (node != null) {
                     observeWebNode(node)
-                }
-                if (node != null && node.isFocused) {
-                    visiblePolls = if (webNodeOnScreen(node)) visiblePolls + 1 else 0
-                    if (visiblePolls >= 2) {
+                    if (webNodeOnScreen(node)) {
                         clickWebNode(node, offscreen = false)
-                        return@await true
+                        true
+                    } else {
+                        false
                     }
-                    false
                 } else {
-                    visiblePolls = 0
-                    val currentFocus = focusedWebControlIdentity()
-                    if (awaitingFocusChange && currentFocus != null && currentFocus != previousFocus) {
-                        previousFocus = currentFocus
-                        awaitingFocusChange = false
-                    }
-
-                    val now = SystemClock.elapsedRealtime()
-                    if (awaitingFocusChange && now - lastTabAt >= 4_000) {
-                        throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
-                    }
-                    if (!awaitingFocusChange && tabsSent < 6 && now - lastTabAt >= 500) {
-                        // The complete import form has four checkboxes followed by
-                        // Cancel and Import. A Tab is accepted only when Chrome moves
-                        // focus to a new real WebView control.
-                        accept(device.pressKeyCode(KeyEvent.KEYCODE_TAB),
-                            FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
-                        tabsSent += 1
-                        awaitingFocusChange = true
-                        lastTabAt = now
-                    } else if (!awaitingFocusChange && tabsSent == 6 && now - lastTabAt >= 1_500) {
-                        throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
-                    }
                     false
                 }
             } finally { nodes.forEach { it.recycle() } }
         }
     }
 
-    private fun focusRealPassword() {
-        var focusRequested = false
-        var clickRequested = false
-        var lastActionAt = 0L
-        var focusedPolls = 0
-        await(10_000, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED) {
-            accept(hasSingleVisibleWebView(), FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED)
-            val nodes = passwordNodes()
+    private fun revealWebControlByScroll(names: List<String>) {
+        beginWebControl()
+        var legacyScrollTried = false
+        var swipes = 0
+        var lastMotionAt = 0L
+        await(30_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
+            val nodes = webButtonNodes(names)
             try {
-                accept(nodes.size == 1, FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
-                val password = nodes.single()
-                accept(password.isEnabled && password.isFocusable && webNodeOnScreen(password),
-                    FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
-
-                val now = SystemClock.elapsedRealtime()
-                if (!password.isFocused) {
-                    when {
-                        !focusRequested -> {
-                            // ACTION_FOCUS may return true without moving DOM input
-                            // focus. Verify isFocused before allowing keyboard events.
-                            focusRequested = true
-                            webAction("FOCUS", password) {
-                                password.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                            }
-                            lastActionAt = now
-                        }
-                        !clickRequested && now - lastActionAt >= 750 -> {
-                            // A semantic click on the already selected password field
-                            // is the fallback that establishes real WebView input focus.
-                            clickRequested = true
-                            val accepted = webAction("CLICK", password) {
-                                password.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                            }
-                            accept(accepted, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
-                            lastActionAt = now
-                        }
-                    }
+                accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+                nodes.singleOrNull()?.let { node ->
+                    observeWebNode(node)
+                    if (webNodeOnScreen(node)) return@await true
                 }
-                focusedPolls = if (password.isFocused && hasSingleVisibleWebView()) focusedPolls + 1 else 0
-                focusedPolls >= 2
             } finally { nodes.forEach { it.recycle() } }
+
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastMotionAt < 900) return@await false
+
+            accept(device.currentPackageName == CHROME,
+                FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
+            val pane = currentWebPane()
+
+            try {
+                val forward = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                val useLegacy = !legacyScrollTried &&
+                    pane.node.actionList.any { it.id == forward }
+                if (useLegacy) {
+                    legacyScrollTried = true
+                }
+                val accepted = if (useLegacy && pane.node.performAction(forward)) true
+                    else {
+                        accept(swipes < 4, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
+                        swipeWebPane(pane).also { swipes += 1 }
+                    }
+                accept(accepted, FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
+            } finally { pane.node.recycle() }
+
+            lastMotionAt = now
+            false
         }
     }
 
-    private fun hasSingleVisibleWebView(): Boolean =
-        device.findObjects(By.pkg(CHROME).clazz("android.webkit.WebView"))
-            .count { !it.visibleBounds.isEmpty } == 1
+    private fun swipeWebPane(pane: WebPane): Boolean {
+        val bounds = pane.bounds
+        val gutterX = (bounds.left + bounds.width() / 20)
+            .coerceIn(bounds.left + 1, bounds.right - 1)
+        val startY = bounds.top + bounds.height() * 84 / 100
+        val endY = bounds.top + bounds.height() * 16 / 100
+        // A slow drag in the page gutter moves the real Settings scroller
+        // without touching the password input or its IME.
+        return device.swipe(gutterX, startY, gutterX, endY, 120)
+    }
 
-    private data class WebFocusIdentity(val className: String, val nodeHash: Int)
-
-    private fun focusedWebControlIdentity(): WebFocusIdentity? {
+    private fun currentWebPane(): WebPane {
         val nodes = webNodes { node ->
-            node.isFocused && node.className?.toString() != "android.webkit.WebView"
+            node.isScrollable && node.isEnabled && node.className?.toString() != "android.webkit.WebView"
         }
         try {
-            accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
-            return nodes.singleOrNull()?.let {
-                WebFocusIdentity(it.className?.toString().orEmpty(), it.hashCode())
+            accept(nodes.size == 1, FailureReason.OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED)
+            val node = nodes.single()
+            val bounds = Rect().also { node.getBoundsInScreen(it) }
+            accept(!bounds.isEmpty, FailureReason.OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED)
+            val canScrollUp = node.actionList.any {
+                it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
             }
+            val canScrollDown = node.actionList.any {
+                it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id
+            }
+            return WebPane(AccessibilityNodeInfo.obtain(node), bounds, canScrollUp, canScrollDown)
         } finally { nodes.forEach { it.recycle() } }
     }
 
