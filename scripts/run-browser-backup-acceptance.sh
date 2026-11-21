@@ -122,7 +122,8 @@ try:
                 for field in ("offscreen", "paneCanScrollUp", "paneCanScrollDown", "onScreen"):
                     require(type(value[field]) is bool, "UNSAFE_WEB_CONTROL_BOOLEAN")
                 if action:
-                    require(value["operation"] in {"SHOW", "PANE_DOWN", "PANE_UP", "CLICK"} and
+                    require(value["operation"] in {"SHOW", "FOCUS_PAGE", "PAGE_DOWN",
+                                                   "PANE_DOWN", "PANE_UP", "CLICK"} and
                             type(value["accepted"]) is bool, "UNSAFE_WEB_CONTROL_ACTION")
                 return {key: value[key] for key in sorted(keys)}
             trace = record.get("webControlTrace")

@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Xml
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -396,6 +397,8 @@ class BrowserBackupInstrumentedTest {
     private fun revealWebControlByScroll(names: List<String>, allowClipped: Boolean = false) {
         beginWebControl()
         var imeDismissed = false
+        var pageFocusRequested = false
+        var pageDowns = 0
         var swipes = 0
         var lastMotionAt = 0L
         await(240_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
@@ -419,6 +422,28 @@ class BrowserBackupInstrumentedTest {
                 accept(device.currentPackageName == CHROME,
                     FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
                 val pane = snapshot.pane ?: return@await false
+
+                if (!pageFocusRequested) {
+                    val point = snapshot.pageFocusPoint
+                    accept(point != null, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
+                    val accepted = device.click(point!!.x, point.y)
+                    recordWebPaneGesture("FOCUS_PAGE", pane, accepted)
+                    accept(accepted, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
+                    pageFocusRequested = true
+                    lastMotionAt = now
+                    return@await false
+                }
+
+                accept(!snapshot.passwordFocused, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
+                if (pageDowns < 3) {
+                    accept(!inputMethodShown(), FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED)
+                    val accepted = device.pressKeyCode(KeyEvent.KEYCODE_PAGE_DOWN)
+                    recordWebPaneGesture("PAGE_DOWN", pane, accepted)
+                    accept(accepted, FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
+                    pageDowns += 1
+                    lastMotionAt = now
+                    return@await false
+                }
 
                 accept(swipes < 6, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
                 val batch = 6 - swipes
@@ -507,9 +532,11 @@ class BrowserBackupInstrumentedTest {
     private fun webControlPageSnapshot(names: List<String>): WebControlPageSnapshot {
         accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
         val buttons = mutableListOf<AccessibilityNodeInfo>()
+        val clickableBounds = mutableListOf<Rect>()
         var pane: WebPane? = null
         var paneCandidates = 0
         var paneConflict = false
+        var passwordFocused = false
         var webViews = 0
 
         fun visit(node: AccessibilityNodeInfo, insideDocument: Boolean) {
@@ -522,6 +549,13 @@ class BrowserBackupInstrumentedTest {
                     node.isClickable &&
                     (node.text?.toString() in names || node.contentDescription?.toString() in names)) {
                     buttons += AccessibilityNodeInfo.obtain(node)
+                }
+                if (node.isClickable) {
+                    clickableBounds += Rect().also { node.getBoundsInScreen(it) }
+                }
+                if (node.isPassword && node.className?.toString() == "android.widget.EditText" &&
+                    node.isFocused) {
+                    passwordFocused = true
                 }
                 if (node.isScrollable && node.isEnabled &&
                     node.className?.toString() != "android.webkit.WebView") {
@@ -554,12 +588,23 @@ class BrowserBackupInstrumentedTest {
                 pane?.node?.recycle()
                 pane = null
             }
-            return WebControlPageSnapshot(buttons, pane)
+            val pageFocusPoint = pane?.let { webPageFocusPoint(it.bounds, clickableBounds) }
+            return WebControlPageSnapshot(buttons, pane, pageFocusPoint, passwordFocused)
         } catch (failure: Throwable) {
             buttons.forEach { it.recycle() }
             pane?.node?.recycle()
             throw failure
         }
+    }
+
+    private fun webPageFocusPoint(bounds: Rect, clickableBounds: List<Rect>): WebTapPoint? {
+        val y = bounds.centerY()
+        return listOf(36, 54, 64).asSequence()
+            .map { WebTapPoint(bounds.left + it, y) }
+            .firstOrNull { point ->
+                bounds.contains(point.x, point.y) &&
+                    clickableBounds.none { it.contains(point.x, point.y) }
+            }
     }
 
     private fun awaitStableImportForm(name: String) {
@@ -649,7 +694,11 @@ class BrowserBackupInstrumentedTest {
     private data class WebControlPageSnapshot(
         val buttons: List<AccessibilityNodeInfo>,
         val pane: WebPane?,
+        val pageFocusPoint: WebTapPoint?,
+        val passwordFocused: Boolean,
     )
+
+    private data class WebTapPoint(val x: Int, val y: Int)
 
     @Suppress("DEPRECATION")
     private fun webPane(node: AccessibilityNodeInfo): WebPane? {
