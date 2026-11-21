@@ -455,7 +455,7 @@ class BrowserBackupInstrumentedTest {
 
             accept(device.currentPackageName == CHROME,
                 FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
-            val pane = currentWebPane()
+            val pane = currentWebPane() ?: return@await false
 
             try {
                 val forward = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
@@ -488,15 +488,14 @@ class BrowserBackupInstrumentedTest {
         return device.swipe(gutterX, startY, gutterX, endY, 120)
     }
 
-    private fun currentWebPane(): WebPane {
+    private fun currentWebPane(): WebPane? {
         val nodes = webNodes { node ->
             node.isScrollable && node.isEnabled && node.className?.toString() != "android.webkit.WebView"
         }
         try {
-            accept(nodes.size == 1, FailureReason.OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED)
-            val node = nodes.single()
+            val node = nodes.singleOrNull() ?: return null
             val bounds = Rect().also { node.getBoundsInScreen(it) }
-            accept(!bounds.isEmpty, FailureReason.OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED)
+            if (bounds.isEmpty) return null
             val canScrollUp = node.actionList.any {
                 it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
             }
