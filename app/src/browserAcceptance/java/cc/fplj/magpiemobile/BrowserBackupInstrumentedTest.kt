@@ -437,10 +437,11 @@ class BrowserBackupInstrumentedTest {
                 accept(!snapshot.passwordFocused, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
                 if (pageDowns < 3) {
                     accept(!inputMethodShown(), FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED)
-                    val accepted = device.pressKeyCode(KeyEvent.KEYCODE_PAGE_DOWN)
+                    val batch = 3 - pageDowns
+                    val accepted = pressPageDownBatch(batch)
                     recordWebPaneGesture("PAGE_DOWN", pane, accepted)
                     accept(accepted, FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
-                    pageDowns += 1
+                    pageDowns += batch
                     lastMotionAt = now
                     return@await false
                 }
@@ -479,6 +480,14 @@ class BrowserBackupInstrumentedTest {
         repeat(count) {
             if (!swipeWebPane(pane)) return false
             if (it + 1 < count) SystemClock.sleep(1_500)
+        }
+        return true
+    }
+
+    private fun pressPageDownBatch(count: Int): Boolean {
+        repeat(count) {
+            if (!device.pressKeyCode(KeyEvent.KEYCODE_PAGE_DOWN)) return false
+            if (it + 1 < count) SystemClock.sleep(1_200)
         }
         return true
     }
