@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Xml
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -141,7 +142,7 @@ class BrowserBackupInstrumentedTest {
                     // Import's submit button follows the choice rows in the page.
                     // Chrome exposes only part of that form to accessibility until
                     // the real scrollable page is moved.
-                    revealWebControlByGesture(IMPORT_SUBMIT)
+                    revealWebControlByPageDown(IMPORT_SUBMIT)
                     setRealPasswordFields(listOf(wrongPhrase))
                     clickWebControl(IMPORT_SUBMIT)
                     await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
@@ -159,7 +160,7 @@ class BrowserBackupInstrumentedTest {
                     // Keep the same selected real file; no re-export, alternate URI or API import.
                     // Its filename may be above the viewport after the error. The
                     // successful restore below must use this already-selected file.
-                    revealWebControlByGesture(IMPORT_SUBMIT)
+                    revealWebControlByPageDown(IMPORT_SUBMIT)
                     setRealPasswordFields(listOf(phrase))
                     clickWebControl(IMPORT_SUBMIT)
                     await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
@@ -416,9 +417,16 @@ class BrowserBackupInstrumentedTest {
         }
     }
 
-    private fun revealWebControlByGesture(names: List<String>) {
-        var attempts = 0
-        var lastGestureAt = 0L
+    private fun revealWebControlByPageDown(names: List<String>) {
+        val documents = webNodes { it.className == "android.webkit.WebView" }
+        try {
+            accept(documents.size == 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+            accept(documents.single().performAction(AccessibilityNodeInfo.ACTION_FOCUS),
+                FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
+        } finally { documents.forEach { it.recycle() } }
+
+        var presses = 0
+        var lastPressAt = 0L
         beginWebControl()
         await(20_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
             val nodes = webButtonNodes(names)
@@ -427,26 +435,12 @@ class BrowserBackupInstrumentedTest {
                 if (nodes.size == 1) return@await true
             } finally { nodes.forEach { it.recycle() } }
 
-            val web = webViewOrNull()
-            if (web != null && attempts < 2 &&
-                SystemClock.elapsedRealtime() - lastGestureAt >= 750) {
-                val panes = web.findObjects(By.scrollable(true)).filter {
-                    it.isEnabled && !it.visibleBounds.isEmpty
-                }
-                accept(panes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
-                val bounds = panes.singleOrNull()?.visibleBounds
-                if (bounds != null) {
-                    // Chrome advertises this page pane as scrollable but its semantic
-                    // scroll action is a no-op. Move less than half a viewport so the
-                    // password and the following button can remain visible together.
-                    accept(device.swipe(bounds.centerX(),
-                        bounds.top + bounds.height() * 75 / 100,
-                        bounds.centerX(),
-                        bounds.top + bounds.height() * 40 / 100,
-                        80), FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
-                    attempts += 1
-                    lastGestureAt = SystemClock.elapsedRealtime()
-                }
+            accept(presses < 3, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
+            if (SystemClock.elapsedRealtime() - lastPressAt >= 750) {
+                accept(device.pressKeyCode(KeyEvent.KEYCODE_PAGE_DOWN),
+                    FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
+                presses += 1
+                lastPressAt = SystemClock.elapsedRealtime()
             }
             false
         }
