@@ -60,7 +60,8 @@ safe_labels = {
 safe_phases = {
     "initializing", "starting_gateway", "creating_A_via_production_RPC", "opening_production_browser_button",
     "opening_official_sync_settings", "exporting_via_official_web_form", "changing_A_to_B_via_same_connection_RPC",
-    "choosing_real_download_from_official_import", "wrong_phrase_must_preserve_B", "correct_phrase_must_restore_A", "passed",
+    "preparing_official_import_viewport", "choosing_real_download_from_official_import",
+    "wrong_phrase_must_preserve_B", "correct_phrase_must_restore_A", "passed",
 }
 safe_xml_names = {
     "browser-backup-clean-entry.xml", "browser-backup-after-download.xml", "browser-backup-real-picker.xml",
@@ -122,9 +123,8 @@ try:
                 for field in ("offscreen", "paneCanScrollUp", "paneCanScrollDown", "onScreen"):
                     require(type(value[field]) is bool, "UNSAFE_WEB_CONTROL_BOOLEAN")
                 if action:
-                    require(value["operation"] in {"SHOW", "FOCUS_PAGE", "FOCUS_PASSWORD",
-                                                   "PAGE_DOWN", "PANE_DOWN", "PANE_UP", "TAB", "ENTER",
-                                                   "CLICK"} and
+                    require(value["operation"] in {"SHOW", "FOCUS_PAGE", "PAGE_DOWN",
+                                                   "PANE_DOWN", "PANE_UP", "CLICK"} and
                             type(value["accepted"]) is bool, "UNSAFE_WEB_CONTROL_ACTION")
                 return {key: value[key] for key in sorted(keys)}
             trace = record.get("webControlTrace")

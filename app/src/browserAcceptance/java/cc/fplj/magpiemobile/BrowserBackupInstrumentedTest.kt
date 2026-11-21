@@ -130,39 +130,56 @@ class BrowserBackupInstrumentedTest {
                     }
                     assertFixture(session, before = false)
 
-                    phase = "choosing_real_download_from_official_import"
-                    clickWebControl(IMPORT_OPEN)
-                    awaitWebFormOpened(IMPORT_OPEN)
-                    clickWebControl(CHOOSE)
-                    chooseActualDownload(requireNotNull(downloaded))
-                    awaitStableImportForm(requireNotNull(downloaded).name)
-                    assertDownloadUnchanged()
-                    safeHierarchy("browser-backup-real-file-selected.xml")
+                    phase = "preparing_official_import_viewport"
+                    val originalDensity = displayDensity()
+                    var importFailure: Throwable? = null
+                    try {
+                        applyReducedDisplayDensity(originalDensity)
+                        awaitOfficialImportViewport()
 
-                    phase = "wrong_phrase_must_preserve_B"
-                    setRealPasswordFields(listOf(wrongPhrase))
-                    submitOfficialImportByKeyboard()
-                    await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
-                        accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
-                        hasWebText(WRONG_PHRASE_ERROR)
+                        phase = "choosing_real_download_from_official_import"
+                        clickWebControl(IMPORT_OPEN)
+                        awaitWebFormOpened(IMPORT_OPEN)
+                        clickWebControl(CHOOSE)
+                        chooseActualDownload(requireNotNull(downloaded))
+                        awaitStableImportForm(requireNotNull(downloaded).name)
+                        assertDownloadUnchanged()
+                        safeHierarchy("browser-backup-real-file-selected.xml")
+
+                        phase = "wrong_phrase_must_preserve_B"
+                        setRealPasswordFields(listOf(wrongPhrase))
+                        clickVisibleWebControl(IMPORT_SUBMIT)
+                        await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
+                            accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
+                            hasWebText(WRONG_PHRASE_ERROR)
+                        }
+                        assertFixture(session, before = false)
+                        SystemClock.sleep(500)
+                        assertFixture(session, before = false)
+                        assertDownloadUnchanged()
+                        assertPrivateArchivesUnchanged(privateArchiveBaseline)
+                        safeHierarchy("browser-backup-wrong-phrase-rejected.xml")
+
+                        phase = "correct_phrase_must_restore_A"
+                        // Keep the same selected real file; no re-export, alternate URI or API import.
+                        // Its filename may be above the viewport after the error. The
+                        // successful restore below must use this already-selected file.
+                        setRealPasswordFields(listOf(phrase))
+                        clickVisibleWebControl(IMPORT_SUBMIT)
+                        await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
+                        assertFixture(session, before = true)
+                        assertDownloadUnchanged()
+                        assertPrivateArchivesUnchanged(privateArchiveBaseline)
+                    } catch (failure: Throwable) {
+                        importFailure = failure
+                        throw failure
+                    } finally {
+                        try {
+                            restoreDisplayDensity(originalDensity)
+                        } catch (restoreFailure: Throwable) {
+                            importFailure?.addSuppressed(restoreFailure) ?: throw restoreFailure
+                        }
                     }
-                    assertFixture(session, before = false)
-                    SystemClock.sleep(500)
-                    assertFixture(session, before = false)
-                    assertDownloadUnchanged()
-                    assertPrivateArchivesUnchanged(privateArchiveBaseline)
-                    safeHierarchy("browser-backup-wrong-phrase-rejected.xml")
-
-                    phase = "correct_phrase_must_restore_A"
-                    // Keep the same selected real file; no re-export, alternate URI or API import.
-                    // Its filename may be above the viewport after the error. The
-                    // successful restore below must use this already-selected file.
-                    setRealPasswordFields(listOf(phrase))
-                    submitOfficialImportByKeyboard()
-                    await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
-                    assertFixture(session, before = true)
-                    assertDownloadUnchanged()
-                    assertPrivateArchivesUnchanged(privateArchiveBaseline)
                     confirmOfficialPage(SYNC_SETTINGS_URL)
                     safeHierarchy("browser-backup-restored.xml")
                     // Import replaces the form; never capture a password form or a ticket URL.
@@ -460,42 +477,28 @@ class BrowserBackupInstrumentedTest {
         }
     }
 
-    private fun submitOfficialImportByKeyboard() {
-        // The import form's footer follows four checkbox inputs, Cancel, then
-        // Import. Chrome can stop exposing the WebView accessibility subtree
-        // as soon as a trusted key scrolls the page. Submit in one bounded
-        // keyboard sequence instead of rescanning a temporarily hidden node.
+    private fun clickVisibleWebControl(names: List<String>) {
+        // Reduced display density must put the official footer in the live
+        // viewport. Click that exact AX node without first scrolling or
+        // focusing the WebView, which makes Chrome drop its content subtree.
         beginWebControl()
-        val passwords = passwordNodes()
-        try {
-            accept(passwords.size == 1, FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
-            val password = passwords.single()
-            val pane = webPane(password)
-                ?: throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED)
+        accept(!inputMethodShown(), FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED)
+        await(20_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
+            val nodes = webButtonNodes(names)
             try {
-                val focused = webAction("FOCUS_PASSWORD", password) {
-                    password.isFocused || password.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                }
-                accept(focused, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
-                dismissWebImeOnce()
-                SystemClock.sleep(350)
-                accept(password.refresh() && password.isFocused && !inputMethodShown(),
-                    FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
-                repeat(6) {
-                    val accepted = device.pressKeyCode(KeyEvent.KEYCODE_TAB)
-                    recordWebPaneGesture("TAB", pane, accepted)
-                    accept(accepted, FailureReason.OFFICIAL_WEB_KEYBOARD_SUBMIT_REJECTED)
-                    if (it < 5) SystemClock.sleep(450)
-                }
-                val accepted = device.pressKeyCode(KeyEvent.KEYCODE_ENTER)
-                recordWebPaneGesture("ENTER", pane, accepted)
-                accept(accepted, FailureReason.OFFICIAL_WEB_KEYBOARD_SUBMIT_REJECTED)
+                accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+                nodes.singleOrNull()?.let { node ->
+                    observeWebNode(node)
+                    if (webNodeFullyVisibleInPane(node)) {
+                        clickWebNode(node)
+                        true
+                    } else false
+                } ?: false
             } finally {
-                pane.node.recycle()
+                nodes.forEach { it.recycle() }
             }
-        } finally {
-            passwords.forEach { it.recycle() }
         }
+        check(webControlTrace.length() == 1) { "official import click must be the only page action" }
     }
 
     private fun swipeWebPane(pane: WebPane): Boolean {
@@ -892,6 +895,36 @@ class BrowserBackupInstrumentedTest {
     private fun webNodeCanActivate(node: AccessibilityNodeInfo, allowClipped: Boolean): Boolean =
         webNodeOnScreen(node) || (allowClipped && webNodeIntersectsScreen(node))
 
+    @Suppress("DEPRECATION")
+    private fun webNodeFullyVisibleInPane(node: AccessibilityNodeInfo): Boolean {
+        // The reduced viewport calibration must prove the full official
+        // control fits inside both its scroll pane and the real WebView. This
+        // geometry is stronger than Chrome's offscreen accessibility hint and
+        // does not permit a clipped or partially hidden footer click.
+        if (!node.isVisibleToUser) return false
+        val bounds = Rect().also { node.getBoundsInScreen(it) }
+        if (bounds.isEmpty || !Rect(0, 0, device.displayWidth, device.displayHeight).contains(bounds)) return false
+        var ancestor = node.parent
+        var foundPane = false
+        try {
+            while (true) {
+                val parent = ancestor ?: return false
+                if (parent.packageName?.toString() != CHROME || !parent.isVisibleToUser) return false
+                if (parent.isScrollable) {
+                    val viewport = Rect().also { parent.getBoundsInScreen(it) }
+                    if (viewport.isEmpty || !viewport.contains(bounds)) return false
+                    foundPane = true
+                }
+                if (parent.className?.toString() == "android.webkit.WebView") {
+                    val viewport = Rect().also { parent.getBoundsInScreen(it) }
+                    return foundPane && !viewport.isEmpty && viewport.contains(bounds)
+                }
+                ancestor = parent.parent
+                parent.recycle()
+            }
+        } finally { ancestor?.recycle() }
+    }
+
     private fun webViewOrNull(): UiObject2? = device.findObject(By.pkg(CHROME).clazz("android.webkit.WebView"))
 
     private fun clickNamed(pkg: String, names: List<String>) {
@@ -1121,6 +1154,45 @@ class BrowserBackupInstrumentedTest {
         instrumentation.uiAutomation.executeShellCommand(command),
     ).bufferedReader().use { it.readText() }
 
+    private data class DisplayDensity(val physical: Int, val override: Int?) {
+        val effective: Int get() = override ?: physical
+    }
+
+    private fun displayDensity(): DisplayDensity {
+        val output = shellRead("wm density")
+        val physical = Regex("""Physical density:\s*(\d+)""").find(output)?.groupValues?.get(1)?.toIntOrNull()
+        val override = Regex("""Override density:\s*(\d+)""").find(output)?.groupValues?.get(1)?.toIntOrNull()
+        accept(physical != null && physical in 120..640, FailureReason.DISPLAY_DENSITY_NOT_RECOGNIZED)
+        return DisplayDensity(requireNotNull(physical), override)
+    }
+
+    private fun applyReducedDisplayDensity(original: DisplayDensity) {
+        val reduced = original.effective * 3 / 4
+        accept(reduced >= 120 && reduced < original.effective,
+            FailureReason.DISPLAY_DENSITY_CHANGE_REJECTED)
+        shellRead("wm density $reduced")
+        await(15_000, FailureReason.DISPLAY_DENSITY_CHANGE_REJECTED) {
+            device.currentPackageName == CHROME && displayDensity().effective == reduced
+        }
+    }
+
+    private fun restoreDisplayDensity(original: DisplayDensity) {
+        shellRead(original.override?.let { "wm density $it" } ?: "wm density reset")
+        await(15_000, FailureReason.DISPLAY_DENSITY_RESTORE_REJECTED) {
+            displayDensity() == original
+        }
+    }
+
+    private fun awaitOfficialImportViewport() {
+        await(20_000, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED) {
+            if (device.currentPackageName != CHROME || webViewOrNull() == null ||
+                !hasWebText("SYNC AND BACKUP")) return@await false
+            val pane = currentWebPane() ?: return@await false
+            pane.node.recycle()
+            true
+        }
+    }
+
     private fun hierarchyBytes(): ByteArray = ByteArrayOutputStream().use { out ->
         device.dumpWindowHierarchy(out)
         out.toByteArray()
@@ -1188,6 +1260,7 @@ class BrowserBackupInstrumentedTest {
     private enum class FailureReason {
         UNEXPECTED_EXCEPTION, UI_WAIT_EXPIRED, CORE_SESSION_CHANGED, CORE_VERSION_MISMATCH,
         FIXTURE_NAME_MISMATCH, FIXTURE_URL_MISMATCH, FIXTURE_MODELS_MISMATCH, FIXTURE_METADATA_MISMATCH,
+        DISPLAY_DENSITY_NOT_RECOGNIZED, DISPLAY_DENSITY_CHANGE_REJECTED, DISPLAY_DENSITY_RESTORE_REJECTED,
         NATIVE_PROVIDER_PAGE_NOT_RECOGNIZED, NATIVE_BROWSER_BUTTON_NOT_REACHED,
         BROWSER_SETUP_REQUIRED, INDEPENDENT_BROWSER_NOT_FOREGROUND, CURRENT_URL_EDIT_ACTION_NOT_REACHED,
         CLEAN_OFFICIAL_URL_NOT_REACHED,
@@ -1195,7 +1268,7 @@ class BrowserBackupInstrumentedTest {
         OFFICIAL_WEB_CONTROL_NOT_REACHED, OFFICIAL_WEB_CLICK_REJECTED, OFFICIAL_WEB_FORM_NOT_REACHED,
         OFFICIAL_WEB_SHOW_REJECTED, OFFICIAL_WEB_FOCUS_REJECTED, OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED,
         OFFICIAL_WEB_SCROLL_DIRECTION_NOT_PROVEN, OFFICIAL_WEB_SCROLL_ACTION_REJECTED, OFFICIAL_WEB_SCROLL_NO_PROGRESS,
-        OFFICIAL_WEB_KEYBOARD_SUBMIT_REJECTED, AMBIGUOUS_ACCESSIBLE_CONTROL,
+        AMBIGUOUS_ACCESSIBLE_CONTROL,
         PASSWORD_INPUT_REJECTED, PASSWORD_INPUTS_NOT_RECOGNIZED, PRIVATE_EXPORT_PATH_RETURNED, PRIVATE_BACKUP_ARCHIVE_CHANGED,
         MULTIPLE_NEW_DOWNLOADS, STABLE_PUBLIC_DOWNLOAD_NOT_REACHED, DOWNLOAD_HASH_TOOL_FAILED,
         DOWNLOADED_FILE_CHANGED, DOCUMENTS_UI_LIST_NOT_RECOGNIZED, DOWNLOADED_FILE_NOT_REACHED_IN_PICKER,
