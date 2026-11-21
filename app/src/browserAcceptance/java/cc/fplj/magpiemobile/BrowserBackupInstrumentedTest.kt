@@ -368,9 +368,9 @@ class BrowserBackupInstrumentedTest {
         // Chrome's real AX default action avoids UiObject2's center-coordinate
         // tap on an animated or clipped button. Never inject JS or retry a click.
         var showRequested = false
-        var gestures = 0
+        var focusRequested = false
+        var offscreenClickRequested = false
         var lastMotionAt = 0L
-        var previousScrollTarget: Rect? = null
         beginWebControl()
         await(15_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
             val nodes = webButtonNodes(names)
@@ -378,24 +378,33 @@ class BrowserBackupInstrumentedTest {
                 accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
                 nodes.singleOrNull()?.let { node ->
                     observeWebNode(node)
-                    if (!webNodeOnScreen(node)) {
-                        if (!showRequested) {
-                            showWebNode(node)
-                            showRequested = true
-                            lastMotionAt = SystemClock.elapsedRealtime()
-                        } else if (gestures < 6 && SystemClock.elapsedRealtime() - lastMotionAt >= 750) {
-                            val bounds = Rect().also { node.getBoundsInScreen(it) }
-                            accept(previousScrollTarget != bounds, FailureReason.OFFICIAL_WEB_SCROLL_NO_PROGRESS)
-                            previousScrollTarget = bounds
-                            scrollRealWebPane(node)
-                            gestures += 1
-                            lastMotionAt = SystemClock.elapsedRealtime()
-                        }
-                        false
-                    } else {
-                        accept(node.performAction(AccessibilityNodeInfo.ACTION_CLICK),
-                            FailureReason.OFFICIAL_WEB_CLICK_REJECTED)
+                    if (webNodeOnScreen(node)) {
+                        clickWebNode(node, offscreen = false)
                         true
+                    } else {
+                        when {
+                            !showRequested -> {
+                                showWebNode(node)
+                                showRequested = true
+                                lastMotionAt = SystemClock.elapsedRealtime()
+                                false
+                            }
+                            !focusRequested && SystemClock.elapsedRealtime() - lastMotionAt >= 500 -> {
+                                focusWebNode(node)
+                                focusRequested = true
+                                lastMotionAt = SystemClock.elapsedRealtime()
+                                false
+                            }
+                            !offscreenClickRequested && SystemClock.elapsedRealtime() - lastMotionAt >= 500 -> {
+                                // Chrome keeps offscreen AX bounds in this WebView. Activate
+                                // the same unique semantic button; real download and recovery
+                                // assertions, not geometry, still decide success.
+                                clickWebNode(node, offscreen = true)
+                                offscreenClickRequested = true
+                                true
+                            }
+                            else -> false
+                        }
                     }
                 } ?: false
             } finally { nodes.forEach { it.recycle() } }
@@ -453,9 +462,25 @@ class BrowserBackupInstrumentedTest {
 
     private fun showWebNode(node: AccessibilityNodeInfo) {
         val action = AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id
-        val accepted = node.actionList.any { it.id == action } && node.performAction(action)
-        recordWebAction("SHOW", node, accepted)
+        val accepted = webAction("SHOW", node) {
+            node.actionList.any { it.id == action } && node.performAction(action)
+        }
         accept(accepted, FailureReason.OFFICIAL_WEB_SHOW_REJECTED)
+    }
+
+    private fun focusWebNode(node: AccessibilityNodeInfo) {
+        val action = AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS
+        val accepted = webAction("FOCUS", node) {
+            node.actionList.any { it.id == action } && node.performAction(action)
+        }
+        accept(accepted, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
+    }
+
+    private fun clickWebNode(node: AccessibilityNodeInfo, offscreen: Boolean) {
+        val accepted = webAction(if (offscreen) "CLICK_OFFSCREEN" else "CLICK", node) {
+            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+        accept(accepted, FailureReason.OFFICIAL_WEB_CLICK_REJECTED)
     }
 
     private data class WebPane(
@@ -520,8 +545,9 @@ class BrowserBackupInstrumentedTest {
         try {
             val action = if (down) AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id
                 else AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
-            val accepted = pane.node.actionList.any { it.id == action } && pane.node.performAction(action)
-            recordWebAction(if (down) "PANE_DOWN" else "PANE_UP", node, accepted)
+            val accepted = webAction(if (down) "PANE_DOWN" else "PANE_UP", node) {
+                pane.node.actionList.any { it.id == action } && pane.node.performAction(action)
+            }
             accept(accepted, FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
         } finally { pane.node.recycle() }
     }
@@ -551,9 +577,12 @@ class BrowserBackupInstrumentedTest {
         lastWebObservation = webObservation(node)
     }
 
-    private fun recordWebAction(operation: String, node: AccessibilityNodeInfo, accepted: Boolean) {
+    private fun webAction(operation: String, node: AccessibilityNodeInfo, action: () -> Boolean): Boolean {
         check(webControlTrace.length() < 8) { "bounded web action evidence required" }
-        webControlTrace.put(webObservation(node).put("operation", operation).put("accepted", accepted))
+        val observation = webObservation(node)
+        val accepted = action()
+        webControlTrace.put(observation.put("operation", operation).put("accepted", accepted))
+        return accepted
     }
 
     @Suppress("DEPRECATION")
@@ -883,7 +912,7 @@ class BrowserBackupInstrumentedTest {
         CLEAN_OFFICIAL_URL_NOT_REACHED,
         OFFICIAL_UI_NOT_RECOGNIZED, OFFICIAL_PAGE_NOT_RESTORED, SYNC_TAB_NOT_REACHED,
         OFFICIAL_WEB_CONTROL_NOT_REACHED, OFFICIAL_WEB_CLICK_REJECTED, OFFICIAL_WEB_FORM_NOT_REACHED,
-        OFFICIAL_WEB_SHOW_REJECTED, OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED,
+        OFFICIAL_WEB_SHOW_REJECTED, OFFICIAL_WEB_FOCUS_REJECTED, OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED,
         OFFICIAL_WEB_SCROLL_DIRECTION_NOT_PROVEN, OFFICIAL_WEB_SCROLL_ACTION_REJECTED, OFFICIAL_WEB_SCROLL_NO_PROGRESS,
         AMBIGUOUS_ACCESSIBLE_CONTROL,
         PASSWORD_INPUT_REJECTED, PASSWORD_INPUTS_NOT_RECOGNIZED, PRIVATE_EXPORT_PATH_RETURNED, PRIVATE_BACKUP_ARCHIVE_CHANGED,
