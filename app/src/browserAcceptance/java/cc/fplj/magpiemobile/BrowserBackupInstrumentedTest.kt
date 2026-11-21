@@ -141,8 +141,7 @@ class BrowserBackupInstrumentedTest {
 
                     phase = "wrong_phrase_must_preserve_B"
                     setRealPasswordFields(listOf(wrongPhrase))
-                    revealWebControlByScroll(IMPORT_SUBMIT, allowClipped = true)
-                    clickWebControl(IMPORT_SUBMIT, allowClipped = true)
+                    submitOfficialImportByKeyboard()
                     await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
                         accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
                         hasWebText(WRONG_PHRASE_ERROR)
@@ -159,8 +158,7 @@ class BrowserBackupInstrumentedTest {
                     // Its filename may be above the viewport after the error. The
                     // successful restore below must use this already-selected file.
                     setRealPasswordFields(listOf(phrase))
-                    revealWebControlByScroll(IMPORT_SUBMIT, allowClipped = true)
-                    clickWebControl(IMPORT_SUBMIT, allowClipped = true)
+                    submitOfficialImportByKeyboard()
                     await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
                     assertFixture(session, before = true)
                     assertDownloadUnchanged()
@@ -459,6 +457,44 @@ class BrowserBackupInstrumentedTest {
                 snapshot.buttons.forEach { it.recycle() }
                 snapshot.pane?.node?.recycle()
             }
+        }
+    }
+
+    private fun submitOfficialImportByKeyboard() {
+        // The import form's footer follows four checkbox inputs, Cancel, then
+        // Import. Chrome can stop exposing the WebView accessibility subtree
+        // as soon as a trusted key scrolls the page. Submit in one bounded
+        // keyboard sequence instead of rescanning a temporarily hidden node.
+        beginWebControl()
+        val passwords = passwordNodes()
+        try {
+            accept(passwords.size == 1, FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
+            val password = passwords.single()
+            val pane = webPane(password)
+                ?: throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED)
+            try {
+                val focused = webAction("FOCUS_PASSWORD", password) {
+                    password.isFocused || password.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                }
+                accept(focused, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
+                dismissWebImeOnce()
+                SystemClock.sleep(350)
+                accept(password.refresh() && password.isFocused && !inputMethodShown(),
+                    FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
+                repeat(6) {
+                    val accepted = device.pressKeyCode(KeyEvent.KEYCODE_TAB)
+                    recordWebPaneGesture("TAB", pane, accepted)
+                    accept(accepted, FailureReason.OFFICIAL_WEB_KEYBOARD_SUBMIT_REJECTED)
+                    if (it < 5) SystemClock.sleep(450)
+                }
+                val accepted = device.pressKeyCode(KeyEvent.KEYCODE_ENTER)
+                recordWebPaneGesture("ENTER", pane, accepted)
+                accept(accepted, FailureReason.OFFICIAL_WEB_KEYBOARD_SUBMIT_REJECTED)
+            } finally {
+                pane.node.recycle()
+            }
+        } finally {
+            passwords.forEach { it.recycle() }
         }
     }
 
@@ -1159,7 +1195,7 @@ class BrowserBackupInstrumentedTest {
         OFFICIAL_WEB_CONTROL_NOT_REACHED, OFFICIAL_WEB_CLICK_REJECTED, OFFICIAL_WEB_FORM_NOT_REACHED,
         OFFICIAL_WEB_SHOW_REJECTED, OFFICIAL_WEB_FOCUS_REJECTED, OFFICIAL_WEB_SCROLL_PANE_NOT_REACHED,
         OFFICIAL_WEB_SCROLL_DIRECTION_NOT_PROVEN, OFFICIAL_WEB_SCROLL_ACTION_REJECTED, OFFICIAL_WEB_SCROLL_NO_PROGRESS,
-        AMBIGUOUS_ACCESSIBLE_CONTROL,
+        OFFICIAL_WEB_KEYBOARD_SUBMIT_REJECTED, AMBIGUOUS_ACCESSIBLE_CONTROL,
         PASSWORD_INPUT_REJECTED, PASSWORD_INPUTS_NOT_RECOGNIZED, PRIVATE_EXPORT_PATH_RETURNED, PRIVATE_BACKUP_ARCHIVE_CHANGED,
         MULTIPLE_NEW_DOWNLOADS, STABLE_PUBLIC_DOWNLOAD_NOT_REACHED, DOWNLOAD_HASH_TOOL_FAILED,
         DOWNLOADED_FILE_CHANGED, DOCUMENTS_UI_LIST_NOT_RECOGNIZED, DOWNLOADED_FILE_NOT_REACHED_IN_PICKER,
