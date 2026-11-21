@@ -436,8 +436,16 @@ class BrowserBackupInstrumentedTest {
                 accept(panes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
                 val pane = panes.singleOrNull()
                 if (pane != null) {
-                    accept(pane.scroll(Direction.DOWN, .65f),
-                        FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
+                    // Chrome advertises this exact page pane as scrollable, but its
+                    // semantic scroll action is a no-op here. Swipe inside that pane;
+                    // the Import control still has to become a visible AX node.
+                    val bounds = pane.visibleBounds
+                    accept(!bounds.isEmpty, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED)
+                    device.swipe(bounds.centerX(),
+                        bounds.top + bounds.height() * 82 / 100,
+                        bounds.centerX(),
+                        bounds.top + bounds.height() * 18 / 100,
+                        24)
                     attempts += 1
                     lastGestureAt = SystemClock.elapsedRealtime()
                 }
