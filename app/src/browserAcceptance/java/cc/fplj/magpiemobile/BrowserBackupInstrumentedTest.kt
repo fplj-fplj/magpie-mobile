@@ -427,24 +427,20 @@ class BrowserBackupInstrumentedTest {
                 if (nodes.size == 1) return@await true
             } finally { nodes.forEach { it.recycle() } }
 
-            dismissWebIme()
             val web = webViewOrNull()
             if (web != null && attempts < 4 &&
                 SystemClock.elapsedRealtime() - lastGestureAt >= 750) {
-                val viewport = web.visibleBounds
-                accept(!viewport.isEmpty, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED)
-                val x = viewport.centerX()
-                val fromY = viewport.top + viewport.height() * 45 / 100
-                val toY = viewport.top + viewport.height() * 20 / 100
-                device.swipe(x, fromY, x, toY, 24)
-                webControlTrace.put(JSONObject()
-                    .put("operation", "SWIPE_DOWN")
-                    .put("attempt", attempts + 1)
-                    .put("fromY", fromY)
-                    .put("toY", toY)
-                    .put("accepted", true))
-                attempts += 1
-                lastGestureAt = SystemClock.elapsedRealtime()
+                val panes = web.findObjects(By.scrollable(true)).filter {
+                    it.isEnabled && !it.visibleBounds.isEmpty
+                }
+                accept(panes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+                val pane = panes.singleOrNull()
+                if (pane != null) {
+                    accept(pane.scroll(Direction.DOWN, .65f),
+                        FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
+                    attempts += 1
+                    lastGestureAt = SystemClock.elapsedRealtime()
+                }
             }
             false
         }
@@ -462,17 +458,6 @@ class BrowserBackupInstrumentedTest {
             } finally { passwords.forEach { it.recycle() } }
         }
     }
-
-    private fun dismissWebIme() {
-        if (!inputMethodShown()) return
-        device.pressBack()
-        await(5_000, FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED) {
-            device.currentPackageName == CHROME && !inputMethodShown() && webViewOrNull() != null
-        }
-    }
-
-    private fun inputMethodShown(): Boolean = shellRead("dumpsys input_method")
-        .lineSequence().any { it.trim() == "mInputShown=true" }
 
     private fun awaitWebFormOpened(opener: List<String>) {
         // ACTION_CLICK only acknowledges receipt. Require the official toggle
