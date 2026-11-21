@@ -110,7 +110,8 @@ try:
                 "downloadRetryClicked", "privateArchiveChecks", "browserPackage", "keyEqualityClaimed")}
             ordinal = record.get("webControlOrdinal")
             require(type(ordinal) is int and 0 <= ordinal <= 20, "INVALID_WEB_CONTROL_ORDINAL")
-            observation_keys = {"targetBounds", "paneBounds", "offscreen", "paneCanScrollUp", "onScreen"}
+            observation_keys = {"targetBounds", "paneBounds", "offscreen", "paneCanScrollUp",
+                                "paneCanScrollDown", "onScreen"}
             def curate_observation(value, action=False):
                 keys = observation_keys | ({"operation", "accepted"} if action else set())
                 require(type(value) is dict and set(value) == keys, "UNSAFE_WEB_CONTROL_OBSERVATION")
@@ -118,7 +119,7 @@ try:
                     bounds = value[field]
                     require(type(bounds) is list and len(bounds) == 4 and
                             all(type(n) is int and -100_000 <= n <= 100_000 for n in bounds), "UNSAFE_WEB_CONTROL_BOUNDS")
-                for field in ("offscreen", "paneCanScrollUp", "onScreen"):
+                for field in ("offscreen", "paneCanScrollUp", "paneCanScrollDown", "onScreen"):
                     require(type(value[field]) is bool, "UNSAFE_WEB_CONTROL_BOOLEAN")
                 if action:
                     require(value["operation"] in {"SHOW", "PANE_DOWN", "PANE_UP"} and
