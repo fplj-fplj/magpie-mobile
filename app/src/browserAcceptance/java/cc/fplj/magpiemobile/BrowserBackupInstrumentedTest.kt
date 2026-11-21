@@ -139,12 +139,8 @@ class BrowserBackupInstrumentedTest {
                     safeHierarchy("browser-backup-real-file-selected.xml")
 
                     phase = "wrong_phrase_must_preserve_B"
-                    // Import's submit button follows the choice rows in the page.
-                    // Chrome exposes only part of that form to accessibility until
-                    // the real scrollable page is moved.
-                    revealWebControlByPageDown(IMPORT_SUBMIT)
                     setRealPasswordFields(listOf(wrongPhrase))
-                    clickWebControl(IMPORT_SUBMIT)
+                    clickWebControlByKeyboard(IMPORT_SUBMIT)
                     await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
                         accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
                         hasWebText(WRONG_PHRASE_ERROR)
@@ -160,9 +156,8 @@ class BrowserBackupInstrumentedTest {
                     // Keep the same selected real file; no re-export, alternate URI or API import.
                     // Its filename may be above the viewport after the error. The
                     // successful restore below must use this already-selected file.
-                    revealWebControlByPageDown(IMPORT_SUBMIT)
                     setRealPasswordFields(listOf(phrase))
-                    clickWebControl(IMPORT_SUBMIT)
+                    clickWebControlByKeyboard(IMPORT_SUBMIT)
                     await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
                     assertFixture(session, before = true)
                     assertDownloadUnchanged()
@@ -417,33 +412,124 @@ class BrowserBackupInstrumentedTest {
         }
     }
 
-    private fun revealWebControlByPageDown(names: List<String>) {
-        val documents = webNodes { it.className == "android.webkit.WebView" }
-        try {
-            accept(documents.size == 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
-            accept(documents.single().performAction(AccessibilityNodeInfo.ACTION_FOCUS),
-                FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
-        } finally { documents.forEach { it.recycle() } }
-
-        var presses = 0
-        var lastPressAt = 0L
+    private fun clickWebControlByKeyboard(names: List<String>) {
         beginWebControl()
-        await(20_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
+        focusRealPassword()
+
+        val initialFocus = focusedWebControlIdentity()
+        accept(initialFocus != null, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
+        var previousFocus = requireNotNull(initialFocus)
+        var tabsSent = 0
+        var awaitingFocusChange = false
+        var lastTabAt = 0L
+        var visiblePolls = 0
+
+        await(30_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
+            accept(hasSingleVisibleWebView(), FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED)
             val nodes = webButtonNodes(names)
             try {
                 accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
-                if (nodes.size == 1) return@await true
-            } finally { nodes.forEach { it.recycle() } }
+                val node = nodes.singleOrNull()
+                if (node != null) {
+                    observeWebNode(node)
+                }
+                if (node != null && node.isFocused) {
+                    visiblePolls = if (webNodeOnScreen(node)) visiblePolls + 1 else 0
+                    if (visiblePolls >= 2) {
+                        clickWebNode(node, offscreen = false)
+                        return@await true
+                    }
+                    false
+                } else {
+                    visiblePolls = 0
+                    val currentFocus = focusedWebControlIdentity()
+                    if (awaitingFocusChange && currentFocus != null && currentFocus != previousFocus) {
+                        previousFocus = currentFocus
+                        awaitingFocusChange = false
+                    }
 
-            accept(presses < 3, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
-            if (SystemClock.elapsedRealtime() - lastPressAt >= 750) {
-                accept(device.pressKeyCode(KeyEvent.KEYCODE_PAGE_DOWN),
-                    FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
-                presses += 1
-                lastPressAt = SystemClock.elapsedRealtime()
-            }
-            false
+                    val now = SystemClock.elapsedRealtime()
+                    if (awaitingFocusChange && now - lastTabAt >= 4_000) {
+                        throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
+                    }
+                    if (!awaitingFocusChange && tabsSent < 6 && now - lastTabAt >= 500) {
+                        // The complete import form has four checkboxes followed by
+                        // Cancel and Import. A Tab is accepted only when Chrome moves
+                        // focus to a new real WebView control.
+                        accept(device.pressKeyCode(KeyEvent.KEYCODE_TAB),
+                            FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
+                        tabsSent += 1
+                        awaitingFocusChange = true
+                        lastTabAt = now
+                    } else if (!awaitingFocusChange && tabsSent == 6 && now - lastTabAt >= 1_500) {
+                        throw AcceptanceFailure(FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
+                    }
+                    false
+                }
+            } finally { nodes.forEach { it.recycle() } }
         }
+    }
+
+    private fun focusRealPassword() {
+        var focusRequested = false
+        var clickRequested = false
+        var lastActionAt = 0L
+        var focusedPolls = 0
+        await(10_000, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED) {
+            accept(hasSingleVisibleWebView(), FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED)
+            val nodes = passwordNodes()
+            try {
+                accept(nodes.size == 1, FailureReason.PASSWORD_INPUTS_NOT_RECOGNIZED)
+                val password = nodes.single()
+                accept(password.isEnabled && password.isFocusable && webNodeOnScreen(password),
+                    FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
+
+                val now = SystemClock.elapsedRealtime()
+                if (!password.isFocused) {
+                    when {
+                        !focusRequested -> {
+                            // ACTION_FOCUS may return true without moving DOM input
+                            // focus. Verify isFocused before allowing keyboard events.
+                            focusRequested = true
+                            webAction("FOCUS", password) {
+                                password.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                            }
+                            lastActionAt = now
+                        }
+                        !clickRequested && now - lastActionAt >= 750 -> {
+                            // A semantic click on the already selected password field
+                            // is the fallback that establishes real WebView input focus.
+                            clickRequested = true
+                            val accepted = webAction("CLICK", password) {
+                                password.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            }
+                            accept(accepted, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
+                            lastActionAt = now
+                        }
+                    }
+                }
+                focusedPolls = if (password.isFocused && hasSingleVisibleWebView()) focusedPolls + 1 else 0
+                focusedPolls >= 2
+            } finally { nodes.forEach { it.recycle() } }
+        }
+    }
+
+    private fun hasSingleVisibleWebView(): Boolean =
+        device.findObjects(By.pkg(CHROME).clazz("android.webkit.WebView"))
+            .count { !it.visibleBounds.isEmpty } == 1
+
+    private data class WebFocusIdentity(val className: String, val nodeHash: Int)
+
+    private fun focusedWebControlIdentity(): WebFocusIdentity? {
+        val nodes = webNodes { node ->
+            node.isFocused && node.className?.toString() != "android.webkit.WebView"
+        }
+        try {
+            accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+            return nodes.singleOrNull()?.let {
+                WebFocusIdentity(it.className?.toString().orEmpty(), it.hashCode())
+            }
+        } finally { nodes.forEach { it.recycle() } }
     }
 
     private fun awaitStableImportForm(name: String) {
