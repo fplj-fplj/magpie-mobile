@@ -398,7 +398,7 @@ class BrowserBackupInstrumentedTest {
         var imeDismissed = false
         var swipes = 0
         var lastMotionAt = 0L
-        await(360_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
+        await(240_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
             val snapshot = webControlPageSnapshot(names)
             try {
                 accept(snapshot.buttons.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
@@ -421,8 +421,9 @@ class BrowserBackupInstrumentedTest {
                 val pane = snapshot.pane ?: return@await false
 
                 accept(swipes < 6, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
-                swipes += 1
-                val accepted = swipeWebPane(pane)
+                val batch = minOf(3, 6 - swipes)
+                swipes += batch
+                val accepted = swipeWebPaneBatch(pane, batch)
                 recordWebPaneGesture("PANE_DOWN", pane, accepted)
                 accept(accepted, FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
 
@@ -442,11 +443,19 @@ class BrowserBackupInstrumentedTest {
         // screen coordinates, so the caller dismisses it before this gesture.
         val gutterX = (bounds.left + 54)
             .coerceIn(bounds.left + 1, bounds.right - 1)
-        val startY = bounds.top + bounds.height() * 96 / 100
-        val endY = bounds.top + bounds.height() * 4 / 100
+        val startY = bounds.top + bounds.height() * 80 / 100
+        val endY = bounds.top + bounds.height() * 20 / 100
         // A slow drag in the page gutter moves the real Settings scroller
         // without touching the password input or its IME.
         return device.swipe(gutterX, startY, gutterX, endY, 70)
+    }
+
+    private fun swipeWebPaneBatch(pane: WebPane, count: Int): Boolean {
+        repeat(count) {
+            if (!swipeWebPane(pane)) return false
+            if (it + 1 < count) SystemClock.sleep(900)
+        }
+        return true
     }
 
     private fun dismissWebImeOnce() {
