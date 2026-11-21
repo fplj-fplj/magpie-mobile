@@ -133,12 +133,16 @@ class BrowserBackupInstrumentedTest {
                     awaitWebFormOpened(IMPORT_OPEN)
                     clickWebControl(CHOOSE)
                     chooseActualDownload(requireNotNull(downloaded))
-                    await(30_000) { hasWebName(requireNotNull(downloaded).name) }
+                    awaitStableImportForm(requireNotNull(downloaded).name)
                     assertDownloadUnchanged()
                     safeHierarchy("browser-backup-real-file-selected.xml")
 
                     phase = "wrong_phrase_must_preserve_B"
                     setRealPasswordFields(listOf(wrongPhrase))
+                    // Import's submit button follows the choice rows in the page.
+                    // Chrome exposes only part of that form to accessibility until
+                    // the real scrollable page is moved.
+                    revealWebControlByGesture(IMPORT_SUBMIT)
                     clickWebControl(IMPORT_SUBMIT)
                     await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
                         accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
@@ -156,6 +160,7 @@ class BrowserBackupInstrumentedTest {
                     // Its filename may be above the viewport after the error. The
                     // successful restore below must use this already-selected file.
                     setRealPasswordFields(listOf(phrase))
+                    revealWebControlByGesture(IMPORT_SUBMIT)
                     clickWebControl(IMPORT_SUBMIT)
                     await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
                     assertFixture(session, before = true)
@@ -410,6 +415,64 @@ class BrowserBackupInstrumentedTest {
             } finally { nodes.forEach { it.recycle() } }
         }
     }
+
+    private fun revealWebControlByGesture(names: List<String>) {
+        var attempts = 0
+        var lastGestureAt = 0L
+        beginWebControl()
+        await(30_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
+            val nodes = webButtonNodes(names)
+            try {
+                accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+                if (nodes.size == 1) return@await true
+            } finally { nodes.forEach { it.recycle() } }
+
+            dismissWebIme()
+            val web = webViewOrNull()
+            if (web != null && attempts < 4 &&
+                SystemClock.elapsedRealtime() - lastGestureAt >= 750) {
+                val viewport = web.visibleBounds
+                accept(!viewport.isEmpty, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED)
+                val x = viewport.centerX()
+                val fromY = viewport.top + viewport.height() * 45 / 100
+                val toY = viewport.top + viewport.height() * 20 / 100
+                device.swipe(x, fromY, x, toY, 24)
+                webControlTrace.put(JSONObject()
+                    .put("operation", "SWIPE_DOWN")
+                    .put("attempt", attempts + 1)
+                    .put("fromY", fromY)
+                    .put("toY", toY)
+                    .put("accepted", true))
+                attempts += 1
+                lastGestureAt = SystemClock.elapsedRealtime()
+            }
+            false
+        }
+    }
+
+    private fun awaitStableImportForm(name: String) {
+        var stablePolls = 0
+        await(30_000, FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED) {
+            val passwords = passwordNodes()
+            try {
+                val ready = device.currentPackageName == CHROME &&
+                    webViewOrNull() != null && hasWebName(name) && passwords.size == 1
+                stablePolls = if (ready) stablePolls + 1 else 0
+                stablePolls >= 3
+            } finally { passwords.forEach { it.recycle() } }
+        }
+    }
+
+    private fun dismissWebIme() {
+        if (!inputMethodShown()) return
+        device.pressBack()
+        await(5_000, FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED) {
+            device.currentPackageName == CHROME && !inputMethodShown() && webViewOrNull() != null
+        }
+    }
+
+    private fun inputMethodShown(): Boolean = shellRead("dumpsys input_method")
+        .lineSequence().any { it.trim() == "mInputShown=true" }
 
     private fun awaitWebFormOpened(opener: List<String>) {
         // ACTION_CLICK only acknowledges receipt. Require the official toggle
