@@ -115,8 +115,8 @@ class BrowserBackupInstrumentedTest {
                     awaitWebFormOpened(EXPORT_OPEN)
                     phase = "exporting_via_official_web_form"
                     setRealPasswordFields(listOf(phrase, phrase))
-                    revealWebControlByScroll(EXPORT_SUBMIT)
-                    clickWebControl(EXPORT_SUBMIT)
+                    revealWebControlByScroll(EXPORT_SUBMIT, allowClipped = true)
+                    clickWebControl(EXPORT_SUBMIT, allowClipped = true)
                     downloaded = awaitRealDownload(baseline)
                     assertPrivateArchivesUnchanged(privateArchiveBaseline)
                     safeHierarchy("browser-backup-after-download.xml")
@@ -140,8 +140,8 @@ class BrowserBackupInstrumentedTest {
 
                     phase = "wrong_phrase_must_preserve_B"
                     setRealPasswordFields(listOf(wrongPhrase))
-                    revealWebControlByScroll(IMPORT_SUBMIT)
-                    clickVisibleWebControl(IMPORT_SUBMIT)
+                    revealWebControlByScroll(IMPORT_SUBMIT, allowClipped = true)
+                    clickWebControl(IMPORT_SUBMIT, allowClipped = true)
                     await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
                         accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
                         hasWebText(WRONG_PHRASE_ERROR)
@@ -158,8 +158,8 @@ class BrowserBackupInstrumentedTest {
                     // Its filename may be above the viewport after the error. The
                     // successful restore below must use this already-selected file.
                     setRealPasswordFields(listOf(phrase))
-                    revealWebControlByScroll(IMPORT_SUBMIT)
-                    clickVisibleWebControl(IMPORT_SUBMIT)
+                    revealWebControlByScroll(IMPORT_SUBMIT, allowClipped = true)
+                    clickWebControl(IMPORT_SUBMIT, allowClipped = true)
                     await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
                     assertFixture(session, before = true)
                     assertDownloadUnchanged()
@@ -367,13 +367,12 @@ class BrowserBackupInstrumentedTest {
         return requireNotNull(tab)
     }
 
-    private fun clickWebControl(names: List<String>) {
+    private fun clickWebControl(names: List<String>, allowClipped: Boolean = false) {
         // Chrome's real AX default action avoids UiObject2's center-coordinate
-        // tap on an animated or clipped button. Never inject JS or retry a click.
+        // tap on an animated button. The page footer may be genuinely visible
+        // while Chrome still marks it as offscreen, so only callers that prove
+        // an actual viewport intersection opt into clipped activation.
         var showRequested = false
-        var focusRequested = false
-        var offscreenClickRequested = false
-        var lastMotionAt = 0L
         beginWebControl()
         await(15_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
             val nodes = webButtonNodes(names)
@@ -381,62 +380,20 @@ class BrowserBackupInstrumentedTest {
                 accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
                 nodes.singleOrNull()?.let { node ->
                     observeWebNode(node)
-                    if (webNodeOnScreen(node)) {
-                        clickWebNode(node, offscreen = false)
+                    if (webNodeCanActivate(node, allowClipped)) {
+                        clickWebNode(node)
                         true
-                    } else {
-                        when {
-                            !showRequested -> {
-                                showWebNode(node)
-                                showRequested = true
-                                lastMotionAt = SystemClock.elapsedRealtime()
-                                false
-                            }
-                            !focusRequested && SystemClock.elapsedRealtime() - lastMotionAt >= 500 -> {
-                                focusWebNode(node)
-                                focusRequested = true
-                                lastMotionAt = SystemClock.elapsedRealtime()
-                                false
-                            }
-                            !offscreenClickRequested && SystemClock.elapsedRealtime() - lastMotionAt >= 500 -> {
-                                // Chrome keeps offscreen AX bounds in this WebView. Activate
-                                // the same unique semantic button; real download and recovery
-                                // assertions, not geometry, still decide success.
-                                clickWebNode(node, offscreen = true)
-                                offscreenClickRequested = true
-                                true
-                            }
-                            else -> false
-                        }
-                    }
+                    } else if (!showRequested) {
+                        showRequested = true
+                        showWebNode(node)
+                        false
+                    } else false
                 } ?: false
             } finally { nodes.forEach { it.recycle() } }
         }
     }
 
-    private fun clickVisibleWebControl(names: List<String>) {
-        beginWebControl()
-        await(15_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
-            val nodes = webButtonNodes(names)
-            try {
-                accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
-                val node = nodes.singleOrNull()
-                if (node != null) {
-                    observeWebNode(node)
-                    if (webNodeOnScreen(node)) {
-                        clickWebNode(node, offscreen = false)
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            } finally { nodes.forEach { it.recycle() } }
-        }
-    }
-
-    private fun revealWebControlByScroll(names: List<String>) {
+    private fun revealWebControlByScroll(names: List<String>, allowClipped: Boolean = false) {
         beginWebControl()
         var legacyScrollTried = false
         var swipes = 0
@@ -447,7 +404,7 @@ class BrowserBackupInstrumentedTest {
                 accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
                 nodes.singleOrNull()?.let { node ->
                     observeWebNode(node)
-                    if (webNodeOnScreen(node)) return@await true
+                    if (webNodeCanActivate(node, allowClipped)) return@await true
                 }
             } finally { nodes.forEach { it.recycle() } }
 
@@ -577,16 +534,8 @@ class BrowserBackupInstrumentedTest {
         accept(accepted, FailureReason.OFFICIAL_WEB_SHOW_REJECTED)
     }
 
-    private fun focusWebNode(node: AccessibilityNodeInfo) {
-        val action = AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS
-        val accepted = webAction("FOCUS", node) {
-            node.actionList.any { it.id == action } && node.performAction(action)
-        }
-        accept(accepted, FailureReason.OFFICIAL_WEB_FOCUS_REJECTED)
-    }
-
-    private fun clickWebNode(node: AccessibilityNodeInfo, offscreen: Boolean) {
-        val accepted = webAction(if (offscreen) "CLICK_OFFSCREEN" else "CLICK", node) {
+    private fun clickWebNode(node: AccessibilityNodeInfo) {
+        val accepted = webAction("CLICK", node) {
             node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
         accept(accepted, FailureReason.OFFICIAL_WEB_CLICK_REJECTED)
@@ -679,6 +628,7 @@ class BrowserBackupInstrumentedTest {
                 .put("paneCanScrollUp", pane?.canScrollUp == true)
                 .put("paneCanScrollDown", pane?.canScrollDown == true)
                 .put("onScreen", webNodeOnScreen(node))
+                .put("intersectsScreen", webNodeIntersectsScreen(node))
         } finally { pane?.node?.recycle() }
     }
 
@@ -719,6 +669,32 @@ class BrowserBackupInstrumentedTest {
             }
         } finally { ancestor?.recycle() }
     }
+
+    @Suppress("DEPRECATION")
+    private fun webNodeIntersectsScreen(node: AccessibilityNodeInfo): Boolean {
+        // The official web footer can sit in the visible WebView while Chrome
+        // labels it offscreen and places it below its scrollable content pane.
+        // This fallback accepts only a real, visible geometric intersection.
+        if (!node.isVisibleToUser) return false
+        val bounds = Rect().also { node.getBoundsInScreen(it) }
+        if (bounds.isEmpty || !bounds.intersect(0, 0, device.displayWidth, device.displayHeight)) return false
+        var ancestor = node.parent
+        try {
+            while (true) {
+                val parent = ancestor ?: return false
+                if (parent.packageName?.toString() != CHROME || !parent.isVisibleToUser) return false
+                if (parent.className?.toString() == "android.webkit.WebView") {
+                    val viewport = Rect().also { parent.getBoundsInScreen(it) }
+                    return !viewport.isEmpty && bounds.intersect(viewport)
+                }
+                ancestor = parent.parent
+                parent.recycle()
+            }
+        } finally { ancestor?.recycle() }
+    }
+
+    private fun webNodeCanActivate(node: AccessibilityNodeInfo, allowClipped: Boolean): Boolean =
+        webNodeOnScreen(node) || (allowClipped && webNodeIntersectsScreen(node))
 
     private fun webViewOrNull(): UiObject2? = device.findObject(By.pkg(CHROME).clazz("android.webkit.WebView"))
 
