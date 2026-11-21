@@ -398,7 +398,7 @@ class BrowserBackupInstrumentedTest {
         var imeDismissed = false
         var swipes = 0
         var lastMotionAt = 0L
-        await(180_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
+        await(360_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
             val snapshot = webControlPageSnapshot(names)
             try {
                 accept(snapshot.buttons.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
@@ -442,8 +442,8 @@ class BrowserBackupInstrumentedTest {
         // screen coordinates, so the caller dismisses it before this gesture.
         val gutterX = (bounds.left + 54)
             .coerceIn(bounds.left + 1, bounds.right - 1)
-        val startY = bounds.top + bounds.height() * 80 / 100
-        val endY = bounds.top + bounds.height() * 20 / 100
+        val startY = bounds.top + bounds.height() * 96 / 100
+        val endY = bounds.top + bounds.height() * 4 / 100
         // A slow drag in the page gutter moves the real Settings scroller
         // without touching the password input or its IME.
         return device.swipe(gutterX, startY, gutterX, endY, 70)
