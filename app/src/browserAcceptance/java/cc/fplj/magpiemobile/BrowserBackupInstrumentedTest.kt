@@ -399,38 +399,39 @@ class BrowserBackupInstrumentedTest {
         var swipes = 0
         var lastMotionAt = 0L
         await(180_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
-            val nodes = webButtonNodes(names)
+            val snapshot = webControlPageSnapshot(names)
             try {
-                accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
-                nodes.singleOrNull()?.let { node ->
+                accept(snapshot.buttons.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+                snapshot.buttons.singleOrNull()?.let { node ->
                     observeWebNode(node)
                     if (webNodeCanActivate(node, allowClipped)) return@await true
                 }
-            } finally { nodes.forEach { it.recycle() } }
 
-            if (!imeDismissed) {
-                imeDismissed = true
-                dismissWebImeOnce()
-                return@await false
-            }
+                if (!imeDismissed) {
+                    imeDismissed = true
+                    dismissWebImeOnce()
+                    return@await false
+                }
 
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastMotionAt < 900) return@await false
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastMotionAt < 900) return@await false
 
-            accept(device.currentPackageName == CHROME,
-                FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
-            val pane = currentWebPane() ?: return@await false
+                accept(device.currentPackageName == CHROME,
+                    FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
+                val pane = snapshot.pane ?: return@await false
 
-            try {
                 accept(swipes < 6, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
                 swipes += 1
                 val accepted = swipeWebPane(pane)
                 recordWebPaneGesture("PANE_DOWN", pane, accepted)
                 accept(accepted, FailureReason.OFFICIAL_WEB_SCROLL_ACTION_REJECTED)
-            } finally { pane.node.recycle() }
 
-            lastMotionAt = now
-            false
+                lastMotionAt = now
+                false
+            } finally {
+                snapshot.buttons.forEach { it.recycle() }
+                snapshot.pane?.node?.recycle()
+            }
         }
     }
 
@@ -491,6 +492,65 @@ class BrowserBackupInstrumentedTest {
             }
             return WebPane(AccessibilityNodeInfo.obtain(node), bounds, canScrollUp, canScrollDown)
         } finally { nodes.forEach { it.recycle() } }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun webControlPageSnapshot(names: List<String>): WebControlPageSnapshot {
+        accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
+        val buttons = mutableListOf<AccessibilityNodeInfo>()
+        var pane: WebPane? = null
+        var paneCandidates = 0
+        var paneConflict = false
+        var webViews = 0
+
+        fun visit(node: AccessibilityNodeInfo, insideDocument: Boolean) {
+            val isDocument = node.packageName?.toString() == CHROME && node.isVisibleToUser &&
+                node.className?.toString() == "android.webkit.WebView"
+            if (isDocument) webViews += 1
+            val inDocument = insideDocument || isDocument
+            if (inDocument && node.packageName?.toString() == CHROME && node.isVisibleToUser) {
+                if (node.className?.toString() == "android.widget.Button" && node.isEnabled &&
+                    node.isClickable &&
+                    (node.text?.toString() in names || node.contentDescription?.toString() in names)) {
+                    buttons += AccessibilityNodeInfo.obtain(node)
+                }
+                if (node.isScrollable && node.isEnabled &&
+                    node.className?.toString() != "android.webkit.WebView") {
+                    paneCandidates += 1
+                    val bounds = Rect().also { node.getBoundsInScreen(it) }
+                    if (paneCandidates > 1) paneConflict = true
+                    if (!bounds.isEmpty && pane == null && !paneConflict) {
+                        val canScrollUp = node.actionList.any {
+                            it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id
+                        }
+                        val canScrollDown = node.actionList.any {
+                            it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id
+                        }
+                        pane = WebPane(AccessibilityNodeInfo.obtain(node), bounds,
+                            canScrollUp, canScrollDown)
+                    }
+                }
+            }
+            for (i in 0 until node.childCount) node.getChild(i)?.let {
+                try { visit(it, inDocument) } finally { it.recycle() }
+            }
+        }
+
+        try {
+            instrumentation.uiAutomation.rootInActiveWindow?.let {
+                try { visit(it, false) } finally { it.recycle() }
+            }
+            accept(webViews <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+            if (paneConflict || paneCandidates != 1) {
+                pane?.node?.recycle()
+                pane = null
+            }
+            return WebControlPageSnapshot(buttons, pane)
+        } catch (failure: Throwable) {
+            buttons.forEach { it.recycle() }
+            pane?.node?.recycle()
+            throw failure
+        }
     }
 
     private fun awaitStableImportForm(name: String) {
@@ -575,6 +635,11 @@ class BrowserBackupInstrumentedTest {
         val bounds: Rect,
         val canScrollUp: Boolean,
         val canScrollDown: Boolean,
+    )
+
+    private data class WebControlPageSnapshot(
+        val buttons: List<AccessibilityNodeInfo>,
+        val pane: WebPane?,
     )
 
     @Suppress("DEPRECATION")
