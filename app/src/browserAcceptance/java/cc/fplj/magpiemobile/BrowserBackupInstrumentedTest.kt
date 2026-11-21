@@ -421,7 +421,7 @@ class BrowserBackupInstrumentedTest {
                 val pane = snapshot.pane ?: return@await false
 
                 accept(swipes < 6, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED)
-                val batch = minOf(3, 6 - swipes)
+                val batch = 6 - swipes
                 swipes += batch
                 val accepted = swipeWebPaneBatch(pane, batch)
                 recordWebPaneGesture("PANE_DOWN", pane, accepted)
@@ -441,7 +441,7 @@ class BrowserBackupInstrumentedTest {
         // Start inside the page rather than its margin. A focus-triggered IME
         // can temporarily leave pane bounds unchanged while covering lower
         // screen coordinates, so the caller dismisses it before this gesture.
-        val gutterX = (bounds.left + 54)
+        val gutterX = (bounds.left + bounds.width() / 10)
             .coerceIn(bounds.left + 1, bounds.right - 1)
         val startY = bounds.top + bounds.height() * 80 / 100
         val endY = bounds.top + bounds.height() * 20 / 100
@@ -453,7 +453,7 @@ class BrowserBackupInstrumentedTest {
     private fun swipeWebPaneBatch(pane: WebPane, count: Int): Boolean {
         repeat(count) {
             if (!swipeWebPane(pane)) return false
-            if (it + 1 < count) SystemClock.sleep(900)
+            if (it + 1 < count) SystemClock.sleep(1_500)
         }
         return true
     }
