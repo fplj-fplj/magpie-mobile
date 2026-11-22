@@ -1,11 +1,13 @@
-## Magpie-Mobile 0.1.63-browser-backup-bridge（候选，尚未发布）
+## Magpie-Mobile 0.1.63-browser-backup-bridge（官方加密备份文件桥接）
 
 - 官方备份导出增加 `sink: "app"`，直接返回官方 Seal 生成的密文字节；不写应用私有的 Downloads，不接受任意文件路径。空目标和 `downloads` 继续使用原桌面行为，官方导入格式不变。
 - Android 宿主浏览器页面通过编译时标记启用 Blob 下载，校验响应类型与固定附件名；防重复导出、清除口令、复用同一份密文显式重试，并在页面已隐藏或离开时阻止自动下载。保留现有网页表单与原生页面样式。
 - 新增 8 项 Go 顶层回归，覆盖加密、密钥与备份选项、官方导入、鉴权／路径限制及真实网页模块的 Node 行为；GitHub Actions 为该回归固定 Node 22。本机不运行测试或编译。
-- **尚待验证**：本提交完整 Actions、实际外部浏览器下载到公共文件、系统文件选择器选回该文件、错误口令不恢复与正确口令恢复。环境探针和 Go/Node 夹具均不等同于真实往返验收；未完成前不发布 Release，原生 SAF 占位入口仍未接入。详情见 `docs/bugfixes-0.1.63.md`。
+- 同代码提交的完整 Validation 已通过：JVM core 645＋app 482＝1,127 项，Android API 35 x86_64 23 项，Go/plugin/forward/RPC/TLS/race 均零失败、错误或跳过。
+- 独立真实浏览器验收通过：从生产按钮进入 Chrome，官方网页导出到公共 Downloads，DocumentsUI 选回同一文件；错误口令保留配置 B，正确口令恢复 A，三次检查均未创建应用私有备份档案，公开下载哈希保持不变。最终 Sync 页面截图与脱敏 XML 已归档。
+- 验收证据：Actions run `44974211901`，生产代码 `26639e1ed74ca60a2d4cd46b7374affeaa628dc8`，下载文件 1,124 bytes、SHA-256 `5eb497d76db3a62fcb91972fe8f75338565d78c34281b56ec607e3871229098a`。原生 SAF 占位入口仍不在本版范围内；详情见 `docs/bugfixes-0.1.63.md`。
 
-候选 versionCode 64，metadata appVersion `0.1.63`；核心 `0.1.3781-androidhost.3`。最近已验证正式版本仍是下列 `0.1.62`。
+versionCode 64，metadata appVersion `0.1.63`；核心 `0.1.3781-androidhost.3`。所有编译和运行测试均由 GitHub Actions 完成。
 
 ## Magpie-Mobile 0.1.62-chat-session-clipboard-fixes（聊天分页与敏感剪贴板）
 
