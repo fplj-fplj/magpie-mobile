@@ -191,7 +191,7 @@ class BrowserBackupInstrumentedTest {
                     openFreshOfficialTab()
                     clickNamed(CHROME, SETTINGS)
                     revealSyncTab().click()
-                    confirmOfficialPage(SYNC_SETTINGS_URL)
+                    confirmOfficialSyncContent()
                     safeHierarchy("browser-backup-restored.xml")
                     // Import replaces the form; never capture a password form or a ticket URL.
                     val raw = hierarchyBytes()
@@ -384,6 +384,26 @@ class BrowserBackupInstrumentedTest {
                 chromeNavigationField() != null &&
                 webViewOrNull() != null &&
                 namedControl(CHROME, SETTINGS) != null
+        }
+    }
+
+    private fun confirmOfficialSyncContent() {
+        rejectBrowserFirstRun()
+        accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
+        await(30_000, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED) {
+            val exports = webButtonNodes(EXPORT_OPEN)
+            val imports = webButtonNodes(IMPORT_OPEN)
+            try {
+                accept(exports.size <= 1 && imports.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+                device.currentPackageName == CHROME &&
+                    webViewOrNull() != null &&
+                    namedControl(CHROME, SETTINGS) != null &&
+                    exports.size == 1 &&
+                    imports.size == 1
+            } finally {
+                exports.forEach { it.recycle() }
+                imports.forEach { it.recycle() }
+            }
         }
     }
 
@@ -1403,7 +1423,6 @@ class BrowserBackupInstrumentedTest {
         // CoreManagementClient independently rejects userinfo before the production ACTION_VIEW;
         // Chrome's editing formatter is not evidence of userinfo absence.
         private val CLEAN_ENTRY_URL = Regex("(?:http://)?127\\.0\\.0\\.1:3430/?(?:\\?view=providers)?")
-        private val SYNC_SETTINGS_URL = Regex("(?:http://)?127\\.0\\.0\\.1:3430/\\?(?:view=settings&tab=sync|tab=sync&view=settings)")
         private val SAFE_BASENAME = Regex("magpie(?: \\([0-9]+\\))?\\.magpie-backup")
         private val HASH_LINE = Regex("([0-9a-fA-F]{64})[ \\t]+(.+)")
         private val MISSING_DOWNLOAD_DIRECTORY = Regex("find: '?/sdcard/Download'?: No such file or directory")
