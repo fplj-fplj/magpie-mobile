@@ -22,6 +22,24 @@ density_current_physical=
 density_current_override=
 density_current_effective=
 
+wait_for_stable_device() {
+  local attempt state boot
+  for attempt in {1..120}; do
+    state="$(adb -s emulator-5554 get-state 2>/dev/null | tr -d '\r')" || true
+    boot="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" || true
+    if [[ "$state" == device && "$boot" == 1 ]]; then
+      sleep 1
+      state="$(adb -s emulator-5554 get-state 2>/dev/null | tr -d '\r')" || true
+      boot="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" || true
+      if [[ "$state" == device && "$boot" == 1 ]]; then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 read_display_density() {
   local output
   output="$(adb -s emulator-5554 shell wm density | tr -d '\r')" || return 1
@@ -280,6 +298,8 @@ PY
 }
 trap collect_and_finalize EXIT
 
+acceptance_stage=waiting_for_device
+wait_for_stable_device
 adb -s emulator-5554 get-state | grep -Fx device
 # Disposable-device precondition: do not erase an installed app or public Downloads.
 installed_packages="$(adb -s emulator-5554 shell pm list packages --user 0 cc.fplj.magpiemobile)"
@@ -287,6 +307,13 @@ installed_packages="$(adb -s emulator-5554 shell pm list packages --user 0 cc.fp
 
 acceptance_stage=calibrating_display_density
 calibrate_display_density
+
+# The emulator runner can briefly lose its ADB connection immediately after
+# density changes even though boot_completed remains set. Wait for two stable
+# samples before the browser probe starts so a host race is not reported as an
+# application or browser failure.
+acceptance_stage=waiting_for_device_after_density
+wait_for_stable_device
 
 acceptance_stage=preparing_real_browser
 # Use the latest reviewed probe on the acceptance branch, not an embedded copy.
