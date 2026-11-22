@@ -133,7 +133,8 @@ safe_phases = {
     "initializing", "starting_gateway", "creating_A_via_production_RPC", "opening_production_browser_button",
     "opening_official_sync_settings", "exporting_via_official_web_form", "changing_A_to_B_via_same_connection_RPC",
     "choosing_real_download_from_official_import",
-    "wrong_phrase_must_preserve_B", "correct_phrase_must_restore_A", "passed",
+    "wrong_phrase_must_preserve_B", "correct_phrase_must_restore_A",
+    "reopening_official_import_for_correct_phrase", "passed",
 }
 safe_xml_names = {
     "browser-backup-clean-entry.xml", "browser-backup-after-download.xml", "browser-backup-real-picker.xml",
@@ -178,9 +179,16 @@ try:
             for field in ("cleanRedirectObserved", "realDownloadObserved", "downloadRetryClicked"):
                 require(type(record.get(field)) is bool, "TEST_RESULT_BOOLEAN_MISSING")
             require(type(record.get("privateArchiveChecks")) is int and 0 <= record["privateArchiveChecks"] <= 3, "INVALID_PRIVATE_ARCHIVE_CHECK_COUNT")
+            for field in ("wrongPhraseStatePreserved", "correctPhraseStateRestored",
+                          "wrongPhraseErrorObserved", "browserContentTreeLostAfterWrongPhrase",
+                          "browserContentTreeLostAfterCorrectPhrase"):
+                require(type(record.get(field)) is bool, "TEST_RESULT_STATE_EVIDENCE_MISSING")
             curated = {key: record.get(key) for key in (
                 "status", "phase", "failureType", "failureReason", "failureLine", "cleanRedirectObserved", "realDownloadObserved",
-                "downloadRetryClicked", "privateArchiveChecks", "browserPackage", "keyEqualityClaimed")}
+                "downloadRetryClicked", "privateArchiveChecks", "wrongPhraseStatePreserved",
+                "correctPhraseStateRestored", "wrongPhraseErrorObserved",
+                "browserContentTreeLostAfterWrongPhrase", "browserContentTreeLostAfterCorrectPhrase",
+                "browserPackage", "keyEqualityClaimed")}
             ordinal = record.get("webControlOrdinal")
             require(type(ordinal) is int and 0 <= ordinal <= 20, "INVALID_WEB_CONTROL_ORDINAL")
             observation_keys = {"targetBounds", "paneBounds", "offscreen", "paneCanScrollUp",
@@ -241,6 +249,7 @@ try:
             result["testResultPassed"] = (record["status"] == "PASS" and record["phase"] == "passed"
                                           and record.get("failureType") is None and record.get("failureReason") is None
                                           and record["cleanRedirectObserved"] and record["realDownloadObserved"]
+                                          and record["wrongPhraseStatePreserved"] and record["correctPhraseStateRestored"]
                                           and record["privateArchiveChecks"] == 3
                                           and download is not None and final_png.is_file())
         require(result["junit"]["cases"] == 1 and result["junit"]["unexpectedCases"] == 0, "EXACT_ISOLATED_TEST_CASE_REQUIRED")

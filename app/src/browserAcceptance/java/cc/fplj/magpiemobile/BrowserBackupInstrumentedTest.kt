@@ -53,6 +53,11 @@ class BrowserBackupInstrumentedTest {
     private var webControlOrdinal = 0
     private var webControlTrace = JSONArray()
     private var lastWebObservation: JSONObject? = null
+    private var wrongPhraseStatePreserved = false
+    private var correctPhraseStateRestored = false
+    private var wrongPhraseErrorObserved = false
+    private var browserContentTreeLostAfterWrongPhrase = false
+    private var browserContentTreeLostAfterCorrectPhrase = false
 
     @Test fun officialBrowserBackupRoundTripUsesRealDownloadedFile() {
         // Never pass these via instrumentation arguments or write their values to evidence.
@@ -142,27 +147,52 @@ class BrowserBackupInstrumentedTest {
                     phase = "wrong_phrase_must_preserve_B"
                     setRealPasswordFields(listOf(wrongPhrase))
                     clickVisibleWebControl(IMPORT_SUBMIT)
-                    await(30_000, FailureReason.WRONG_PHRASE_ERROR_NOT_REACHED) {
-                        accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
-                        hasWebText(WRONG_PHRASE_ERROR)
-                    }
+                    // Chrome 124 can drop its WebView accessibility subtree after
+                    // a real web click. The import request still runs. Wait for
+                    // the sealed-file failure, then prove rejection through the
+                    // same-session production API instead of a transient DOM node.
+                    SystemClock.sleep(10_000)
+                    wrongPhraseErrorObserved = hasWebText(WRONG_PHRASE_ERROR)
+                    browserContentTreeLostAfterWrongPhrase = webViewOrNull() == null
+                    accept(!hasImportSuccess(), FailureReason.WRONG_PHRASE_ACCEPTED)
                     assertFixture(session, before = false)
                     SystemClock.sleep(500)
                     assertFixture(session, before = false)
                     assertDownloadUnchanged()
                     assertPrivateArchivesUnchanged(privateArchiveBaseline)
+                    wrongPhraseStatePreserved = true
                     safeHierarchy("browser-backup-wrong-phrase-rejected.xml")
 
+                    phase = "reopening_official_import_for_correct_phrase"
+                    // Chrome can keep the form alive while hiding its complete
+                    // accessibility subtree. Reopen the official clean page in
+                    // the real browser, then choose the same public download
+                    // again. No export, alternate URI, JS, or API import is used.
+                    navigateToCleanOfficialPage()
+                    clickNamed(CHROME, SETTINGS)
+                    revealSyncTab().click()
+                    clickWebControl(IMPORT_OPEN)
+                    awaitWebFormOpened(IMPORT_OPEN)
+                    clickWebControl(CHOOSE)
+                    chooseActualDownload(requireNotNull(downloaded))
+                    awaitStableImportForm(requireNotNull(downloaded).name)
+                    assertDownloadUnchanged()
                     phase = "correct_phrase_must_restore_A"
-                    // Keep the same selected real file; no re-export, alternate URI or API import.
-                    // Its filename may be above the viewport after the error. The
-                    // successful restore below must use this already-selected file.
                     setRealPasswordFields(listOf(phrase))
                     clickVisibleWebControl(IMPORT_SUBMIT)
-                    await(30_000, FailureReason.RESTORE_RESULT_NOT_REACHED) { hasImportSuccess() }
+                    browserContentTreeLostAfterCorrectPhrase = webViewOrNull() == null
+                    await(60_000, FailureReason.RESTORE_RESULT_NOT_REACHED) {
+                        fixtureMatches(session, before = true)
+                    }
                     assertFixture(session, before = true)
+                    correctPhraseStateRestored = true
                     assertDownloadUnchanged()
                     assertPrivateArchivesUnchanged(privateArchiveBaseline)
+                    // The successful import may have removed the content tree.
+                    // Reopen the official page before taking the final evidence.
+                    navigateToCleanOfficialPage()
+                    clickNamed(CHROME, SETTINGS)
+                    revealSyncTab().click()
                     confirmOfficialPage(SYNC_SETTINGS_URL)
                     safeHierarchy("browser-backup-restored.xml")
                     // Import replaces the form; never capture a password form or a ticket URL.
@@ -220,6 +250,11 @@ class BrowserBackupInstrumentedTest {
                 .put("webControlOrdinal", webControlOrdinal)
                 .put("webControlTrace", webControlTrace)
                 .put("lastWebObservation", lastWebObservation ?: JSONObject.NULL)
+                .put("wrongPhraseStatePreserved", wrongPhraseStatePreserved)
+                .put("correctPhraseStateRestored", correctPhraseStateRestored)
+                .put("wrongPhraseErrorObserved", wrongPhraseErrorObserved)
+                .put("browserContentTreeLostAfterWrongPhrase", browserContentTreeLostAfterWrongPhrase)
+                .put("browserContentTreeLostAfterCorrectPhrase", browserContentTreeLostAfterCorrectPhrase)
                 .put("scope", "Real Chrome UI, public Downloads, real system picker, production same-session RPC")
                 .put("keyEqualityClaimed", false)
             downloaded?.let {
@@ -254,6 +289,14 @@ class BrowserBackupInstrumentedTest {
         // keySet is only an existence assertion. B never changes the credential.
     }
 
+    private fun fixtureMatches(session: ProviderSessionKey, before: Boolean): Boolean {
+        val value: ProviderEditSnapshot = rpc(session) { it.editable(FIXTURE_ID) }
+        return value.id == FIXTURE_ID && value.name == (if (before) A_NAME else B_NAME) &&
+            value.chatUrl == (if (before) A_URL else B_URL) &&
+            value.modelIds == listOf(if (before) A_MODEL else B_MODEL) &&
+            !value.noModels && value.keySet && value.serverPin.isEmpty()
+    }
+
     private fun revealNativeBrowserButton(): UiObject2 {
         var button: UiObject2? = null
         var scrollAttempts = 0
@@ -281,6 +324,46 @@ class BrowserBackupInstrumentedTest {
     private fun rejectBrowserFirstRun() {
         accept(!device.hasObject(By.res(CHROME, "fre_pager")) &&
             !device.hasObject(By.res(CHROME, "signin_fre_dismiss_button")), FailureReason.BROWSER_SETUP_REQUIRED)
+    }
+
+    private fun navigateToCleanOfficialPage() {
+        rejectBrowserFirstRun()
+        accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
+        val bar = requireNotNull(device.findObject(By.res(CHROME, "url_bar")))
+        bar.click()
+        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
+            device.findObject(By.res(CHROME, "url_bar"))?.isFocused == true
+        }
+        val focused = requireNotNull(device.findObject(By.res(CHROME, "url_bar")))
+        focused.setText(CLEAN_ENTRY)
+        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
+            device.findObject(By.res(CHROME, "url_bar"))?.text
+                ?.contains("127.0.0.1:3430") == true
+        }
+        accept(device.pressKeyCode(KeyEvent.KEYCODE_ENTER),
+            FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
+        await(30_000, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED) {
+            device.currentPackageName == CHROME && webViewOrNull() != null
+        }
+        dismissWebImeOnce()
+        var backPresses = 0
+        var nextBackAt = 0L
+        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
+            val field = device.findObject(By.res(CHROME, "url_bar"))
+            val suggestionsVisible = device.hasObject(By.res(CHROME, "omnibox_suggestions_dropdown"))
+            if (field != null && !field.isFocused && !suggestionsVisible) {
+                true
+            } else {
+                val now = SystemClock.elapsedRealtime()
+                if ((field?.isFocused == true || suggestionsVisible) && backPresses < 2 && now >= nextBackAt) {
+                    device.pressBack()
+                    backPresses += 1
+                    nextBackAt = SystemClock.elapsedRealtime() + 1_000
+                }
+                false
+            }
+        }
+        confirmOfficialPage(CLEAN_ENTRY_URL)
     }
 
     private fun confirmOfficialPage(expectedUrl: Regex) {
@@ -1215,6 +1298,7 @@ class BrowserBackupInstrumentedTest {
         MULTIPLE_NEW_DOWNLOADS, STABLE_PUBLIC_DOWNLOAD_NOT_REACHED, DOWNLOAD_HASH_TOOL_FAILED,
         DOWNLOADED_FILE_CHANGED, DOCUMENTS_UI_LIST_NOT_RECOGNIZED, DOWNLOADED_FILE_NOT_REACHED_IN_PICKER,
         WRONG_PHRASE_ACCEPTED, WRONG_PHRASE_ERROR_NOT_REACHED, RESTORE_RESULT_NOT_REACHED,
+        OFFICIAL_BROWSER_NAVIGATION_REJECTED,
         EVIDENCE_SANITIZATION_FAILED, EVIDENCE_WRITE_OR_ARCHIVE_FAILED,
     }
 
@@ -1236,6 +1320,7 @@ class BrowserBackupInstrumentedTest {
         private const val B_NAME = "Browser backup modified"
         private const val B_URL = "https://changed.example.invalid/v1"
         private const val B_MODEL = "backup-after"
+        private const val CLEAN_ENTRY = "http://127.0.0.1:3430/"
         private const val WRONG_PHRASE_ERROR = "wrong passphrase, or the file was changed"
         private val SETTINGS = listOf("Settings", "设置")
         // The fixed official .warm-tabs CSS applies text-transform: uppercase;
