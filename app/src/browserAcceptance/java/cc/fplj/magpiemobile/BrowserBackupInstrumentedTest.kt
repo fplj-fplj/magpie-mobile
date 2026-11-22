@@ -472,7 +472,7 @@ class BrowserBackupInstrumentedTest {
                 accept(nodes.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
                 nodes.singleOrNull()?.let { node ->
                     observeWebNode(node)
-                    if (webNodeFullyVisibleInPane(node)) {
+                    if (webNodeFullyVisibleInViewport(node)) {
                         clickWebNode(node)
                         true
                     } else false
@@ -879,16 +879,16 @@ class BrowserBackupInstrumentedTest {
         webNodeOnScreen(node) || (allowClipped && webNodeIntersectsScreen(node))
 
     @Suppress("DEPRECATION")
-    private fun webNodeFullyVisibleInPane(node: AccessibilityNodeInfo): Boolean {
+    private fun webNodeFullyVisibleInViewport(node: AccessibilityNodeInfo): Boolean {
         // The reduced viewport calibration must prove the full official
-        // control fits inside both its scroll pane and the real WebView. This
-        // geometry is stronger than Chrome's offscreen accessibility hint and
-        // does not permit a clipped or partially hidden footer click.
+        // control fits inside the real WebView. Chrome omits a scrollable pane
+        // once the complete form fits, so validate that pane only when present.
+        // This is stronger than Chrome's offscreen hint and does not permit a
+        // clipped or partially hidden footer click.
         if (!node.isVisibleToUser) return false
         val bounds = Rect().also { node.getBoundsInScreen(it) }
         if (bounds.isEmpty || !Rect(0, 0, device.displayWidth, device.displayHeight).contains(bounds)) return false
         var ancestor = node.parent
-        var foundPane = false
         try {
             while (true) {
                 val parent = ancestor ?: return false
@@ -896,11 +896,10 @@ class BrowserBackupInstrumentedTest {
                 if (parent.isScrollable) {
                     val viewport = Rect().also { parent.getBoundsInScreen(it) }
                     if (viewport.isEmpty || !viewport.contains(bounds)) return false
-                    foundPane = true
                 }
                 if (parent.className?.toString() == "android.webkit.WebView") {
                     val viewport = Rect().also { parent.getBoundsInScreen(it) }
-                    return foundPane && !viewport.isEmpty && viewport.contains(bounds)
+                    return !viewport.isEmpty && viewport.contains(bounds)
                 }
                 ancestor = parent.parent
                 parent.recycle()
