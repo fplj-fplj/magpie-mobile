@@ -348,8 +348,7 @@ class BrowserBackupInstrumentedTest {
         val focused = requireNotNull(chromeNavigationField())
         focused.setText(CLEAN_ENTRY)
         await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            chromeNavigationField()?.text
-                ?.contains("127.0.0.1:3430") == true
+            CLEAN_ENTRY_URL.matches(chromeNavigationField()?.text?.trim().orEmpty())
         }
         accept(device.pressKeyCode(KeyEvent.KEYCODE_ENTER),
             FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
@@ -360,7 +359,7 @@ class BrowserBackupInstrumentedTest {
         var backPresses = 0
         var nextBackAt = 0L
         await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            val field = device.findObject(By.res(CHROME, "url_bar"))
+            val field = chromeNavigationField()
             val suggestionsVisible = device.hasObject(By.res(CHROME, "omnibox_suggestions_dropdown"))
             if (field != null && !field.isFocused && !suggestionsVisible) {
                 true
@@ -374,7 +373,21 @@ class BrowserBackupInstrumentedTest {
                 false
             }
         }
-        confirmOfficialPage(CLEAN_ENTRY_URL)
+        confirmOfficialPageContent()
+    }
+
+    private fun confirmOfficialPageContent() {
+        rejectBrowserFirstRun()
+        accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
+        // A fresh tab already received the exact public entry URL above. Do not
+        // reopen Chrome's omnibox here: on the new-tab search field that leaves
+        // the page behind a suggestions layer even though the official UI is loaded.
+        await(30_000, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED) {
+            device.currentPackageName == CHROME &&
+                chromeNavigationField() != null &&
+                webViewOrNull() != null &&
+                namedControl(CHROME, SETTINGS) != null
+        }
     }
 
     private fun confirmOfficialPage(expectedUrl: Regex) {
