@@ -118,7 +118,7 @@ class BrowserBackupInstrumentedTest {
                     clickNamed(CHROME, SETTINGS)
                     revealSyncTab().click()
                     clickWebControl(EXPORT_OPEN)
-                    awaitWebFormOpened(EXPORT_OPEN)
+                    awaitWebFormOpened(EXPORT_OPEN, expectedPasswords = 2)
                     phase = "exporting_via_official_web_form"
                     setRealPasswordFields(listOf(phrase, phrase))
                     revealWebControlByScroll(EXPORT_SUBMIT, allowClipped = true)
@@ -137,7 +137,7 @@ class BrowserBackupInstrumentedTest {
 
                     phase = "choosing_real_download_from_official_import"
                     clickWebControl(IMPORT_OPEN)
-                    awaitWebFormOpened(IMPORT_OPEN)
+                    awaitWebFormOpened(IMPORT_OPEN, expectedPasswords = 1)
                     clickWebControl(CHOOSE)
                     chooseActualDownload(requireNotNull(downloaded))
                     awaitStableImportForm(requireNotNull(downloaded).name)
@@ -173,7 +173,7 @@ class BrowserBackupInstrumentedTest {
                     clickNamed(CHROME, SETTINGS)
                     revealSyncTab().click()
                     clickWebControl(IMPORT_OPEN)
-                    awaitWebFormOpened(IMPORT_OPEN)
+                    awaitWebFormOpened(IMPORT_OPEN, expectedPasswords = 1)
                     clickWebControl(CHOOSE)
                     chooseActualDownload(requireNotNull(downloaded))
                     awaitStableImportForm(requireNotNull(downloaded).name)
@@ -745,17 +745,26 @@ class BrowserBackupInstrumentedTest {
         }
     }
 
-    private fun awaitWebFormOpened(opener: List<String>) {
-        // ACTION_CLICK only acknowledges receipt. Require the official toggle
-        // state; setRealPasswordFields then requires the actual password inputs.
-        await(15_000, FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED) {
+    private fun awaitWebFormOpened(opener: List<String>, expectedPasswords: Int) {
+        // ACTION_CLICK only acknowledges receipt. The row changes to Close
+        // before syncfiles.js finishes loading its real form, so wait for the
+        // expected password controls to remain present as well.
+        var stablePolls = 0
+        await(45_000, FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED) {
             val openers = webButtonNodes(opener)
             try {
                 val closers = webButtonNodes(CLOSE)
+                val passwords = passwordNodes()
                 try {
                     accept(openers.size <= 1 && closers.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
-                    openers.isEmpty() && closers.size == 1
-                } finally { closers.forEach { it.recycle() } }
+                    val ready = openers.isEmpty() && closers.size == 1 &&
+                        passwords.size == expectedPasswords
+                    stablePolls = if (ready) stablePolls + 1 else 0
+                    stablePolls >= 3
+                } finally {
+                    closers.forEach { it.recycle() }
+                    passwords.forEach { it.recycle() }
+                }
             } finally { openers.forEach { it.recycle() } }
         }
     }
