@@ -479,6 +479,7 @@ class BrowserBackupInstrumentedTest {
         // while Chrome still marks it as offscreen, so only callers that prove
         // an actual viewport intersection opt into clipped activation.
         var showRequested = false
+        var clickAttempts = 0
         beginWebControl()
         await(15_000, FailureReason.OFFICIAL_WEB_CONTROL_NOT_REACHED) {
             val nodes = webButtonNodes(names)
@@ -487,8 +488,14 @@ class BrowserBackupInstrumentedTest {
                 nodes.singleOrNull()?.let { node ->
                     observeWebNode(node)
                     if (webNodeCanActivate(node, allowClipped)) {
-                        clickWebNode(node)
-                        true
+                        accept(clickAttempts < 6, FailureReason.OFFICIAL_WEB_CLICK_REJECTED)
+                        clickAttempts += 1
+                        if (tryClickWebNode(node)) {
+                            true
+                        } else {
+                            SystemClock.sleep(500)
+                            false
+                        }
                     } else if (!showRequested) {
                         showRequested = true
                         showWebNode(node)
@@ -825,11 +832,13 @@ class BrowserBackupInstrumentedTest {
     }
 
     private fun clickWebNode(node: AccessibilityNodeInfo) {
-        val accepted = webAction("CLICK", node) {
+        accept(tryClickWebNode(node), FailureReason.OFFICIAL_WEB_CLICK_REJECTED)
+    }
+
+    private fun tryClickWebNode(node: AccessibilityNodeInfo): Boolean =
+        webAction("CLICK", node) {
             node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
-        accept(accepted, FailureReason.OFFICIAL_WEB_CLICK_REJECTED)
-    }
 
     private data class WebPane(
         val node: AccessibilityNodeInfo,
