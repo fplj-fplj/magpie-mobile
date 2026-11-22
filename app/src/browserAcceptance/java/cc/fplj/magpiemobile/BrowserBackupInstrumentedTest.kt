@@ -785,7 +785,7 @@ class BrowserBackupInstrumentedTest {
                     if (stablePolls >= 3) return@await true
                     val now = SystemClock.elapsedRealtime()
                     openers.singleOrNull()?.let { node ->
-                        if (closers.isEmpty() && passwords.isEmpty() &&
+                        if (passwords.size != expectedPasswords &&
                             clickAttempts < 4 && now - lastClickAt >= 4_000) {
                             observeWebNode(node)
                             if (webNodeCanActivate(node, allowClipped = false)) {
