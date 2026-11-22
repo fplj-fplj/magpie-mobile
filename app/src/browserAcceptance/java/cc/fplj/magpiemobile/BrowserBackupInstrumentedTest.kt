@@ -117,8 +117,7 @@ class BrowserBackupInstrumentedTest {
                     phase = "opening_official_sync_settings"
                     clickNamed(CHROME, SETTINGS)
                     revealSyncTab().click()
-                    clickWebControl(EXPORT_OPEN)
-                    awaitWebFormOpened(EXPORT_OPEN, expectedPasswords = 2)
+                    openWebForm(EXPORT_OPEN, expectedPasswords = 2)
                     phase = "exporting_via_official_web_form"
                     setRealPasswordFields(listOf(phrase, phrase))
                     revealWebControlByScroll(EXPORT_SUBMIT, allowClipped = true)
@@ -136,8 +135,7 @@ class BrowserBackupInstrumentedTest {
                     assertFixture(session, before = false)
 
                     phase = "choosing_real_download_from_official_import"
-                    clickWebControl(IMPORT_OPEN)
-                    awaitWebFormOpened(IMPORT_OPEN, expectedPasswords = 1)
+                    openWebForm(IMPORT_OPEN, expectedPasswords = 1)
                     clickWebControl(CHOOSE)
                     chooseActualDownload(requireNotNull(downloaded))
                     awaitStableImportForm(requireNotNull(downloaded).name)
@@ -172,8 +170,7 @@ class BrowserBackupInstrumentedTest {
                     openFreshOfficialTab()
                     clickNamed(CHROME, SETTINGS)
                     revealSyncTab().click()
-                    clickWebControl(IMPORT_OPEN)
-                    awaitWebFormOpened(IMPORT_OPEN, expectedPasswords = 1)
+                    openWebForm(IMPORT_OPEN, expectedPasswords = 1)
                     clickWebControl(CHOOSE)
                     chooseActualDownload(requireNotNull(downloaded))
                     awaitStableImportForm(requireNotNull(downloaded).name)
@@ -765,12 +762,17 @@ class BrowserBackupInstrumentedTest {
         }
     }
 
-    private fun awaitWebFormOpened(opener: List<String>, expectedPasswords: Int) {
+    private fun openWebForm(opener: List<String>, expectedPasswords: Int) {
         // ACTION_CLICK only acknowledges receipt. The row changes to Close
-        // before syncfiles.js finishes loading its real form, so wait for the
-        // expected password controls to remain present as well.
+        // before syncfiles.js finishes loading its real form, and Chrome can
+        // acknowledge a click without dispatching it. Re-target the same real
+        // button only while the page still shows no form transition.
+        beginWebControl()
         var stablePolls = 0
-        await(45_000, FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED) {
+        var clickAttempts = 0
+        var lastClickAt = 0L
+        var showRequested = false
+        await(60_000, FailureReason.OFFICIAL_WEB_FORM_NOT_REACHED) {
             val openers = webButtonNodes(opener)
             try {
                 val closers = webButtonNodes(CLOSE)
@@ -780,7 +782,23 @@ class BrowserBackupInstrumentedTest {
                     val ready = openers.isEmpty() && closers.size == 1 &&
                         passwords.size == expectedPasswords
                     stablePolls = if (ready) stablePolls + 1 else 0
-                    stablePolls >= 3
+                    if (stablePolls >= 3) return@await true
+                    val now = SystemClock.elapsedRealtime()
+                    openers.singleOrNull()?.let { node ->
+                        if (closers.isEmpty() && passwords.isEmpty() &&
+                            clickAttempts < 4 && now - lastClickAt >= 4_000) {
+                            observeWebNode(node)
+                            if (webNodeCanActivate(node, allowClipped = false)) {
+                                tryClickWebNode(node)
+                                clickAttempts += 1
+                                lastClickAt = now
+                            } else if (!showRequested) {
+                                showRequested = true
+                                showWebNode(node)
+                            }
+                        }
+                    }
+                    false
                 } finally {
                     closers.forEach { it.recycle() }
                     passwords.forEach { it.recycle() }
