@@ -338,17 +338,17 @@ class BrowserBackupInstrumentedTest {
             FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
         await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
             device.currentPackageName == CHROME &&
-                device.hasObject(By.res(CHROME, "url_bar"))
+                chromeNavigationField() != null
         }
-        val bar = requireNotNull(device.findObject(By.res(CHROME, "url_bar")))
+        val bar = requireNotNull(chromeNavigationField())
         bar.click()
         await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            device.findObject(By.res(CHROME, "url_bar"))?.isFocused == true
+            chromeNavigationField()?.isFocused == true
         }
-        val focused = requireNotNull(device.findObject(By.res(CHROME, "url_bar")))
+        val focused = requireNotNull(chromeNavigationField())
         focused.setText(CLEAN_ENTRY)
         await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            device.findObject(By.res(CHROME, "url_bar"))?.text
+            chromeNavigationField()?.text
                 ?.contains("127.0.0.1:3430") == true
         }
         accept(device.pressKeyCode(KeyEvent.KEYCODE_ENTER),
@@ -1011,6 +1011,10 @@ class BrowserBackupInstrumentedTest {
     }
 
     private fun webViewOrNull(): UiObject2? = device.findObject(By.pkg(CHROME).clazz("android.webkit.WebView"))
+
+    private fun chromeNavigationField(): UiObject2? =
+        device.findObject(By.res(CHROME, "url_bar"))
+            ?: device.findObject(By.res(CHROME, "search_box_text"))
 
     private fun clickNamed(pkg: String, names: List<String>) {
         await(15_000) { namedControl(pkg, names) != null }
