@@ -11,15 +11,84 @@ mkdir -p "$BROWSER_ACCEPTANCE_OUTPUT"
 acceptance_stage=preflight
 acceptance_test_started=false
 acceptance_gradle_exit=NOT_RUN
+display_density_calibrated=false
+display_density_restored=false
+display_density_changed=false
+density_original_physical=
+density_original_override=
+density_original_effective=
+density_calibrated_effective=
+density_current_physical=
+density_current_override=
+density_current_effective=
+
+read_display_density() {
+  local output
+  output="$(adb -s emulator-5554 shell wm density | tr -d '\r')" || return 1
+  density_current_physical="$(sed -nE 's/^Physical density: ([0-9]+).*/\1/p' <<<"$output")"
+  density_current_override="$(sed -nE 's/^Override density: ([0-9]+).*/\1/p' <<<"$output")"
+  [[ "$density_current_physical" =~ ^[0-9]+$ ]] || return 1
+  density_current_effective="${density_current_override:-$density_current_physical}"
+  [[ "$density_current_effective" =~ ^[0-9]+$ ]]
+}
+
+calibrate_display_density() {
+  read_display_density || return 1
+  density_original_physical="$density_current_physical"
+  density_original_override="$density_current_override"
+  density_original_effective="$density_current_effective"
+  local reduced=$((density_current_effective * 3 / 4))
+  (( reduced >= 120 && reduced < density_current_effective )) || return 1
+  density_calibrated_effective="$reduced"
+  adb -s emulator-5554 shell wm density "$reduced" >/dev/null || return 1
+  display_density_changed=true
+  local attempt
+  for attempt in {1..30}; do
+    if read_display_density && [[ "$density_current_effective" == "$reduced" ]]; then
+      display_density_calibrated=true
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+restore_display_density() {
+  if [[ "$display_density_changed" != true ]]; then
+    display_density_restored=true
+    return 0
+  fi
+  if [[ -n "$density_original_override" ]]; then
+    adb -s emulator-5554 shell wm density "$density_original_override" >/dev/null || return 1
+  else
+    adb -s emulator-5554 shell wm density reset >/dev/null || return 1
+  fi
+  local attempt
+  for attempt in {1..30}; do
+    if read_display_density &&
+      [[ "$density_current_physical" == "$density_original_physical" ]] &&
+      [[ "$density_current_override" == "$density_original_override" ]]; then
+      display_density_restored=true
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
 
 collect_and_finalize() {
   local original_exit=$?
   trap - EXIT
   set +e
+  restore_display_density
+  local density_restore_exit=$?
   export ACCEPTANCE_ORIGINAL_EXIT="$original_exit"
   export ACCEPTANCE_STAGE="$acceptance_stage"
   export ACCEPTANCE_TEST_STARTED="$acceptance_test_started"
   export ACCEPTANCE_GRADLE_EXIT="$acceptance_gradle_exit"
+  export ACCEPTANCE_DISPLAY_DENSITY_CALIBRATED="$display_density_calibrated"
+  export ACCEPTANCE_DISPLAY_DENSITY_RESTORED="$display_density_restored"
+  export ACCEPTANCE_DISPLAY_DENSITY_CALIBRATION="${density_original_effective:-none}->${density_calibrated_effective:-none}"
   python3 - <<'PY'
 import datetime, json, os, re, shutil, subprocess, tempfile
 from pathlib import Path
@@ -31,6 +100,9 @@ result = {
     "schemaVersion": 1, "status": "FAIL", "stage": os.environ["ACCEPTANCE_STAGE"],
     "instrumentationStarted": started, "originalExitCode": int(os.environ["ACCEPTANCE_ORIGINAL_EXIT"]),
     "gradleExitCode": os.environ["ACCEPTANCE_GRADLE_EXIT"], "failures": [],
+    "displayDensityCalibrated": os.environ["ACCEPTANCE_DISPLAY_DENSITY_CALIBRATED"] == "true",
+    "displayDensityRestored": os.environ["ACCEPTANCE_DISPLAY_DENSITY_RESTORED"] == "true",
+    "displayDensityCalibration": os.environ["ACCEPTANCE_DISPLAY_DENSITY_CALIBRATION"],
     "expectedClass": "cc.fplj.magpiemobile.BrowserBackupInstrumentedTest",
     "junit": {"cases": 0, "failures": 0, "errors": 0, "skipped": 0, "unexpectedCases": 0},
     "sanitizedTestEvidenceCollected": False, "testResultPassed": False,
@@ -60,7 +132,7 @@ safe_labels = {
 safe_phases = {
     "initializing", "starting_gateway", "creating_A_via_production_RPC", "opening_production_browser_button",
     "opening_official_sync_settings", "exporting_via_official_web_form", "changing_A_to_B_via_same_connection_RPC",
-    "preparing_official_browser_viewport", "choosing_real_download_from_official_import",
+    "choosing_real_download_from_official_import",
     "wrong_phrase_must_preserve_B", "correct_phrase_must_restore_A", "passed",
 }
 safe_xml_names = {
@@ -181,6 +253,7 @@ except GateError as error:
 except Exception as error:
     result["failures"].append("EVIDENCE_COLLECTION_" + type(error).__name__)
 passed = (started and result["originalExitCode"] == 0 and result["gradleExitCode"] == "0"
+          and result["displayDensityCalibrated"] and result["displayDensityRestored"]
           and not result["failures"] and result["sanitizedTestEvidenceCollected"] and result["testResultPassed"])
 result["status"] = "PASS" if passed else "FAIL"
 (output / "execution.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -188,6 +261,9 @@ print(json.dumps({"status": result["status"], "stage": result["stage"], "failure
 raise SystemExit(0 if passed else 1)
 PY
   local collector_exit=$?
+  if (( density_restore_exit != 0 )); then
+    collector_exit=1
+  fi
   if (( original_exit != 0 )); then
     exit "$original_exit"
   fi
@@ -199,6 +275,9 @@ adb -s emulator-5554 get-state | grep -Fx device
 # Disposable-device precondition: do not erase an installed app or public Downloads.
 installed_packages="$(adb -s emulator-5554 shell pm list packages --user 0 cc.fplj.magpiemobile)"
 [[ -z "$installed_packages" ]]
+
+acceptance_stage=calibrating_display_density
+calibrate_display_density
 
 acceptance_stage=preparing_real_browser
 # Use the latest reviewed probe on the acceptance branch, not an embedded copy.

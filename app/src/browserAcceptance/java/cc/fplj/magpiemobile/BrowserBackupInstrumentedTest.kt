@@ -74,12 +74,7 @@ class BrowserBackupInstrumentedTest {
                 )
             }
             device.setOrientationNatural()
-            phase = "preparing_official_browser_viewport"
-            val originalDensity = displayDensity()
-            var browserFailure: Throwable? = null
-            try {
-                applyReducedDisplayDensity(originalDensity)
-                ActivityScenario.launch(MainActivity::class.java).use {
+            ActivityScenario.launch(MainActivity::class.java).use {
                 try {
                     phase = "starting_gateway"
                     await(30_000) { device.hasObject(By.res("gateway-power-switch")) }
@@ -193,16 +188,6 @@ class BrowserBackupInstrumentedTest {
                         // Keep the operation failure; the outer fallback can still collect.
                     }
                     throw failure
-                }
-                }
-            } catch (failure: Throwable) {
-                browserFailure = failure
-                throw failure
-            } finally {
-                try {
-                    restoreDisplayDensity(originalDensity)
-                } catch (restoreFailure: Throwable) {
-                    browserFailure?.addSuppressed(restoreFailure) ?: throw restoreFailure
                 }
             }
         } catch (failure: Throwable) {
@@ -1152,35 +1137,6 @@ class BrowserBackupInstrumentedTest {
         instrumentation.uiAutomation.executeShellCommand(command),
     ).bufferedReader().use { it.readText() }
 
-    private data class DisplayDensity(val physical: Int, val override: Int?) {
-        val effective: Int get() = override ?: physical
-    }
-
-    private fun displayDensity(): DisplayDensity {
-        val output = shellRead("wm density")
-        val physical = Regex("""Physical density:\s*(\d+)""").find(output)?.groupValues?.get(1)?.toIntOrNull()
-        val override = Regex("""Override density:\s*(\d+)""").find(output)?.groupValues?.get(1)?.toIntOrNull()
-        accept(physical != null && physical in 120..640, FailureReason.DISPLAY_DENSITY_NOT_RECOGNIZED)
-        return DisplayDensity(requireNotNull(physical), override)
-    }
-
-    private fun applyReducedDisplayDensity(original: DisplayDensity) {
-        val reduced = original.effective * 3 / 4
-        accept(reduced >= 120 && reduced < original.effective,
-            FailureReason.DISPLAY_DENSITY_CHANGE_REJECTED)
-        shellRead("wm density $reduced")
-        await(15_000, FailureReason.DISPLAY_DENSITY_CHANGE_REJECTED) {
-            displayDensity().effective == reduced
-        }
-    }
-
-    private fun restoreDisplayDensity(original: DisplayDensity) {
-        shellRead(original.override?.let { "wm density $it" } ?: "wm density reset")
-        await(15_000, FailureReason.DISPLAY_DENSITY_RESTORE_REJECTED) {
-            displayDensity() == original
-        }
-    }
-
     private fun hierarchyBytes(): ByteArray = ByteArrayOutputStream().use { out ->
         device.dumpWindowHierarchy(out)
         out.toByteArray()
@@ -1248,7 +1204,6 @@ class BrowserBackupInstrumentedTest {
     private enum class FailureReason {
         UNEXPECTED_EXCEPTION, UI_WAIT_EXPIRED, CORE_SESSION_CHANGED, CORE_VERSION_MISMATCH,
         FIXTURE_NAME_MISMATCH, FIXTURE_URL_MISMATCH, FIXTURE_MODELS_MISMATCH, FIXTURE_METADATA_MISMATCH,
-        DISPLAY_DENSITY_NOT_RECOGNIZED, DISPLAY_DENSITY_CHANGE_REJECTED, DISPLAY_DENSITY_RESTORE_REJECTED,
         NATIVE_PROVIDER_PAGE_NOT_RECOGNIZED, NATIVE_BROWSER_BUTTON_NOT_REACHED,
         BROWSER_SETUP_REQUIRED, INDEPENDENT_BROWSER_NOT_FOREGROUND, CURRENT_URL_EDIT_ACTION_NOT_REACHED,
         CLEAN_OFFICIAL_URL_NOT_REACHED,
