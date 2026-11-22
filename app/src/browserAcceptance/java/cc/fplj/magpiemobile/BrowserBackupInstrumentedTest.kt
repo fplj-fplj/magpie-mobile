@@ -166,9 +166,10 @@ class BrowserBackupInstrumentedTest {
                     phase = "reopening_official_import_for_correct_phrase"
                     // Chrome can keep the form alive while hiding its complete
                     // accessibility subtree. Reopen the official clean page in
-                    // the real browser, then choose the same public download
-                    // again. No export, alternate URI, JS, or API import is used.
-                    navigateToCleanOfficialPage()
+                    // a fresh real-browser tab, then choose the same public
+                    // download again. No export, alternate URI, JS, or API
+                    // import is used.
+                    openFreshOfficialTab()
                     clickNamed(CHROME, SETTINGS)
                     revealSyncTab().click()
                     clickWebControl(IMPORT_OPEN)
@@ -189,8 +190,8 @@ class BrowserBackupInstrumentedTest {
                     assertDownloadUnchanged()
                     assertPrivateArchivesUnchanged(privateArchiveBaseline)
                     // The successful import may have removed the content tree.
-                    // Reopen the official page before taking the final evidence.
-                    navigateToCleanOfficialPage()
+                    // Open a fresh tab before taking the final evidence.
+                    openFreshOfficialTab()
                     clickNamed(CHROME, SETTINGS)
                     revealSyncTab().click()
                     confirmOfficialPage(SYNC_SETTINGS_URL)
@@ -326,9 +327,19 @@ class BrowserBackupInstrumentedTest {
             !device.hasObject(By.res(CHROME, "signin_fre_dismiss_button")), FailureReason.BROWSER_SETUP_REQUIRED)
     }
 
-    private fun navigateToCleanOfficialPage() {
+    private fun openFreshOfficialTab() {
         rejectBrowserFirstRun()
         accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
+        // A failed import can leave the current tab alive but permanently omit
+        // its WebView subtree from Chrome's accessibility hierarchy. Chrome's
+        // native new-tab shortcut gives the next official navigation a clean
+        // browser tab without JavaScript, RPC, or process-state manipulation.
+        accept(device.pressKeyCode(KeyEvent.KEYCODE_T, KeyEvent.META_CTRL_ON),
+            FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
+        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
+            device.currentPackageName == CHROME &&
+                device.hasObject(By.res(CHROME, "url_bar"))
+        }
         val bar = requireNotNull(device.findObject(By.res(CHROME, "url_bar")))
         bar.click()
         await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
