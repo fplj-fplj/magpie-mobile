@@ -79,6 +79,12 @@ Android 实际用例名称与源码的 23 项清单一致；`android-errors.txt`
 
 四项附件 ID：APK `772853838`、checksum `772854047`、build-info `772854083`、mobile-core-build-info `772854135`。名称、大小及实际下载内容的 SHA-256 均与 API digest 一致；核心构建信息与正式 artifact 内容相同，build-info 包含最终源码、正式 run、固定证书与实际 Validation attempt。下载后重新 GET Release 与 Latest，附件 ID／大小／digest 未变。Release 说明补录最终验收结果后独立 GET 读回完全一致，四项附件仍未改变；文档单独提交，不移动正式 tag。
 
+### Release 对象恢复（2026-11-23）
+
+清理历史 Release 时曾误删本版本的 Release 对象，Git tag `v0.1.62-chat-session-clipboard-fixes-90971632` 与源码提交 `90971632a4fe2d282449ae0b20c89a57fbba615f` 均保留。发现后从该原始提交重新运行正式构建 [45220410022](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45220410022)，build 和 publish 均成功；Release 对象已按相同 tag 恢复。恢复构建仍使用 versionCode 63、原包名和固定签名证书，并重新核对同提交通过的 Validation `44787218390/attempts/1`。
+
+恢复后的公开 APK 为 103,617,204 bytes，SHA-256 `af2e84bf4ad8dea641f35f3bac82491baa382108c26155f4403ad2ef42483d8a`。该值已由实际下载文件、`.sha256` 附件和 GitHub asset digest 三方核对一致；APK 实际 manifest 为 `cc.fplj.magpiemobile`、`0.1.62-chat-session-clipboard-fixes`、versionCode 63，证书 SHA-256 为 `dee1d3f485ee17a6184178eaab318d6333fb8b67e7276146a30a03e1f9ee09d6`。重新运行构建生成的 APK 与原 Release APK 字节不同，旧哈希 `714414357bd77e97c3035bbd1afcac0c4dd06f8ed0d169b5b0e0d4c08e8184f6` 仅对应首次发布附件，不代表当前已恢复 Release 的文件。当前四个恢复附件 ID 为 APK `783755060`、checksum `783755379`、build-info `783755426`、mobile-core-build-info `783755505`；Release 页面仍只保留 0.1.62 与 0.1.64，Latest 已重新设为 0.1.64。
+
 ## 后续独立开发
 
 官方网页备份导出只返回 Android 应用私有路径的缺口另行开发，本版没有包含该补丁。新的文件桥接须保留官方加密格式，并实际验证外部浏览器下载到可取出的文件、系统文件选择器选回该文件、错误口令不恢复及正确口令恢复；Go/Node 夹具或直接 HTTP 导入不能替代真实浏览器往返。原生 SAF 占位入口仍未接入，不宣称已完成。

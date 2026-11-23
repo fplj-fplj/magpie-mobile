@@ -39,4 +39,4 @@
 
 公开 APK 为 103,617,320 bytes、SHA-256 `c3b8c92bfb5172dc773447109d776ff9476ac49a32985138eddbfb4c6c89dc8a`，与 checksum、GitHub asset digest 及签名的 Actions artifact 逐字节一致。静态产物检查确认固定证书 `dee1d3f485ee17a6184178eaab318d6333fb8b67e7276146a30a03e1f9ee09d6`、ARM64-only Go／Bun ELF、内嵌核心 `70f21f9308fc8b8e1dce886c919f3fa0f2618d4af62810ad82361ec4b0d79835`、包名、versionName、versionCode 65 和源码标记均符合预期。
 
-Release 清理按 `docs/release-policy.md` 执行：Release 页面只保留 0.1.64 Latest；0.1.62 与 0.1.63 的 Release 对象已移除，Git tag 和 Actions 运行记录均保留。
+Release 清理按 `docs/release-policy.md` 执行：Release 页面保留 0.1.64 Latest 和长期保留的 0.1.62；0.1.63 的 Release 对象已移除，Git tag 和 Actions 运行记录均保留。0.1.62 曾在清理时被误删 Release 对象，之后从原始提交通过 [恢复构建 45220410022](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45220410022) 成功重建并恢复，当前附件哈希与旧记录不同，详情见 [0.1.62 恢复记录](bugfixes-0.1.62.md#release-对象恢复2026-11-23)。
