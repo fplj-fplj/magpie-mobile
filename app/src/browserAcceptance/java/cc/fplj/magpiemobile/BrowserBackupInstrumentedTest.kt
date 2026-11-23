@@ -1413,6 +1413,7 @@ class BrowserBackupInstrumentedTest {
         private const val B_NAME = "Browser backup modified"
         private const val B_URL = "https://changed.example.invalid/v1"
         private const val B_MODEL = "backup-after"
+        private const val CLEAN_ENTRY = "http://127.0.0.1:3430/"
         private const val WRONG_PHRASE_ERROR = "wrong passphrase, or the file was changed"
         private val SETTINGS = listOf("Settings", "设置")
         private val CLEAN_ENTRY_URL = Regex("(?:http://)?127\\.0\\.0\\.1:3430/?(?:\\?view=providers)?")
