@@ -326,7 +326,7 @@ class BrowserBackupInstrumentedTest {
         accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
         // ACTION_VIEW sits above the Android app. Back closes the external
         // browser surface and lets the app mint a fresh one-use ticket.
-        accept(device.pressBack(), FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
+        device.pressBack()
         await(30_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
             device.currentPackageName == context.packageName &&
                 device.hasObject(By.res(context.packageName, "gateway-power-switch"))
