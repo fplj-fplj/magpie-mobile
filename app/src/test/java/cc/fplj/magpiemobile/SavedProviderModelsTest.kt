@@ -176,7 +176,7 @@ class SavedProviderModelsTest {
                         headers.append(next.toChar())
                     }
                     check(headers.startsWith("GET /api/providers HTTP/1.1\r\n"))
-                    check(headers.lineSequence().any { it.startsWith("Cookie:", true) })
+                    check(headers.lineSequence().any { it.startsWith("X-Magpie-Android-Manager:", true) })
                     val bytes = body.toByteArray(Charsets.UTF_8)
                     socket.getOutputStream().apply {
                         write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +

@@ -39,8 +39,8 @@ internal val BrandFont = FontFamily(
 
 // —— 亮色令牌 ——
 private val LightColors = lightColorScheme(
-    primary = Color(0xFFD97757),              // 唯一强调色：陶土橙
-    onPrimary = Color(0xFF231810),             // 橙底深色字，满足正文对比度
+    primary = Color(0xFF9C432D),              // 深陶土色：在暖纸表面上保持至少 4.5:1
+    onPrimary = Color(0xFFFFF8F2),             // 深陶土底上的浅暖白字
     primaryContainer = Color(0xFFEBD3C5),
     onPrimaryContainer = Color(0xFF3E2418),
     secondary = Color(0xFF7A6F5D),            // 暖灰褐：次级动作
@@ -49,8 +49,8 @@ private val LightColors = lightColorScheme(
     onSecondaryContainer = Color(0xFF2A261E),
     tertiary = Color(0xFF5C7265),             // 鼠尾草绿：图表/次强调
     onTertiary = Color(0xFFF5F3EC),
-    error = Color(0xFFC0453A),                // 危险操作强调
-    onError = Color(0xFFF5F3EC),
+    error = Color(0xFFA83A30),                // 深砖红：正文与边框均满足对比度要求
+    onError = Color(0xFFFFF8F2),
     errorContainer = Color(0xFFF1D4CF),
     onErrorContainer = Color(0xFF3B1210),
     background = Color(0xFFECE9E0),           // 页面基底：暖米色，不用纯白

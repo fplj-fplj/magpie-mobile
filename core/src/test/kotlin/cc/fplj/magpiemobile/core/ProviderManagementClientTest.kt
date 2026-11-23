@@ -48,7 +48,7 @@ class ProviderManagementClientTest {
         assertTrue(provider.models.any { it.id == "catalog-only" && !it.on })
         assertFalse(list.toString().contains(ProviderApiFixture.API_KEY))
         assertEquals("GET", api.requests.single().method)
-        assertEquals(api.credential.cookieHeader(), api.requests.single().cookie)
+        assertEquals(api.credential.managerHeaderValue(), api.requests.single().managerHeader)
         assertNull(api.requests.single().authorization)
         assertNull(api.requests.single().origin)
         assertNull(api.requests.single().query)
@@ -235,7 +235,7 @@ class ProviderManagementClientTest {
         assertEquals(0, api.editRequests.get())
     }
 
-    @Test fun createUsesOnlyNewTrueSevenAllowedFieldsCookieNoBearerAndClearsKey() {
+    @Test fun createUsesOnlyNewTrueSevenAllowedFieldsManagerHeaderNoBearerAndClearsKey() {
         val draft = draft()
         val created = api.client().create(draft)
         assertEquals("new-provider", created.id)
@@ -249,7 +249,7 @@ class ProviderManagementClientTest {
         assertEquals(post.body.toByteArray(Charsets.UTF_8).size.toString(), post.contentLength)
         assertNull(post.transferEncoding)
         assertNull(post.authorization)
-        assertEquals(api.credential.cookieHeader(), post.cookie)
+        assertEquals(api.credential.managerHeaderValue(), post.managerHeader)
         assertFailsWith<IllegalArgumentException> { draft.requestBody() }
     }
 
@@ -328,7 +328,7 @@ class ProviderManagementClientTest {
         assertEquals(1, api.editRequests.get())
     }
 
-    @Test fun redirect302303307308DoesNotFollowReplayOrLeakCookieToAnotherPort() {
+    @Test fun redirect302303307308DoesNotFollowReplayOrLeakManagerHeaderToAnotherPort() {
         ProviderApiFixture().use { destination ->
             for (status in listOf(302, 303, 307, 308)) {
                 api.createHook = { exchange, _ ->
@@ -407,7 +407,7 @@ class ProviderManagementClientTest {
         assertEquals(1, api.createRequests.get())
     }
 
-    @Test fun wrongCookiePortGatewayAndForgedLoopbackBaseFailWithoutCredentialLeak() {
+    @Test fun wrongManagerPortGatewayAndForgedLoopbackBaseFailWithoutCredentialLeak() {
         assertFailsWith<IllegalArgumentException> { ProviderManagementClient(ManagerCredential.fromKey(ProviderApiFixture.MANAGER_KEY, 3430), api.baseUrl) }
         for (url in listOf("http://evil@127.0.0.1:3430", "http://127.0.0.1.evil:3430", "http://localhost:3430", "http://127.0.0.1:3430/?key=x")) {
             assertFailsWith<IllegalArgumentException> { ProviderManagementClient(api.credential, url) }
@@ -466,10 +466,10 @@ internal class ProviderApiFixture : AutoCloseable {
             try {
                 val body = exchange.requestBody.use { it.readBytes().toString(Charsets.UTF_8) }
                 requests.add(ProviderRecordedRequest(exchange.requestMethod, exchange.requestURI.path, body,
-                    exchange.requestHeaders.getFirst("Cookie"), exchange.requestHeaders.getFirst("Authorization"),
+                    exchange.requestHeaders.getFirst(BoundedCoreHttp.ANDROID_MANAGER_HEADER), exchange.requestHeaders.getFirst("Authorization"),
                     exchange.requestHeaders.getFirst("Origin"), exchange.requestURI.rawQuery,
                     exchange.requestHeaders.getFirst("Content-Length"), exchange.requestHeaders.getFirst("Transfer-Encoding")))
-                if (exchange.requestHeaders.getFirst("Cookie") != credential.cookieHeader()) respond(exchange, 401, "error " + API_KEY)
+                if (exchange.requestHeaders.getFirst(BoundedCoreHttp.ANDROID_MANAGER_HEADER) != credential.managerHeaderValue()) respond(exchange, 401, "error " + API_KEY)
                 else if (exchange.requestHeaders.getFirst("Authorization") != null || exchange.requestHeaders.getFirst("Origin") != null) respond(exchange, 403, "native management only")
                 else when {
                     exchange.requestMethod == "GET" && exchange.requestURI.path == "/api/mobile/capabilities" -> respond(exchange, 200, capabilitiesBody)
@@ -550,6 +550,6 @@ internal class ProviderApiFixture : AutoCloseable {
     }
 }
 internal data class ProviderRecordedRequest(
-    val method: String, val path: String, val body: String, val cookie: String?, val authorization: String?,
+    val method: String, val path: String, val body: String, val managerHeader: String?, val authorization: String?,
     val origin: String?, val query: String?, val contentLength: String?, val transferEncoding: String?,
 ) { override fun toString(): String = "ProviderRecordedRequest(credentials=<redacted>)" }

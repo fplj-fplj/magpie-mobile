@@ -20,6 +20,14 @@ Release 页面只保留当前可用 Latest，以及明确需要长期保留的�
 
 当前应保留：
 
+- 0.1.65 发布前：`v0.1.64-reasoning-aliases-a589171b`
+- 0.1.65 发布后：新 Latest tag `v0.1.65-editor-session-<最终 SHA 前 8 位>`
+- 长期版本：`v0.1.62-chat-session-clipboard-fixes-90971632`
+
+发布后必须把上面的候选清单替换为实际 Latest tag，再执行清理 dry-run。
+
+旧清单曾使用以下两项：
+
 - `v0.1.64-reasoning-aliases-a589171b`
 - `v0.1.62-chat-session-clipboard-fixes-90971632`
 

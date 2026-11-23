@@ -30,14 +30,14 @@ class CoreManagementClientTest {
     @BeforeEach fun start() { api = ManagementApiFixture() }
     @AfterEach fun stop() { api.close() }
 
-    @Test fun capabilitiesUsesDirectPortCookieWithoutOriginOrBootstrap() {
+    @Test fun capabilitiesUsesDirectPortManagerHeaderWithoutOriginOrBootstrap() {
         val capabilities = api.client().capabilities()
         assertEquals(1, capabilities.schemaVersion)
         assertTrue(capabilities.mobile && capabilities.loopbackKeys && capabilities.adminLoopbackOnly)
         assertFalse(capabilities.debugEndpoints || capabilities.nativeAutoUpdate)
         val request = api.requests.single()
         assertEquals("/api/mobile/capabilities", request.path)
-        assertEquals(api.credential.cookieHeader(), request.cookie)
+        assertEquals(api.credential.managerHeaderValue(), request.managerHeader)
         assertNull(request.origin)
         assertNull(request.fetchSite)
     }
@@ -55,7 +55,7 @@ class CoreManagementClientTest {
         assertEquals(expected, api.client().browserEditorLink())
         assertEquals("POST", api.requests.single().method)
         assertEquals("/api/androidhost/browser-session", api.requests.single().path)
-        assertEquals(api.credential.cookieHeader(), api.requests.single().cookie)
+        assertEquals(api.credential.managerHeaderValue(), api.requests.single().managerHeader)
         for (bad in listOf(
             "https://evil.invalid/", "http://127.0.0.1:3425/androidhost/browser-entry?ticket=" + "a".repeat(64),
             expected + "&extra=1", expected + "#fragment", "http://127.0.0.1:${api.port}/?k=management-key",
@@ -74,7 +74,7 @@ class CoreManagementClientTest {
         assertFalse(error.toString().contains(ManagementApiFixture.SECRET))
     }
 
-    @Test fun cookiePortMismatchAndGatewayPortAreRejectedBeforeRequest() {
+    @Test fun managerPortMismatchAndGatewayPortAreRejectedBeforeRequest() {
         assertFailsWith<IllegalArgumentException> { CoreManagementClient(ManagerCredential.fromKey(ManagementApiFixture.MANAGER_KEY, 3430), api.baseUrl) }
         assertFailsWith<IllegalArgumentException> { CoreManagementClient(ManagerCredential.fromKey(ManagementApiFixture.MANAGER_KEY, 3425), "http://127.0.0.1:3425") }
         assertTrue(api.requests.isEmpty())
@@ -146,7 +146,7 @@ class CoreManagementClientTest {
         assertTrue(text.contains("MIT License"))
         val request = api.requests.single { it.path == "/api/notices" }
         assertEquals("GET", request.method)
-        assertEquals(api.credential.cookieHeader(), request.cookie)
+        assertEquals(api.credential.managerHeaderValue(), request.managerHeader)
     }
 
     @Test fun callerKeyModelsParsesCatalogMetadata() {
@@ -161,7 +161,7 @@ class CoreManagementClientTest {
         assertTrue(models[2].account)
         val request = api.requests.single { it.path == "/api/caller-keys/models" }
         assertEquals("GET", request.method)
-        assertEquals(api.credential.cookieHeader(), request.cookie)
+        assertEquals(api.credential.managerHeaderValue(), request.managerHeader)
     }
 
     @Test fun recentRequestsReturnsParsedList() {
@@ -207,7 +207,7 @@ class CoreManagementClientTest {
         assertEquals(1, api.addRequests.get())
     }
 
-    @Test fun postRedirects302303307308NeverFollowOrResendOrSendCookieToTarget() {
+    @Test fun postRedirects302303307308NeverFollowOrResendOrSendManagerHeaderToTarget() {
         ManagementApiFixture().use { destination ->
             for (code in listOf(302, 303, 307, 308)) {
                 api.addHandler = { exchange ->
@@ -301,7 +301,7 @@ class CoreManagementClientTest {
 }
 
 /** Truthful GUI fixture: access.List() removes secret from every row, including POST rows.
- * Only copy-key/add-key top-level secret is full. Every API is behind direct webGuard cookie.
+ * Only copy-key/add-key top-level secret is full. Every API is behind the explicit Android manager header.
  */
 internal class ManagementApiFixture : AutoCloseable {
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -326,10 +326,10 @@ internal class ManagementApiFixture : AutoCloseable {
             try {
                 val body = exchange.requestBody.use { it.readBytes().toString(Charsets.UTF_8) }
                 requests.add(ManagementRecordedRequest(exchange.requestMethod, exchange.requestURI.path,
-                    exchange.requestHeaders.getFirst("Cookie"), exchange.requestHeaders.getFirst("Origin"),
+                    exchange.requestHeaders.getFirst(BoundedCoreHttp.ANDROID_MANAGER_HEADER), exchange.requestHeaders.getFirst("Origin"),
                     exchange.requestHeaders.getFirst("Sec-Fetch-Site"), body,
                     exchange.requestHeaders.getFirst("Content-Length"), exchange.requestHeaders.getFirst("Transfer-Encoding")))
-                if (exchange.requestHeaders.getFirst("Cookie") != credential.cookieHeader()) {
+                if (exchange.requestHeaders.getFirst(BoundedCoreHttp.ANDROID_MANAGER_HEADER) != credential.managerHeaderValue()) {
                     respond(exchange, 401, "untrusted auth error " + SECRET)
                 } else if (exchange.requestHeaders.getFirst("Origin") != null ||
                     exchange.requestHeaders.getFirst("Sec-Fetch-Site") != null) {
@@ -408,6 +408,6 @@ internal class ManagementApiFixture : AutoCloseable {
 }
 
 internal data class ManagementRecordedRequest(
-    val method: String, val path: String, val cookie: String?, val origin: String?, val fetchSite: String?,
+    val method: String, val path: String, val managerHeader: String?, val origin: String?, val fetchSite: String?,
     val body: String, val contentLength: String?, val transferEncoding: String?,
 )

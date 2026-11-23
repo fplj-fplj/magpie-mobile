@@ -458,7 +458,7 @@ class ProviderExternalRefreshStateTest {
                     val length = headers.lineSequence().firstOrNull { it.startsWith("Content-Length:", true) }
                         ?.substringAfter(':')?.trim()?.toInt() ?: 0
                     repeat(length) { check(input.read() >= 0) }
-                    check(headers.lineSequence().any { it.startsWith("Cookie:", true) })
+                    check(headers.lineSequence().any { it.startsWith("X-Magpie-Android-Manager:", true) })
                     requests.add(route)
                     val status: String
                     val body: String

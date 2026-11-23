@@ -13,9 +13,9 @@ import okhttp3.Request
 internal class BoundedCoreHttp(
     private val endpoint: LoopbackEndpoint,
     timeout: Duration,
-    private val cookie: String? = null,
     private val requestControl: ChatRequestControl? = null,
     private val ensureActive: () -> Unit = {},
+    private val managerKey: String? = null,
 ) {
     private val client = run {
         val millis = try { timeout.toMillis() } catch (_: ArithmeticException) { -1L }
@@ -53,7 +53,7 @@ internal class BoundedCoreHttp(
         val request = Request.Builder().url(endpoint.base + path)
             .header("Accept", "application/json")
             .header("Accept-Encoding", "identity")
-            .apply { if (cookie != null) header("Cookie", cookie) }
+            .apply { if (managerKey != null) header(ANDROID_MANAGER_HEADER, managerKey) }
             .method(method, payload?.let { ChatHttpTransport.jsonBody(it.toString(Charsets.UTF_8)) })
             .build()
         val call = client.newCall(request)
@@ -101,5 +101,8 @@ internal class BoundedCoreHttp(
         }
     }
 
-    companion object { const val MAX_RESPONSE_BYTES = 1024 * 1024 }
+    companion object {
+        const val MAX_RESPONSE_BYTES = 1024 * 1024
+        const val ANDROID_MANAGER_HEADER = "X-Magpie-Android-Manager"
+    }
 }

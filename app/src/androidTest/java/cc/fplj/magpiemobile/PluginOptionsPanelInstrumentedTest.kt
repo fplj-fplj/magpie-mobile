@@ -322,7 +322,7 @@ private class PluginOptionsHttpPeer : Closeable {
             check(headers.size < 40)
             headers[header.substringBefore(':').lowercase()] = header.substringAfter(':').trim()
         }
-        check(headers["cookie"] == credential.cookieHeader())
+        check(headers["x-magpie-android-manager"] == credential.managerHeaderValue() && headers["cookie"] == null)
         check(headers["authorization"] == null && headers["origin"] == null && headers["transfer-encoding"] == null)
         val length = headers["content-length"]?.toInt() ?: 0
         check(length in 0..524_288)

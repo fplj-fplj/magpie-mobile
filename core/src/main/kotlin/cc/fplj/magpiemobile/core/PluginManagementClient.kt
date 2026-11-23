@@ -27,7 +27,7 @@ class PluginReadException : ManagementException("插件状态或市场读取失�
 class PluginWriteUnknownException : ManagementException("插件写入结果未知；不得重放，请重新只读核对")
 
 /**
- * Official plugin management client. All calls use the management cookie on the GUI port and the
+ * Official plugin management client. All calls use the explicit manager header on the GUI port and the
  * shared loopback-bound transport. Writes are serialized for this client and are never retried.
  */
 class PluginManagementClient(
@@ -37,13 +37,15 @@ class PluginManagementClient(
     private val ensureActive: () -> Unit = {},
 ) {
     private val endpoint = LoopbackEndpoint(baseUrl)
-    private val readTransport = BoundedCoreHttp(endpoint, READ_TIMEOUT, credential.cookieHeader(), requestControl, ensureActive)
-    private val writeTransport = BoundedCoreHttp(endpoint, WRITE_TIMEOUT, credential.cookieHeader(), requestControl, ensureActive)
+    private val readTransport = BoundedCoreHttp(endpoint, READ_TIMEOUT, requestControl = requestControl,
+        ensureActive = ensureActive, managerKey = credential.managerHeaderValue())
+    private val writeTransport = BoundedCoreHttp(endpoint, WRITE_TIMEOUT, requestControl = requestControl,
+        ensureActive = ensureActive, managerKey = credential.managerHeaderValue())
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     init {
-        require(endpoint.port != 3425) { "插件管理 cookie 不得发送到网关" }
-        require(endpoint.port == credential.port) { "插件管理 cookie 端口不匹配" }
+        require(endpoint.port != 3425) { "插件管理凭据不得发送到网关" }
+        require(endpoint.port == credential.port) { "插件管理凭据端口不匹配" }
     }
 
     fun plugins(): PluginSnapshot = readRequest("/api/plugins") { parseSnapshot(it) }

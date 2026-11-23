@@ -16,9 +16,9 @@ android {
         applicationId = "cc.fplj.magpiemobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 65
-        versionName = "0.1.64-reasoning-aliases"
-        buildConfigField("String", "CORE_VERSION", "\"0.1.3781-androidhost.3\"")
+        versionCode = 66
+        versionName = "0.1.65-editor-session"
+        buildConfigField("String", "CORE_VERSION", "\"0.1.3781-androidhost.4\"")
         buildConfigField("String", "GIT_SHA", "\"" + (System.getenv("GITHUB_SHA")?.take(8) ?: "local") + "\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters.add(magpieTestAbi ?: "arm64-v8a") }

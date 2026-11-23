@@ -215,7 +215,7 @@ jobs:
           apk_name="magpie-mobile-${version_name}.apk"
           cp release-artifacts/app/build/outputs/apk/release/app-release.apk "$apk_name"
           sha256sum "$apk_name" | tee "${apk_name}.sha256"
-          printf 'Commit: %s\nSource: b52c711142a662fe18fedf5a80cb1e4aa94bce62\nCore: 0.1.3781-androidhost.3 (nogui,androidhost; official plugins)\nActions run: %s/%s/actions/runs/%s\nPublication: manually approved via workflow_dispatch publish_release=true\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
+          printf 'Commit: %s\nSource: b52c711142a662fe18fedf5a80cb1e4aa94bce62\nCore: 0.1.3781-androidhost.4 (nogui,androidhost; official plugins)\nActions run: %s/%s/actions/runs/%s\nPublication: manually approved via workflow_dispatch publish_release=true\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
           printf 'Latest mode: %s\n' "$LATEST_MODE" >> build-info.txt
           cat release-artifacts/build-tmp/mobile-core.sha256 release-artifacts/build-tmp/apk-signature.txt >> build-info.txt
           printf 'Validation: %s\nValidation attempt: %s (regression and runtime-emulator completed successfully)\n' "$VALIDATION_URL" "$VALIDATION_ATTEMPT" >> build-info.txt

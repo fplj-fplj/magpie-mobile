@@ -211,7 +211,7 @@ class PluginOperationControllerTest {
                     assertEquals(0, completed.get())
                     assertTrue(failures.isEmpty())
                     assertEquals(listOf("${if (write) "POST" else "GET"} $path"), first.requestLines())
-                    assertTrue(first.requests.all { it.cookie == first.credential.cookieHeader() })
+                    assertTrue(first.requests.all { it.managerHeader == first.credential.managerHeaderValue() })
                     assertTrue(second.requests.isEmpty())
                     assertTrue(first.workerFailure.get()?.toString(), first.workerFailure.get() == null)
                     operation.close()
@@ -321,7 +321,7 @@ class PluginOperationControllerTest {
                     "POST /api/plugin-signin/prompt", "POST /api/plugin-signin", "GET /api/signin/$SIGNIN_ID",
                     "POST /api/signin/$SIGNIN_ID/callback", "POST /api/signin/$SIGNIN_ID/cancel",
                 ), peer.requestLines())
-                assertTrue(peer.requests.all { it.cookie == peer.credential.cookieHeader() })
+                assertTrue(peer.requests.all { it.managerHeader == peer.credential.managerHeaderValue() })
                 assertEquals(1, source.leases.size)
                 assertReleasedOnce(source)
             } finally { operation.close() }
@@ -416,7 +416,7 @@ class PluginOperationControllerTest {
             val input = socket.getInputStream()
             val request = readLine(input) ?: return
             var length = 0
-            var cookie = ""
+            var managerHeader = ""
             while (true) {
                 val header = readLine(input) ?: return
                 if (header.isEmpty()) break
@@ -424,7 +424,7 @@ class PluginOperationControllerTest {
                 val value = header.substringAfter(':').trim()
                 when {
                     name.equals("Content-Length", true) -> length = value.toInt()
-                    name.equals("Cookie", true) -> cookie = value
+                    name.equals("X-Magpie-Android-Manager", true) -> managerHeader = value
                 }
             }
             val body = ByteArray(length)
@@ -435,7 +435,7 @@ class PluginOperationControllerTest {
                 offset += count
             }
             val path = request.split(' ')[1]
-            requests += RecordedRequest(request.substringBeforeLast(' '), cookie)
+            requests += RecordedRequest(request.substringBeforeLast(' '), managerHeader)
             val output = socket.getOutputStream()
             if (path == silentPath) {
                 if (sendHeaders) {
@@ -481,7 +481,7 @@ class PluginOperationControllerTest {
         }
     }
 
-    private data class RecordedRequest(val line: String, val cookie: String) {
+    private data class RecordedRequest(val line: String, val managerHeader: String) {
         override fun toString() = "RecordedRequest(line=$line,credentials=<redacted>)"
     }
 

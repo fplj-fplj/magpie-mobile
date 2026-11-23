@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from powercontext_fixture import PowerContextFixture
 
-CORE_VERSION = "0.1.3781-androidhost.3"
+CORE_VERSION = "0.1.3781-androidhost.4"
 VENDOR_KEY = "synthetic-provider-key-never-real"
 COMMUNITY_NPM = [
     "@magpie-community/tools-calc@0.1.0",
@@ -68,13 +68,14 @@ def must(base, path, method="GET", body=None, headers=None, expect=200, timeout=
 vendor_base = ""
 
 class Vendor(BaseHTTPRequestHandler):
-    auths, paths, bodies = [], [], []
+    auths, paths, bodies, manager_headers = [], [], [], []
     lock = threading.Lock()
     def log_message(self, *args): pass
     def _record(self):
         with Vendor.lock:
             Vendor.paths.append(self.path)
             Vendor.auths.append(self.headers.get("Authorization") or "")
+            Vendor.manager_headers.append(self.headers.get("X-Magpie-Android-Manager") or "")
     def do_GET(self):
         self._record()
         if self.path in ("/models", "/v1/models"):
@@ -108,13 +109,14 @@ class Vendor(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
 
 class HookServer(BaseHTTPRequestHandler):
-    auths, paths = [], []
+    auths, paths, manager_headers = [], [], []
     lock = threading.Lock()
     def log_message(self, *args): pass
     def do_GET(self):
         with HookServer.lock:
             HookServer.paths.append(self.path)
             HookServer.auths.append(self.headers.get("Authorization") or "")
+            HookServer.manager_headers.append(self.headers.get("X-Magpie-Android-Manager") or "")
         if self.path.startswith("/hook-hit"):
             raw = b"hooked"
             self.send_response(200); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
@@ -229,13 +231,13 @@ class Core:
         core_instances.append(self)
         self.tail = []
         threading.Thread(target=self._drain, daemon=True).start()
-        self.cookie = {"Cookie": "magpie_web_" + str(admin_port) + "=" + admin_key}
+        self.management = {"X-Magpie-Android-Manager": admin_key}
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:
                 raise AssertionError("core exited during startup:\n" + "\n".join(self.tail))
             try:
-                code, _ = request(self.admin, "/api/mobile/capabilities", headers=self.cookie, timeout=5)
+                code, _ = request(self.admin, "/api/mobile/capabilities", headers=self.management, timeout=5)
                 if code == 200: break
             except (OSError, urllib.error.URLError): pass
             time.sleep(0.1)
@@ -246,7 +248,7 @@ class Core:
         for line in iter(self.proc.stdout.readline, b""):
             self.tail.append(line.decode(errors="replace")); self.tail[:] = self.tail[-40:]
     def api(self, path, method="GET", body=None, expect=200, timeout=120):
-        return must(self.admin, path, method, body, self.cookie, expect, timeout)
+        return must(self.admin, path, method, body, self.management, expect, timeout)
     def stop(self):
         record_core_children(self.proc.pid)
         if self.proc.poll() is None: self.proc.send_signal(signal.SIGTERM)
@@ -300,11 +302,15 @@ def main(exe, bun):
         with Vendor.lock:
             leaked = [a for a in Vendor.auths if "sk-magpie-" in a and a != "Bearer " + VENDOR_KEY]
             vendor_set = set(Vendor.auths)
+            manager_leaked = any(Vendor.manager_headers)
         check(not leaked, "a magpie key reached the vendor: " + repr(leaked))
         check(vendor_set == {"Bearer " + VENDOR_KEY}, "the vendor saw unexpected authorizations: " + repr(vendor_set))
+        check(not manager_leaked, "the Android manager header reached the vendor")
         with HookServer.lock:
             hook_leaks = [a for a in HookServer.auths if "sk-magpie-" in a]
+            hook_manager_leaked = any(HookServer.manager_headers)
         check(not hook_leaks, "a magpie key reached the hook server: " + repr(hook_leaks))
+        check(not hook_manager_leaked, "the Android manager header reached the hook server")
     finally:
         for instance in reversed(core_instances): instance.stop()
         for server in (vendor_srv, hooks_srv):
@@ -395,7 +401,7 @@ def run_suite(core, root, hooks_base):
     check(started.get("id") and started.get("state") in ("installing", "waiting"), "oauth sign-in: " + json.dumps(started))
     core.api("/api/signin/" + started["id"] + "/cancel", "POST", {}, expect=204)
     for _ in range(50):
-        code, raw = request(core.admin, "/api/signin/" + started["id"], headers=core.cookie)
+        code, raw = request(core.admin, "/api/signin/" + started["id"], headers=core.management)
         if code == 404 or (code == 200 and json.loads(raw).get("state") in ("canceled", "failed")): break
         time.sleep(0.1)
     else:

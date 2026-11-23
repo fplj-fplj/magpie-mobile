@@ -118,8 +118,8 @@ class PluginRequestCancellationTest {
             assertTrue(client.restoreGatewayAccess().bun)
             control.ensureActive()
             assertEquals(listOf("GET /api/plugins", "POST /api/plugins/add", "POST $RESTORE_PATH", "GET /api/plugins"), peer.requests.toList())
-            assertFalse(peer.cookies.isEmpty())
-            assertTrue(peer.cookies.all { it == peer.credential.cookieHeader() })
+            assertFalse(peer.managerHeaders.isEmpty())
+            assertTrue(peer.managerHeaders.all { it == peer.credential.managerHeaderValue() })
             assertTrue(peer.authorizations.all { it == null })
         }
     }
@@ -216,7 +216,7 @@ class PluginRequestCancellationTest {
         private val worker = Executors.newSingleThreadExecutor()
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val requests = CopyOnWriteArrayList<String>()
-        val cookies = CopyOnWriteArrayList<String?>()
+        val managerHeaders = CopyOnWriteArrayList<String?>()
         val authorizations = CopyOnWriteArrayList<String?>()
         val arrived = CountDownLatch(1)
         val closed = CountDownLatch(1)
@@ -245,7 +245,7 @@ class PluginRequestCancellationTest {
             val input = socket.getInputStream()
             val line = readLine(input) ?: return
             var length = 0
-            var cookie: String? = null
+            var managerHeader: String? = null
             var authorization: String? = null
             while (true) {
                 val header = readLine(input) ?: return
@@ -254,13 +254,13 @@ class PluginRequestCancellationTest {
                 val value = header.substringAfter(':').trim()
                 when {
                     name.equals("Content-Length", true) -> length = value.toInt()
-                    name.equals("Cookie", true) -> cookie = value
+                    name.equals("X-Magpie-Android-Manager", true) -> managerHeader = value
                     name.equals("Authorization", true) -> authorization = value
                 }
             }
             input.readNBytes(length)
             val path = line.split(' ')[1]
-            cookies += cookie
+            managerHeaders += managerHeader
             authorizations += authorization
             requests += line.substringBeforeLast(' ')
             val output = socket.getOutputStream()

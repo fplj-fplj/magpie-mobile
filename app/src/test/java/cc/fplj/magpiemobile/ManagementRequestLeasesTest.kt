@@ -97,7 +97,7 @@ class ManagementRequestLeasesTest {
                     assertNull(failure?.cause)
                     assertTrue("The actual socket must close", peer.peerClosed.await(2, TimeUnit.SECONDS))
                     assertEquals(listOf("${if (write) "POST" else "GET"} $path"), peer.requestLines())
-                    assertTrue(peer.requests.all { it.cookie == peer.credential.cookieHeader() })
+                    assertTrue(peer.requests.all { it.managerHeader == peer.credential.managerHeaderValue() })
                     assertThrows(CancellationException::class.java) { lease.client.listCallerKeys() }
                     assertEquals(1, peer.requests.size)
                     peer.assertHealthy()
@@ -119,7 +119,7 @@ internal class CallerKeyHttpPeer(
     private val sendHeaders: Boolean = false,
     private val holdList: Boolean = false,
 ) : Closeable {
-    data class Request(val line: String, val cookie: String, val body: String, val chunked: Boolean)
+    data class Request(val line: String, val managerHeader: String, val body: String, val chunked: Boolean)
 
     private val listener = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
     private val sockets = ConcurrentHashMap.newKeySet<Socket>()
@@ -161,7 +161,7 @@ internal class CallerKeyHttpPeer(
         val input = socket.getInputStream()
         val line = readLine(input) ?: return
         var length = 0
-        var cookie = ""
+        var managerHeader = ""
         var chunked = false
         while (true) {
             val header = readLine(input) ?: return
@@ -170,14 +170,14 @@ internal class CallerKeyHttpPeer(
             val value = header.substringAfter(':').trim()
             when {
                 name.equals("Content-Length", true) -> length = value.toInt().also { require(it in 0..65536) }
-                name.equals("Cookie", true) -> cookie = value
+                name.equals("X-Magpie-Android-Manager", true) -> managerHeader = value
                 name.equals("Transfer-Encoding", true) -> chunked = value.equals("chunked", true)
             }
         }
         val body = input.readNBytes(length)
         check(body.size == length) { "Incomplete caller-key request body" }
         val path = line.split(' ')[1]
-        val request = Request(line.substringBeforeLast(' '), cookie, body.toString(Charsets.UTF_8), chunked)
+        val request = Request(line.substringBeforeLast(' '), managerHeader, body.toString(Charsets.UTF_8), chunked)
         requests += request
         val output = socket.getOutputStream()
         if (path == silentPath) {

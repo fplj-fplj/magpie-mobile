@@ -13,7 +13,7 @@ import java.time.Instant
 
 /** Authenticated GUI management API, pinned to upstream 54dc257f plus the mobile overlay.
  * The gateway (3425) alone has /api/hello; GUI (3430) has state/caller-keys/capabilities.
- * Native GET/POST intentionally have no Origin and use the direct, port-bound webGuard cookie.
+ * Native GET/POST intentionally have no Origin and use a private explicit manager header.
  * No redirects or application retries. POST uses a fixed-length, one-shot body to prevent replay.
  */
 class CoreManagementClient(
@@ -28,9 +28,10 @@ class CoreManagementClient(
     private val json = Json { ignoreUnknownKeys = true }
 
     init {
-        require(endpoint.port != 3425) { "管理 cookie 不得发送到网关" }
-        require(endpoint.port == credential.port) { "管理 cookie 端口不匹配" }
-        transport = BoundedCoreHttp(endpoint, timeout, credential.cookieHeader(), requestControl, ensureActive)
+        require(endpoint.port != 3425) { "管理凭据不得发送到网关" }
+        require(endpoint.port == credential.port) { "管理凭据端口不匹配" }
+        transport = BoundedCoreHttp(endpoint, timeout, requestControl = requestControl,
+            ensureActive = ensureActive, managerKey = credential.managerHeaderValue())
     }
 
     /** Fail closed before provisioning if any required mobile safety property differs. */

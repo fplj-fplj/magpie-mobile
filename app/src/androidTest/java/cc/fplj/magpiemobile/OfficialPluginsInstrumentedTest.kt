@@ -2,6 +2,7 @@ package cc.fplj.magpiemobile
 
 import android.content.Intent
 import android.graphics.Rect
+import android.content.ClipDescription
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.view.accessibility.AccessibilityNodeInfo
@@ -93,7 +94,7 @@ class OfficialPluginsInstrumentedTest {
                     device.waitForIdle()
                     assertTrue(device.takeScreenshot(File(artifacts, "gateway-on-portrait.png")))
                     val client = NativeCoreSession.pluginClient()
-                    assertEquals("0.1.3781-androidhost.3", NativeCoreSession.managementClient().capabilities().coreVersion)
+                    assertEquals("0.1.3781-androidhost.4", NativeCoreSession.managementClient().capabilities().coreVersion)
                     val provider = fixture(fixtures, "provider", PROVIDER, "\"main\":\"index.mjs\"")
                     val middleware = fixture(fixtures, "middleware", MIDDLEWARE, "\"magpie\":{\"middleware\":\"runtime.middleware.mjs\"}", "runtime.middleware.mjs")
                     val hooks = fixture(fixtures, "hooks", HOOKS, "\"magpie\":{\"hooks\":\"runtime.hooks.mjs\"}", "runtime.hooks.mjs")
@@ -109,21 +110,23 @@ class OfficialPluginsInstrumentedTest {
                             snapshot.entries.any { it.spec == hooks.absolutePath && it.isGateway } &&
                             client.providers().any { it.pid == "androidfixture" }
                     }
-                    val browserEntry = URL(NativeCoreSession.browserEditorLink()).openConnection(Proxy.NO_PROXY) as HttpURLConnection
-                    val browserCookie = try {
-                        browserEntry.instanceFollowRedirects = false
-                        browserEntry.setRequestProperty("Accept", "text/html")
-                        assertEquals(303, browserEntry.responseCode)
-                        requireNotNull(browserEntry.getHeaderField("Set-Cookie")).substringBefore(';')
-                    } finally { browserEntry.disconnect() }
+                    val browserLink = NativeCoreSession.browserEditorLink()
+                    val entry = URL(browserLink).openConnection(Proxy.NO_PROXY) as HttpURLConnection
+                    val proof = try {
+                        entry.instanceFollowRedirects = false
+                        assertEquals(200, entry.responseCode)
+                        val html = entry.inputStream.bufferedReader().use { it.readText() }
+                        val match = Regex("sessionStorage.setItem\\(\\\"magpie\\.androidEditorProof\\\",\\\"([0-9a-f]{64})\\\"").find(html)
+                        requireNotNull(match).groupValues[1]
+                    } finally { entry.disconnect() }
                     val browserOptions = JSONObject().put("spec", provider.absolutePath)
                         .put("options", JSONObject().put("base", upstream.base).put("fromBrowser", true))
-                    assertEquals(200, http("http://127.0.0.1:3430/api/plugins/options", "", browserOptions.toString(), browserCookie).first)
+                    assertEquals(200, http("http://127.0.0.1:3430/api/plugins/options", "", browserOptions.toString(), browserProof = proof).first)
                     val nativeRead = client.plugins().entries.single { it.spec == provider.absolutePath }
                     assertEquals("true", nativeRead.options["fromBrowser"].toString())
                     client.saveOptions(provider.absolutePath, kotlinx.serialization.json.JsonObject(nativeRead.options +
                         ("fromNative" to kotlinx.serialization.json.JsonPrimitive(true))))
-                    val browserRead = JSONObject(http("http://127.0.0.1:3430/api/plugins", "", cookie = browserCookie).second).getJSONArray("plugins")
+                    val browserRead = JSONObject(http("http://127.0.0.1:3430/api/plugins", "", browserProof = proof).second).getJSONArray("plugins")
                     val shared = (0 until browserRead.length()).map { browserRead.getJSONObject(it) }
                         .single { it.getString("spec") == provider.absolutePath }.getJSONObject("options")
                     assertTrue(shared.getBoolean("fromBrowser") && shared.getBoolean("fromNative"))
@@ -141,7 +144,7 @@ class OfficialPluginsInstrumentedTest {
                     verifyPendingPluginLoginCancellation(upstream, artifacts, pid)
                     NativeCoreSession.providerClient().create(ProviderCreateDraft("android-runtime", "Android runtime",
                         upstream.base + "/v1", "synthetic-upstream-key", listOf("fake-echo"), allowLoopbackHttp = true))
-                    verifyModelDiscoveryPinContract(upstream, artifacts, browserCookie)
+                    verifyModelDiscoveryPinContract(upstream, artifacts, proof)
                     val capabilityReport = ProviderModelCapabilityClient(NativeCoreSession.gatewayConfig())
                         .run("android-runtime", "fake-echo")
                     assertNotNull("saved provider route missing", capabilityReport.route)
@@ -271,7 +274,7 @@ class OfficialPluginsInstrumentedTest {
                     assertFalse((0 until offTools.length()).any { offTools.getJSONObject(it).getString("name") == safName })
                     client.setOff(safTree, false)
                     assertEquals(200, http("http://127.0.0.1:3430/api/plugins/remove", "",
-                        JSONObject().put("spec", safTree).toString(), browserCookie).first)
+                        JSONObject().put("spec", safTree).toString(), browserProof = proof).first)
                     assertTrue(client.plugins().entries.none { it.spec == safTree })
                     importer.reconcile(client.plugins())
                     assertFalse(File(safTree).exists())
@@ -304,7 +307,7 @@ class OfficialPluginsInstrumentedTest {
                     await("native options editor save") { client.plugins().entries.single { it.spec == provider.absolutePath }.options["fromNativeUI"].toString() == "true" }
                     assertTrue(device.wait(Until.hasObject(By.text("保存参数").enabled(true)), 15_000))
                     assertTrue(device.takeScreenshot(File(artifacts, "native-plugin-options.png")))
-                    val browserUiRead = JSONObject(http("http://127.0.0.1:3430/api/plugins", "", cookie = browserCookie).second).getJSONArray("plugins")
+                    val browserUiRead = JSONObject(http("http://127.0.0.1:3430/api/plugins", "", browserProof = proof).second).getJSONArray("plugins")
                     assertTrue((0 until browserUiRead.length()).map { browserUiRead.getJSONObject(it) }
                         .single { it.getString("spec") == provider.absolutePath }.getJSONObject("options").getBoolean("fromNativeUI"))
                     device.findObject(By.text("连接与工具")).click()
@@ -316,6 +319,7 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue(device.wait(Until.hasObject(loginEditor), 10_000))
                     device.findObject(loginEditor).click()
                     device.findObject(loginEditor).text = "synthetic-ui-key"
+                    assertSensitivePluginClipboard(loginEditor)
                     device.pressBack()
                     device.findObject(By.text("保存并连接")).click()
                     assertTrue(device.wait(Until.hasObject(By.text("连接成功")), 20_000))
@@ -396,7 +400,7 @@ class OfficialPluginsInstrumentedTest {
                         dismissEmulatorLauncherAnr()
                         device.hasObject(By.text("提供商"))
                     }
-                    val implicitFixture = prepareImplicitProviderModels(upstream, browserCookie)
+                    val implicitFixture = prepareImplicitProviderModels(upstream, proof)
                     device.findObject(By.text("提供商")).click()
                     await("provider list visible") { device.hasObject(By.text("模型提供商")) }
                     await("saved provider visible") {
@@ -483,7 +487,7 @@ class OfficialPluginsInstrumentedTest {
                     }
                     device.findObject(By.desc("返回提供商列表")).click()
                     await("implicit provider editor closed") { !device.hasObject(By.res("provider-editor-surface")) }
-                    verifyDisabledProviderModels(artifacts, browserCookie, auth, implicitFixture)
+                    verifyDisabledProviderModels(artifacts, proof, auth, implicitFixture)
                     await("provider add button visible") {
                         if (device.hasObject(By.text("添加"))) true
                         else {
@@ -1706,27 +1710,27 @@ class OfficialPluginsInstrumentedTest {
     )
 
     /** Use the real official editor API: the native empty-selection save intentionally means none. */
-    private fun saveOfficialProviderModels(cookie: String, noModels: Boolean, name: String? = null) {
+    private fun saveOfficialProviderModels(browserProof: String, noModels: Boolean, name: String? = null) {
         val saved = NativeCoreSession.providerClient().editable("android-runtime")
         val body = JSONObject().put("id", saved.id).put("name", name ?: saved.name)
             .put("chat", saved.chatUrl).put("models", JSONArray()).put("noModels", noModels)
         assertEquals("official editor save", 200,
-            http("http://127.0.0.1:3430/api/provider/save", "", body.toString(), cookie).first)
+            http("http://127.0.0.1:3430/api/provider/save", "", body.toString(), browserProof = browserProof).first)
         val actual = NativeCoreSession.providerClient().editable(saved.id)
         assertTrue(actual.modelIds.isEmpty())
         assertEquals(noModels, actual.noModels)
         assertTrue("official empty-key save must retain the existing credential", actual.keySet)
     }
 
-    private fun prepareImplicitProviderModels(upstream: LocalUpstream, cookie: String): ImplicitProviderFixture {
+    private fun prepareImplicitProviderModels(upstream: LocalUpstream, browserProof: String): ImplicitProviderFixture {
         val originalName = NativeCoreSession.providerClient().editable("android-runtime").name
         val markerName = "runtime-implicit-${SystemClock.elapsedRealtime()}"
-        saveOfficialProviderModels(cookie, noModels = false, name = markerName)
+        saveOfficialProviderModels(browserProof, noModels = false, name = markerName)
         val requestsBefore = upstream.modelRequests.get()
         // Same-key official saves do not refetch. Persist a real vendor catalog without picks.
         assertEquals("official model catalog refetch", 200,
             http("http://127.0.0.1:3430/api/provider/models", "",
-                JSONObject().put("id", "android-runtime").toString(), cookie).first)
+                JSONObject().put("id", "android-runtime").toString(), browserProof = browserProof).first)
         assertTrue("official refetch must reach the actual upstream", upstream.modelRequests.get() > requestsBefore)
         val client = NativeCoreSession.providerClient()
         val editable = client.editable("android-runtime")
@@ -1777,7 +1781,7 @@ class OfficialPluginsInstrumentedTest {
 
     private fun verifyDisabledProviderModels(
         artifacts: File,
-        cookie: String,
+        browserProof: String,
         auth: String,
         fixture: ImplicitProviderFixture,
     ) {
@@ -1787,7 +1791,7 @@ class OfficialPluginsInstrumentedTest {
         val editorBack = By.desc("返回提供商列表")
         var primaryFailure: Throwable? = null
         try {
-            saveOfficialProviderModels(cookie, noModels = true)
+            saveOfficialProviderModels(browserProof, noModels = true)
             val listed = NativeCoreSession.providerClient().getProviders().providers.single { it.id == "android-runtime" }
             assertTrue(listed.ready && !listed.off && listed.noModels && listed.chosen.isEmpty())
             assertEquals(listOf("fake-echo"), listed.models.map { it.id })
@@ -1839,7 +1843,7 @@ class OfficialPluginsInstrumentedTest {
         }
     }
 
-    private fun verifyModelDiscoveryPinContract(upstream: LocalUpstream, artifacts: File, cookie: String) {
+    private fun verifyModelDiscoveryPinContract(upstream: LocalUpstream, artifacts: File, browserProof: String) {
         val client = NativeCoreSession.providerClient()
         val snapshot = client.editable("android-runtime")
         val catalog = client.discoverModels(ProviderModelDiscoveryRequest(
@@ -1853,7 +1857,7 @@ class OfficialPluginsInstrumentedTest {
             // deliberately refuses HTTP+pin before it can emit this unsafe request.
             val body = JSONObject().put("chat", upstream.base + "/v1")
                 .put("id", snapshot.id).put("revision", snapshot.revision).put("serverPin", pin)
-            assertEquals(400, http("http://127.0.0.1:3430/api/mobile/providers/models", "", body.toString(), cookie).first)
+            assertEquals(400, http("http://127.0.0.1:3430/api/mobile/providers/models", "", body.toString(), browserProof = browserProof).first)
         }
         assertEquals("invalid pin / HTTP+pin reached the actual upstream", before, upstream.modelRequests.get())
         assertEquals("read-only pin validation changed provider revision", snapshot.revision,
@@ -1866,14 +1870,14 @@ class OfficialPluginsInstrumentedTest {
         )
     }
 
-    private fun http(url: String, key: String, body: String? = null, cookie: String? = null): Pair<Int, String> {
+    private fun http(url: String, key: String, body: String? = null, browserProof: String? = null): Pair<Int, String> {
         val connection = URL(url).openConnection(Proxy.NO_PROXY) as HttpURLConnection
         try {
             connection.connectTimeout = 10_000
             connection.readTimeout = 30_000
             connection.instanceFollowRedirects = false
             if (key.isNotBlank()) connection.setRequestProperty("Authorization", "Bearer $key")
-            if (cookie != null) connection.setRequestProperty("Cookie", cookie)
+            if (browserProof != null) connection.setRequestProperty("X-Magpie-Android-Editor-Proof", browserProof)
             connection.setRequestProperty("Accept", "application/json, text/event-stream")
             if (body != null) {
                 connection.requestMethod = "POST"
@@ -1886,6 +1890,23 @@ class OfficialPluginsInstrumentedTest {
             val code = connection.responseCode
             return code to (if (code >= 400) connection.errorStream else connection.inputStream).use { it?.bufferedReader()?.readText().orEmpty() }
         } finally { connection.disconnect() }
+    }
+
+    private fun assertSensitivePluginClipboard(field: androidx.test.uiautomator.BySelector) {
+        val input = device.findObject(field)
+        input.longClick()
+        val selectAll = By.textMatches("(?i)select all|全选")
+        assertTrue("Plugin credential field did not expose Select all",
+            device.wait(Until.hasObject(selectAll), 5_000))
+        device.findObject(selectAll).click()
+        val copy = By.textMatches("(?i)copy|复制")
+        assertTrue("Plugin credential field did not expose Copy",
+            device.wait(Until.hasObject(copy), 5_000))
+        device.findObject(copy).click()
+        val clipboard = checkNotNull(context.getSystemService(android.content.ClipboardManager::class.java))
+        assertTrue("Plugin credential copy must carry Android's sensitive marker",
+            clipboard.primaryClipDescription?.extras?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE, false) == true)
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("", ""))
     }
 
     private class LocalUpstream : Closeable {

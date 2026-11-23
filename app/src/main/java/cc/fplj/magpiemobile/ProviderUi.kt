@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Checkbox
@@ -295,12 +297,21 @@ internal fun ProviderEditorTabs(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = CircleShape,
     ) {
-        Row(Modifier.padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            Modifier.padding(4.dp).selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             labels.forEachIndexed { index, label ->
                 val active = index == selected
                 Surface(
-                    onClick = { onSelect(index) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = UiSpacing.touch)
+                        .selectable(
+                            selected = active,
+                            role = Role.Tab,
+                            onClick = { onSelect(index) },
+                        ),
                     shape = CircleShape,
                     color = if (active) MaterialTheme.colorScheme.primary
                     else Color.Transparent,

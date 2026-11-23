@@ -145,7 +145,7 @@ class ProviderManagementCancellationTest {
                 client.create(draft())
             } finally { ProxySelector.setDefault(original) }
             assertEquals(0, selected.get())
-            assertTrue(api.requests.all { it.cookie == api.credential.cookieHeader() && it.authorization == null })
+            assertTrue(api.requests.all { it.managerHeader == api.credential.managerHeaderValue() && it.authorization == null })
         }
     }
 

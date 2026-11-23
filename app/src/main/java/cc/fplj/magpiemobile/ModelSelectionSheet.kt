@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -53,6 +54,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -343,6 +345,7 @@ internal fun ModelSelectionSheet(
                                     title = group.title,
                                     count = group.entries.size,
                                     collapsed = collapsed,
+                                    collapsible = normalizedQuery.isBlank(),
                                     onClick = {
                                         if (normalizedQuery.isBlank()) {
                                             collapsedGroupIds = if (collapsed) {
@@ -458,6 +461,7 @@ private fun GroupHeading(
     title: String,
     count: Int,
     collapsed: Boolean,
+    collapsible: Boolean,
     onClick: () -> Unit,
 ) {
     Surface(
@@ -466,11 +470,21 @@ private fun GroupHeading(
         shape = RoundedCornerShape(10.dp),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(
-                    role = Role.Button,
-                    onClick = onClick,
+            modifier = Modifier.fillMaxWidth()
+                .heightIn(min = UiSpacing.touch)
+                .then(
+                    if (collapsible) {
+                        Modifier
+                            .clickable(
+                                role = Role.Button,
+                                onClick = onClick,
+                            )
+                            .semantics {
+                                stateDescription = if (collapsed) "已收起" else "已展开"
+                            }
+                    } else {
+                        Modifier
+                    },
                 )
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,

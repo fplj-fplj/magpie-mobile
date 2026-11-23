@@ -16,6 +16,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
@@ -400,6 +401,7 @@ private fun PluginLoginDialog(viewModel: PluginManagementViewModel, state: Offic
     val cancelRequested = state.loginRecovery?.cancelRequested == true
     val canSubmit = !state.authBusy && state.loginRecovery == null
     val canCallback = !state.authBusy && !cancelRequested && state.loginRecovery?.stage == PluginLoginRecovery.Stage.WAITING
+    val sensitiveClipboard = rememberSensitiveClipboardManager()
     FullScreenDialog(onDismissRequest = { viewModel.cancelLogin(); viewModel.hideLogin() }) {
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(UiSpacing.card), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
@@ -416,53 +418,61 @@ private fun PluginLoginDialog(viewModel: PluginManagementViewModel, state: Offic
                 Text(method.labels["zh"] ?: method.labels["zh-CN"] ?: method.label, style = MaterialTheme.typography.bodySmall)
                 if (state.authBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(UiSpacing.medium)) {
-                    if (state.error.isNotBlank()) Text(state.error, color = MaterialTheme.colorScheme.error)
-                    if (state.notice.isNotBlank()) Text(state.notice, style = MaterialTheme.typography.bodySmall)
-                    if (state.loginRecovery != null) PluginLoginRecoveryCard(viewModel, state, true)
-                    val prompt = state.prompt
-                    val signIn = state.signIn
-                    if (prompt != null) {
-                        Text(prompt.messages["zh"] ?: prompt.messages["zh-CN"] ?: prompt.message)
-                        if (prompt.type == "select") prompt.options.forEach { option ->
-                            OutlinedButton(enabled = canSubmit, onClick = { viewModel.prompt(option.value) }, modifier = Modifier.fillMaxWidth()) {
-                                Text(option.labels["zh"] ?: option.labels["zh-CN"] ?: option.label.ifBlank { option.value })
+                        if (state.error.isNotBlank()) Text(state.error, color = MaterialTheme.colorScheme.error)
+                        if (state.notice.isNotBlank()) Text(state.notice, style = MaterialTheme.typography.bodySmall)
+                        if (state.loginRecovery != null) PluginLoginRecoveryCard(viewModel, state, true)
+                        val prompt = state.prompt
+                        val signIn = state.signIn
+                        if (prompt != null) {
+                            Text(prompt.messages["zh"] ?: prompt.messages["zh-CN"] ?: prompt.message)
+                            if (prompt.type == "select") prompt.options.forEach { option ->
+                                OutlinedButton(enabled = canSubmit, onClick = { viewModel.prompt(option.value) }, modifier = Modifier.fillMaxWidth()) {
+                                    Text(option.labels["zh"] ?: option.labels["zh-CN"] ?: option.label.ifBlank { option.value })
+                                }
+                            } else {
+                                val sensitive = Regex("(?i)key|token|password|secret|credential").containsMatchIn(prompt.key)
+                                val field: @Composable () -> Unit = {
+                                    OutlinedTextField(answer, { answer = it }, label = { Text(prompt.placeholder.ifBlank { "填写此项" }) }, enabled = canSubmit,
+                                        visualTransformation = if (sensitive) PasswordVisualTransformation() else VisualTransformation.None,
+                                        modifier = Modifier.fillMaxWidth())
+                                }
+                                if (sensitive) CompositionLocalProvider(LocalClipboardManager provides sensitiveClipboard, content = field)
+                                else field()
+                                Button(enabled = canSubmit, onClick = { viewModel.prompt(answer); answer = "" }) { Text("下一步") }
+                            }
+                        } else if (signIn == null) {
+                            if (method.type == "api" && !method.keyless) CompositionLocalProvider(LocalClipboardManager provides sensitiveClipboard) {
+                                OutlinedTextField(apiKey, { apiKey = it }, label = { Text(method.placeholder.ifBlank { "API 密钥" }) },
+                                    singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                    enabled = canSubmit, modifier = Modifier.fillMaxWidth().testTag("plugin-login-key").semantics { testTagsAsResourceId = true })
+                            }
+                            Button(enabled = canSubmit && (method.type != "api" || method.keyless || apiKey.isNotBlank()), onClick = { viewModel.startLogin(apiKey); apiKey = "" }) {
+                                Text(if (method.type == "api") "保存并连接" else "开始登录")
                             }
                         } else {
-                            val sensitive = Regex("(?i)key|token|password|secret|credential").containsMatchIn(prompt.key)
-                            OutlinedTextField(answer, { answer = it }, label = { Text(prompt.placeholder.ifBlank { "填写此项" }) }, enabled = canSubmit,
-                                visualTransformation = if (sensitive) PasswordVisualTransformation() else VisualTransformation.None,
-                                modifier = Modifier.fillMaxWidth())
-                            Button(enabled = canSubmit, onClick = { viewModel.prompt(answer); answer = "" }) { Text("下一步") }
-                        }
-                    } else if (signIn == null) {
-                        if (method.type == "api" && !method.keyless) OutlinedTextField(apiKey, { apiKey = it }, label = { Text(method.placeholder.ifBlank { "API 密钥" }) },
-                            singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            enabled = canSubmit, modifier = Modifier.fillMaxWidth().testTag("plugin-login-key").semantics { testTagsAsResourceId = true })
-                        Button(enabled = canSubmit && (method.type != "api" || method.keyless || apiKey.isNotBlank()), onClick = { viewModel.startLogin(apiKey); apiKey = "" }) {
-                            Text(if (method.type == "api") "保存并连接" else "开始登录")
-                        }
-                    } else {
-                        val finished = signIn.state in setOf("done", "failed", "canceled", "cancelled")
-                        Text(when (signIn.state) {
-                            "done" -> "连接成功"
-                            "failed" -> "登录未完成，请重新发起"
-                            "canceled", "cancelled" -> "登录已取消"
-                            "installing" -> "正在准备登录"
-                            else -> "等待完成登录"
-                        }, style = MaterialTheme.typography.titleMedium)
-                        if (signIn.instructions.isNotBlank()) Text(SecretRedactor.redact(signIn.instructions), style = MaterialTheme.typography.bodyMedium)
-                        if (signIn.code.isNotBlank()) Text(signIn.code, style = MaterialTheme.typography.headlineMedium)
-                        if (!finished) {
-                            Button(enabled = !state.authBusy && !cancelRequested, onClick = { viewModel.openLoginBrowser(browser) }) { Text("打开登录浏览器") }
-                            if (signIn.pasteCallback || signIn.pasteCode || signIn.pasteKey) {
-                                OutlinedTextField(callback, { callback = it }, label = { Text(if (signIn.pasteCode) "授权码" else "完整回调地址 / 回执") },
-                                    enabled = canCallback,
-                                    visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                                Button(enabled = canCallback && callback.isNotBlank(), onClick = { viewModel.submitCallback(callback); callback = "" }) { Text("提交回执") }
+                            val finished = signIn.state in setOf("done", "failed", "canceled", "cancelled")
+                            Text(when (signIn.state) {
+                                "done" -> "连接成功"
+                                "failed" -> "登录未完成，请重新发起"
+                                "canceled", "cancelled" -> "登录已取消"
+                                "installing" -> "正在准备登录"
+                                else -> "等待完成登录"
+                            }, style = MaterialTheme.typography.titleMedium)
+                            if (signIn.instructions.isNotBlank()) Text(SecretRedactor.redact(signIn.instructions), style = MaterialTheme.typography.bodyMedium)
+                            if (signIn.code.isNotBlank()) Text(signIn.code, style = MaterialTheme.typography.headlineMedium)
+                            if (!finished) {
+                                Button(enabled = !state.authBusy && !cancelRequested, onClick = { viewModel.openLoginBrowser(browser) }) { Text("打开登录浏览器") }
+                                if (signIn.pasteCallback || signIn.pasteCode || signIn.pasteKey) {
+                                    CompositionLocalProvider(LocalClipboardManager provides sensitiveClipboard) {
+                                        OutlinedTextField(callback, { callback = it }, label = { Text(if (signIn.pasteCode) "授权码" else "完整回调地址 / 回执") },
+                                            enabled = canCallback,
+                                            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                                    }
+                                    Button(enabled = canCallback && callback.isNotBlank(), onClick = { viewModel.submitCallback(callback); callback = "" }) { Text("提交回执") }
+                                }
+                                TextButton(enabled = !state.authBusy, onClick = viewModel::refreshLogin) { Text("重新读取登录状态") }
                             }
-                            TextButton(enabled = !state.authBusy, onClick = viewModel::refreshLogin) { Text("重新读取登录状态") }
                         }
-                    }
                 }
             }
         }

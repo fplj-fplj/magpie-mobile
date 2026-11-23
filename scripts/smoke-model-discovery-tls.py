@@ -33,9 +33,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
 
-def request(base, path, cookie, body=None):
+def request(base, path, management, body=None):
     data = None if body is None else json.dumps(body).encode()
-    headers = {"Accept": "application/json", "Cookie": cookie}
+    headers = {"Accept": "application/json"}
+    headers.update(management)
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(base + path, data=data, headers=headers)
@@ -158,10 +159,12 @@ def main():
         drain_thread = threading.Thread(target=drain, daemon=True)
         drain_thread.start()
         base = "http://127.0.0.1:" + str(admin_port)
-        cookie = "magpie_web_" + str(admin_port) + "=" + management_key
+        cookie = {"Cookie": "magpie_web_" + str(admin_port) + "=" + management_key}
+        manager = {"X-Magpie-Android-Manager": management_key}
+        management = None
 
         def discover(body, status=200, code=None):
-            actual, raw, headers = request(base, "/api/mobile/providers/models", cookie, body)
+            actual, raw, headers = request(base, "/api/mobile/providers/models", management, body)
             check(actual == status, "unexpected discovery HTTP status: " + str(actual))
             for secret in (management_key, vendor_key):
                 check(secret.encode() not in raw, "discovery response leaked a fixture credential")
@@ -181,13 +184,23 @@ def main():
             while time.monotonic() < deadline:
                 check(process.poll() is None, "core exited before authenticated startup")
                 try:
-                    if request(base, "/api/mobile/capabilities", cookie)[0] == 200:
+                    for candidate in (manager, cookie):
+                        if request(base, "/api/mobile/capabilities", candidate)[0] == 200:
+                            management = candidate
+                            break
+                    if management is not None:
                         break
                 except (OSError, urllib.error.URLError):
                     pass
                 time.sleep(.1)
             else:
                 raise AssertionError("authenticated core never became ready")
+            if management is manager:
+                check(request(base, "/api/mobile/capabilities", cookie)[0] == 401,
+                      "legacy manager cookie authenticated the Android host")
+            else:
+                check(request(base, "/api/mobile/capabilities", manager)[0] == 401,
+                      "native manager header authenticated the mobile build")
 
             discover({"chat": private.base, "key": vendor_key, "serverPin": private_pin})
             check(private.calls == [("/v1/models", True, True)], "pinned self-signed GET/auth/cookie mismatch")
@@ -211,7 +224,7 @@ def main():
 
             # Persist only through the real authenticated provider API. Read-only
             # discovery must not change this exact file, even when pin is overridden.
-            status, raw, _ = request(base, "/api/mobile/providers/create", cookie,
+            status, raw, _ = request(base, "/api/mobile/providers/create", management,
                                     {"new": True, "id": "tls-pinned", "name": "TLS fixture",
                                      "chat": private.base, "key": vendor_key, "models": ["tls-fixture-model"],
                                      "noModels": False, "serverPin": private_pin})

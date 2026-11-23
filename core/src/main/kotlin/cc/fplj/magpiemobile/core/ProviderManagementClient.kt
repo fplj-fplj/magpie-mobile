@@ -30,10 +30,12 @@ class ProviderManagementClient(
     @Volatile private var modelDiscoverySupported = false
     @Volatile private var observedFileError = false
     init {
-        require(endpoint.port != 3425) { "管理 cookie 不得发送到网关" }
-        require(endpoint.port == credential.port) { "管理 cookie 端口不匹配" }
-        transport = BoundedCoreHttp(endpoint, timeout, credential.cookieHeader(), requestControl, ensureActive)
-        writeTransport = BoundedCoreHttp(endpoint, writeTimeout, credential.cookieHeader(), requestControl, ensureActive)
+        require(endpoint.port != 3425) { "管理凭据不得发送到网关" }
+        require(endpoint.port == credential.port) { "管理凭据端口不匹配" }
+        transport = BoundedCoreHttp(endpoint, timeout, requestControl = requestControl,
+            ensureActive = ensureActive, managerKey = credential.managerHeaderValue())
+        writeTransport = BoundedCoreHttp(endpoint, writeTimeout, requestControl = requestControl,
+            ensureActive = ensureActive, managerKey = credential.managerHeaderValue())
     }
 
     fun list(): ProviderListSnapshot = getProviders()

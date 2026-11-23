@@ -135,7 +135,7 @@
       "replacements": [
         {
           "old": "\treturn noFramedAPI(held(mux))\n",
-          "new": "\treturn mobileAPI(noFramedAPI(held(mux)))\n"
+          "new": "\treturn mobileAPI(androidHostEditorProof(noFramedAPI(held(mux))))\n"
         },
         {
           "old": "\t\"github.com/yetone/magpie/internal/middleware\"\n",
@@ -146,7 +146,7 @@
           "new": "\t\tboot := map[string]any{\"lang\": s.Lang, \"theme\": s.Theme, \"textSize\": s.TextSize, \"web\": isWeb(w)}\n\t\tif mobilepolicy.AndroidHost && isWeb(w) {\n\t\t\tboot[\"androidHost\"] = true // build-time platform, never a user-agent guess\n\t\t}\n"
         }
       ],
-      "resultSha256": "e9bc057fa74e54b132a91940b195e49bea07cef51c708f65448c36ebf59eeefc"
+      "resultSha256": "fe33a3905b11ef6a65a4cfbe5b187af657309f4ed644cd5aeb9a3a3a5c48dbdc"
     },
     {
       "path": "internal/gui/update.go",
@@ -312,11 +312,11 @@
     },
     {
       "path": "internal/gui/androidhost_editor.go",
-      "sha256": "a32626a0d44932bae4938813971d55ee3da3c9f2611db31b7ef9a2de48a060ce"
+      "sha256": "069e520ecaf67245ecca28ce3a3c8ab20d3b0275149bee41d00291d35759bfb5"
     },
     {
       "path": "internal/gui/androidhost_editor_test.go",
-      "sha256": "64948df9f1deadd796e16df4509aa2141569b67a3fb31d05be976d8e9427aa66"
+      "sha256": "156065a773a6d447688ad3b96d31bd06897fb42f0f6c84673cf9cca077d5b822"
     },
     {
       "path": "internal/gui/androidhost_plugin_key.go",
@@ -408,7 +408,7 @@
     },
     {
       "path": "internal/gui/androidhost_backup_test.go",
-      "sha256": "2eac00371c8a50a0d4ed8d856e1e5c1c3de9b6360a355c3b469ad49478aef3e7"
+      "sha256": "47d9a5284b564e9637558e451ceebcabe52581c203cedd716977bfb9e1479ceb"
     }
   ]
 }

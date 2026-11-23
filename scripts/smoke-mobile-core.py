@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Host-only core integration with synthetic credentials and a fake chat upstream."""
-import argparse,json,os,secrets,socket,subprocess,tempfile,threading,time,urllib.request,urllib.error
+import argparse,json,os,re,secrets,socket,subprocess,tempfile,threading,time,urllib.request,urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -27,7 +27,7 @@ def is_listening(p):
     except OSError: return False
 
 args=argparse.ArgumentParser();args.add_argument('--exe',required=True);args.add_argument('--full-admin',action='store_true');args.add_argument('--evidence');opts=args.parse_args()
-core_version='0.1.3781-androidhost.3' if opts.full_admin else '0.1.3781-mobile.1'
+core_version='0.1.3781-androidhost.4' if opts.full_admin else '0.1.3781-mobile.1'
 exe=Path(opts.exe).resolve();assert exe.is_file()
 with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
     root=Path(temporary)
@@ -77,13 +77,14 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
     t=threading.Thread(target=drain,daemon=True);t.start()
     admin='http://127.0.0.1:'+str(admin_port);gateway='http://127.0.0.1:'+str(gateway_port)
     cookie={'Cookie':'magpie_web_'+str(admin_port)+'='+admin_key}
+    management={'X-Magpie-Android-Manager':admin_key} if opts.full_admin else cookie
     passed=False
     try:
         deadline=time.monotonic()+15
         while time.monotonic()<deadline:
             if p.poll() is not None: raise AssertionError('core exited during startup with code '+str(p.returncode))
             try:
-                code,body=request(admin,'/api/mobile/capabilities',headers=cookie)
+                code,body=request(admin,'/api/mobile/capabilities',headers=management)
                 if code==200: break
             except (OSError,urllib.error.URLError): pass
             time.sleep(.1)
@@ -95,44 +96,46 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
         if opts.full_admin: expected.update(androidHost=True,fullAdmin=True,webEditor=True)
         assert cap==expected
         if opts.full_admin:
-            boot_code,boot_body=request(admin,'/boot.js',headers=cookie)
+            assert request(admin,'/api/mobile/capabilities',headers=cookie)[0]==401,'legacy manager cookie authenticated Android host'
+            wrong_browser={**management,'Origin':admin,'Sec-Fetch-Site':'same-origin'}
+            assert request(admin,'/api/androidhost/browser-session','POST',{},wrong_browser)[0]==403,'native manager header accepted browser metadata'
+            boot_code,boot_body=request(admin,'/boot.js',headers=management)
             assert boot_code==200 and b'"gateway":true' not in boot_body,'full web UI was hidden by automatic gateway mode'
-            code,body=request(admin,'/api/settings/gateway-mode','POST',{'mode':'off'},cookie)
+            code,body=request(admin,'/api/settings/gateway-mode','POST',{'mode':'off'},management)
             assert code==200,'official settings API was not restored'
             assert request(admin,'/api/settings/gateway-mode','POST',{'mode':'off'})[0]==401
-            assert request(admin,'/',headers={**cookie,'Accept':'text/html'})[0]==200
+            assert request(admin,'/',headers={**management,'Accept':'text/html'})[0]==200
             assert request(admin,'/api/androidhost/browser-session','POST',{})[0]==401
-            code,body=request(admin,'/api/androidhost/browser-session','POST',{},cookie)
+            code,body=request(admin,'/api/androidhost/browser-session','POST',{},management)
             assert code==200
             link=json.loads(body)['url']
             assert link.startswith(admin+'/androidhost/browser-entry?ticket=') and admin_key not in link
-            try:
-                http.open(urllib.request.Request(link,headers={'Accept':'text/html'}),timeout=5)
-                raise AssertionError('browser entry must redirect to a clean root')
-            except urllib.error.HTTPError as entry:
-                assert entry.code==303 and entry.headers['Location']=='/'
-                assert 'HttpOnly' in entry.headers['Set-Cookie']
-                browser_cookie=entry.headers['Set-Cookie'].split(';',1)[0]
-            assert request(admin,'/',headers={'Cookie':browser_cookie,'Accept':'text/html'})[0]==200
-            assert request(admin,link.removeprefix(admin))[0]==401,'browser entry replay accepted'
-            assert request(admin,'/api/update/install','POST',{},cookie)[0]==404
+            with http.open(urllib.request.Request(link,headers={'Accept':'text/html'}),timeout=5) as entry:
+                assert entry.status==200 and 'Set-Cookie' not in entry.headers
+                html=entry.read().decode()
+            match=re.search(r'sessionStorage\.setItem\("magpie\.androidEditorProof","([0-9a-f]{64})"\)',html)
+            assert match and admin_key not in html
+            browser={'X-Magpie-Android-Editor-Proof':match.group(1),'Origin':admin,'Sec-Fetch-Site':'same-origin'}
+            assert request(admin,'/',headers={**browser,'Accept':'text/html'})[0]==200
+            assert request(admin,link.removeprefix(admin))[0]==404,'browser entry replay accepted'
+            assert request(admin,'/api/update/install','POST',{},management)[0]==404
             # Exercise the real official provider writer on first use, including
             # composite fields and deletion that the legacy mobile store rejected.
             web_draft={'id':'web-created','name':'Web created','chat':vendor_base+'/v1',
                        'key':vendor_key,'models':['web-only-model'],'baseAPI':'chat',
                        'headers':{'X-Smoke':'web-created'}}
             assert request(admin,'/api/provider/save','POST',web_draft)[0]==401
-            assert request(admin,'/api/provider/save','POST',web_draft,cookie)[0]==200,'official first-use provider save failed'
-            code,body=request(admin,'/api/mobile/providers/editable/web-created',headers=cookie)
+            assert request(admin,'/api/provider/save','POST',web_draft,browser)[0]==200,'official first-use provider save failed'
+            code,body=request(admin,'/api/mobile/providers/editable/web-created',headers=management)
             assert code==200 and json.loads(body)['name']=='Web created','native editor cannot read web-created provider'
-            assert request(admin,'/api/provider/delete','POST',{'id':'web-created'},cookie)[0]==200,'official provider deletion failed'
+            assert request(admin,'/api/provider/delete','POST',{'id':'web-created'},browser)[0]==200,'official provider deletion failed'
         assert request(admin,'/api/mobile/capabilities')[0]==401
         assert request(gateway,'/api/hello')[0]==401
         assert request(gateway,'/v1/models',headers={'Authorization':'Bearer magpie'})[0]==401
-        before_code,before_body=request(admin,'/api/caller-keys',headers=cookie)
+        before_code,before_body=request(admin,'/api/caller-keys',headers=management)
         assert before_code==200
         before_ids={key['id'] for key in json.loads(before_body)['keys']}
-        code,body=request(admin,'/api/caller-keys/add-key','POST',{'name':'mobile-smoke-key'},cookie)
+        code,body=request(admin,'/api/caller-keys/add-key','POST',{'name':'mobile-smoke-key'},management)
         assert code==200
         created=json.loads(body);secret=created['secret']
         assert secret.startswith('sk-magpie-key-') and len(secret.removeprefix('sk-magpie-key-'))==48
@@ -144,52 +147,52 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
         assert code==200 and json.loads(body)=={'name':'magpie','version':core_version}
         assert request(gateway,'/v1/magpie/goroutines',headers=auth)[0]==404
         assert request(gateway,'/v1/magpie/heap',headers=auth)[0]==404
-        assert request(admin,'/api/window/restart','POST',{},cookie)[0]==404
-        code,body=request(admin,'/api/caller-keys',headers=cookie)
+        assert request(admin,'/api/window/restart','POST',{},management)[0]==404
+        code,body=request(admin,'/api/caller-keys',headers=management)
         listed=json.loads(body)['keys'];assert code==200 and all('secret' not in key for key in listed)
         assert len([key for key in listed if key['id']==own_id])==1
-        code,body=request(admin,'/api/caller-keys/copy-key','POST',{'key':own_id},cookie)
+        code,body=request(admin,'/api/caller-keys/copy-key','POST',{'key':own_id},management)
         assert code==200 and json.loads(body)['secret']==secret
         # Safe provider persistence using synthetic credentials and a reserved local URL.
         # No provider/test/detect or authenticated chat is called here.
-        code,body=request(admin,'/api/mobile/providers/models','POST',{'chat':vendor_base+'/v1','key':vendor_key},cookie)
+        code,body=request(admin,'/api/mobile/providers/models','POST',{'chat':vendor_base+'/v1','key':vendor_key},management)
         assert code==200 and json.loads(body)['models'][0]['id']=='probe-model'
-        assert request(admin,'/api/mobile/providers/models','POST',{'chat':vendor_base+'/v1'},cookie)[0]==401
+        assert request(admin,'/api/mobile/providers/models','POST',{'chat':vendor_base+'/v1'},management)[0]==401
         draft={'new':True,'id':'host-provider','name':'Host provider','chat':vendor_base+'/v1',
                'key':vendor_key,'models':['probe-model'],'noModels':False}
         assert request(admin,'/api/mobile/providers/create','POST',draft)[0]==401
-        code,body=request(admin,'/api/mobile/providers/create','POST',draft,cookie)
+        code,body=request(admin,'/api/mobile/providers/create','POST',draft,management)
         assert code==200,'safe provider creation failed'
         provider=json.loads(body)
         assert provider['id']=='host-provider' and provider['key']['set'] and vendor_key not in body.decode()
         original_revision=provider['revision']
-        code,body=request(admin,'/api/mobile/providers/models','POST',{'chat':vendor_base+'/v1/chat/completions','id':'host-provider','revision':original_revision},cookie)
+        code,body=request(admin,'/api/mobile/providers/models','POST',{'chat':vendor_base+'/v1/chat/completions','id':'host-provider','revision':original_revision},management)
         assert code==200 and json.loads(body)['models'][0]['id']=='probe-model'
-        code,body=request(admin,'/api/mobile/providers/editable/host-provider',headers=cookie)
+        code,body=request(admin,'/api/mobile/providers/editable/host-provider',headers=management)
         assert code==200 and json.loads(body)['revision']==original_revision, 'discovery must not save or modify revision'
         assert vendor_calls['post']==0, 'metadata discovery cannot call inference'
-        code,body=request(admin,'/api/mobile/providers/editable/host-provider',headers=cookie)
+        code,body=request(admin,'/api/mobile/providers/editable/host-provider',headers=management)
         assert code==200 and json.loads(body)['revision']==original_revision
         code,body=request(admin,'/api/mobile/providers/edit','POST',
-                          {'id':'host-provider','revision':original_revision,'name':'Host edited'},cookie)
+                          {'id':'host-provider','revision':original_revision,'name':'Host edited'},management)
         assert code==200
         edited=json.loads(body)
         assert edited['name']=='Host edited' and edited['models']==['probe-model'] and edited['key']['set']
         assert request(admin,'/api/mobile/providers/edit','POST',
-                       {'id':'host-provider','revision':original_revision,'name':'stale write'},cookie)[0]==409
+                       {'id':'host-provider','revision':original_revision,'name':'stale write'},management)[0]==409
         if opts.full_admin:
             web_save={'id':'host-provider','name':'Web edited','chat':vendor_base+'/v1',
                       'models':['probe-model'],'baseAPI':'chat','headers':{'X-Smoke':'web-edit'}}
-            assert request(admin,'/api/provider/save','POST',web_save,cookie)[0]==200,'official web edit failed'
-            code,body=request(admin,'/api/mobile/providers/editable/host-provider',headers=cookie)
+            assert request(admin,'/api/provider/save','POST',web_save,browser)[0]==200,'official web edit failed'
+            code,body=request(admin,'/api/mobile/providers/editable/host-provider',headers=management)
             assert code==200
             web_edited=json.loads(body)
             assert web_edited['name']=='Web edited' and web_edited['revision']!=edited['revision']
             assert web_edited['models']==['probe-model'] and web_edited['key']['set'] and vendor_key not in body.decode()
             assert request(admin,'/api/mobile/providers/edit','POST',
-                           {'id':'host-provider','revision':edited['revision'],'name':'stale after browser'},cookie)[0]==409
+                           {'id':'host-provider','revision':edited['revision'],'name':'stale after browser'},management)[0]==409
             code,body=request(admin,'/api/mobile/providers/edit','POST',
-                              {'id':'host-provider','revision':web_edited['revision'],'name':'Native after web'},cookie)
+                              {'id':'host-provider','revision':web_edited['revision'],'name':'Native after web'},management)
             assert code==200
             edited=json.loads(body)
             files=list((root/'config').rglob('providers.json'))
@@ -225,12 +228,12 @@ with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
         assert received['max_tokens']==17,'gateway dropped profile token limit'
         assert received['model']=='probe-model' and len(vendor_calls['chat_bodies'])==2,'profile changed routing or replayed'
         if not opts.full_admin:
-            assert request(admin,'/api/provider/test','POST',{'id':'host-provider'},cookie)[0]==404
-            assert request(admin,'/api/provider/detect','POST',{'id':'host-provider'},cookie)[0]==404
+            assert request(admin,'/api/provider/test','POST',{'id':'host-provider'},management)[0]==404
+            assert request(admin,'/api/provider/detect','POST',{'id':'host-provider'},management)[0]==404
         code,body=request(admin,'/api/mobile/providers/edit','POST',
-                          {'id':'host-provider','revision':edited['revision'],'models':[],'noModels':True},cookie)
+                          {'id':'host-provider','revision':edited['revision'],'models':[],'noModels':True},management)
         assert code==200 and json.loads(body)['noModels'] is True and json.loads(body)['models']==[]
-        code,body=request(admin,'/api/providers',headers=cookie)
+        code,body=request(admin,'/api/providers',headers=management)
         assert code==200 and vendor_key not in body.decode()
         time.sleep(.3)
         assert p.poll() is None,'core must survive the CLI printWeb path'

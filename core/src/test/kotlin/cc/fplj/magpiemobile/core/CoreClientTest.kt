@@ -40,12 +40,12 @@ class CoreClientTest {
         assertEquals("magpie", CoreClient("http://127.0.0.1:" + server.address.port).hello().name)
     }
 
-    @Test fun defaultHelloGoesToGateway3425AndNeverCarriesManagerCookie() {
+    @Test fun defaultHelloGoesToGateway3425AndNeverCarriesManagerHeader() {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 3425), 0)
         servers += server
         val calls = AtomicInteger()
         server.createContext("/api/hello") { exchange ->
-            if (exchange.requestHeaders.getFirst("Cookie") != null) exchange.sendResponseHeaders(401, -1)
+            if (exchange.requestHeaders.getFirst(BoundedCoreHttp.ANDROID_MANAGER_HEADER) != null) exchange.sendResponseHeaders(401, -1)
             else {
                 calls.incrementAndGet()
                 val bytes = """{"name":"magpie","version":"gateway-only"}""".toByteArray()
@@ -58,14 +58,14 @@ class CoreClientTest {
         assertEquals(1, calls.get())
     }
 
-    @Test fun guiHasNoHelloEvenWithCorrectCookie() {
+    @Test fun guiHasNoHelloEvenWithCorrectManagerHeader() {
         ManagementApiFixture().use { gui ->
             val error = assertFailsWith<CoreException> { CoreClient(gui.baseUrl).hello() }
-            // The gateway probe sends no cookie. Real GUI webGuard turns it away.
+            // The gateway probe sends no manager header, so the management endpoint rejects it.
             assertTrue(error.message!!.contains("401"))
-            assertTrue(gui.requests.all { it.cookie == null })
+            assertTrue(gui.requests.all { it.managerHeader == null })
             assertEquals(404, assertFailsWith<ManagementHttpException> {
-                BoundedCoreHttp(LoopbackEndpoint(gui.baseUrl), java.time.Duration.ofSeconds(2), gui.credential.cookieHeader())
+                BoundedCoreHttp(LoopbackEndpoint(gui.baseUrl), java.time.Duration.ofSeconds(2), managerKey = gui.credential.managerHeaderValue())
                     .request("GET", "/api/hello")
             }.httpCode)
         }
@@ -77,7 +77,7 @@ class CoreClientTest {
             val state = CoreClient().state(gui.credential, gui.baseUrl)
             assertEquals(7, state["version"]!!.jsonPrimitive.content.toInt())
             assertEquals("/api/state", gui.requests.single().path)
-            assertEquals(gui.credential.cookieHeader(), gui.requests.single().cookie)
+            assertEquals(gui.credential.managerHeaderValue(), gui.requests.single().managerHeader)
         }
     }
 

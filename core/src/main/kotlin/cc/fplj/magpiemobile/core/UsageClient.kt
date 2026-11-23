@@ -27,9 +27,10 @@ data class UsageRecord(
  *
  * 契约（internal/gui/usage.go，plan.md §3 Usage 行）：
  * 返回形状上游未钉死为稳定 schema——本客户端返回原始 JSON 文本，
- * 并提供弹性安全的指标解析函数；只钉状态码语义与鉴权（管理 cookie，非网关 key）。
+ * 并提供弹性安全的指标解析函数；此类仅服务 legacy mobile webGuard 路径。
  *
- * 注意两套凭据绝不混用：管理面走 adminCookie（webGuard 签发），
+ * AndroidHost 所有用量请求由 CoreManagementClient 通过 manager header 发送。
+ * Legacy mobile 模式仍使用 adminCookie；两套凭据绝不混用：
  * 网关走 gatewayKey——此约束由参数类型强制（见 request 方法签名）。
  */
 class UsageClient(private val config: GatewayConfig) {
@@ -66,7 +67,7 @@ class UsageClient(private val config: GatewayConfig) {
     /**
      * 只读用量洞察端点（P5-4）：/api/usage/heatmap、/api/usage/quotas、/api/usage/quotas/history。
      * 上游形状未钉死为稳定 schema，返回原始 JSON 文本，UI 侧做弹性解析；
-     * 响应硬上限 2MB，管理 cookie 鉴权与 recentRequests 相同。
+     * 响应硬上限 2MB；legacy mobile webGuard 鉴权与 recentRequests 相同。
      */
     fun usageInsight(endpoint: UsageInsightEndpoint): String {
         val cookie = config.adminCookie

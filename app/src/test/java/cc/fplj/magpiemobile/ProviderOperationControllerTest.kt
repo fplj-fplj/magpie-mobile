@@ -640,7 +640,7 @@ class ProviderOperationControllerTest {
                     assertEquals(if (path == EDIT_PATH) 1 else 0,
                         first.requests.count { it.path == EDIT_PATH })
                     assertTrue(first.requests.all {
-                        it.cookie == "magpie_web_${first.port}=provider-session-synthetic-$OWNER_A"
+                        it.managerHeader == "provider-session-synthetic-$OWNER_A"
                     })
                     assertTrue(second.requests.isEmpty())
                     assertTrue(first.workerFailure.get()?.toString(), first.workerFailure.get() == null)
@@ -743,13 +743,13 @@ class ProviderOperationControllerTest {
                         check(count > 0)
                         offset += count
                     }
-                    val cookie = headers.lineSequence().firstOrNull { it.startsWith("Cookie:", true) }
+                    val managerHeader = headers.lineSequence().firstOrNull { it.startsWith("X-Magpie-Android-Manager:", true) }
                         ?.substringAfter(':')?.trim().orEmpty()
                     val serverPin = if (path == DISCOVERY_PATH) {
                         val body = Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)) as JsonObject
                         (body["serverPin"] as? JsonPrimitive)?.content
                     } else null
-                    requests += RecordedRequest(path, cookie, serverPin)
+                    requests += RecordedRequest(path, managerHeader, serverPin)
                     val output = socket.getOutputStream()
                     if (path == silentPath) {
                         if (sendHeaders) {
@@ -795,7 +795,7 @@ class ProviderOperationControllerTest {
         }
     }
 
-    private data class RecordedRequest(val path: String, val cookie: String, val serverPin: String? = null) {
+    private data class RecordedRequest(val path: String, val managerHeader: String, val serverPin: String? = null) {
         override fun toString() = "RecordedRequest(path=$path,credentials=<redacted>)"
     }
 

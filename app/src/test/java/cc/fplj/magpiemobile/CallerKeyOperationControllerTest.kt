@@ -195,7 +195,7 @@ class CallerKeyOperationControllerTest {
                     val expected = if (write) listOf("GET ${CallerKeyHttpPeer.LIST_PATH}", "POST $path")
                     else listOf("GET $path")
                     assertEquals(expected, first.requestLines()) // In particular, no POST replay.
-                    assertTrue(first.requests.all { it.cookie == first.credential.cookieHeader() && !it.chunked })
+                    assertTrue(first.requests.all { it.managerHeader == first.credential.managerHeaderValue() && !it.chunked })
                     assertTrue(second.requests.isEmpty())
                     operation.close()
                     assertEquals(1, source.leases.single().closeCount.get())
@@ -238,7 +238,7 @@ class CallerKeyOperationControllerTest {
                     "POST ${CallerKeyHttpPeer.COPY_PATH}",
                     "POST ${CallerKeyHttpPeer.MODELS_PATH}",
                 ), peer.requestLines())
-                assertTrue(peer.requests.all { it.cookie == peer.credential.cookieHeader() && !it.chunked })
+                assertTrue(peer.requests.all { it.managerHeader == peer.credential.managerHeaderValue() && !it.chunked })
                 assertEquals(Json.parseToJsonElement("""{"name":"${CallerKeyHttpPeer.CREATED_NAME}"}"""),
                     Json.parseToJsonElement(peer.requests.single { it.line.endsWith(CallerKeyHttpPeer.ADD_PATH) }.body))
                 assertEquals(Json.parseToJsonElement("""{"key":"${CallerKeyHttpPeer.EXISTING_ID}"}"""),

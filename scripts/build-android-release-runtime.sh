@@ -13,7 +13,7 @@ if [[ "${MAGPIE_CORE_CACHE_HIT:-false}" != true ]]; then
     cd "$upstream_root"
     export CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC="$compiler"
     go build -trimpath -buildmode=pie -tags nogui,androidhost \
-      -ldflags '-s -w -X main.version=0.1.3781-androidhost.3 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
+      -ldflags '-s -w -X main.version=0.1.3781-androidhost.4 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
       -o "$OLDPWD/build-tmp/magpie-mobile-android-arm64" .
   )
   sha256sum build-tmp/magpie-mobile-android-arm64 > build-tmp/mobile-core.sha256

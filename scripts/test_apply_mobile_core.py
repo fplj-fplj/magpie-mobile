@@ -319,6 +319,45 @@ class ApplyMobileCoreTests(unittest.TestCase):
         self.assertIn('fs.ReadFile(staticFS(), "app.js")', tests)
         self.assertIn('exec.Command(node, "-e", androidBackupBrowserHarness)', tests)
 
+    def test_androidhost_manager_header_and_browser_proof_are_packaged(self):
+        root = patcher.DEFAULT_PATCH_ROOT
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        patches = {p["path"]: p for p in manifest["patches"]}
+        api = "\n".join(r["new"] for r in patches["internal/gui/api.go"]["replacements"])
+        self.assertIn("mobileAPI(androidHostEditorProof(noFramedAPI(held(mux))))", api)
+        self.assertNotIn("androidEditorProof(noFramedAPI", api)
+
+        editor = (root / "overlay/internal/gui/androidhost_editor.go").read_text(encoding="utf-8")
+        for guard in (
+            'const androidEditorProofHeader = "X-Magpie-Android-Editor-Proof"',
+            'const androidManagerHeader = "X-Magpie-Android-Manager"',
+            "const androidEditorProofTTL = 30 * time.Minute",
+            "const androidEditorProofLimit = 16",
+            "androidHostEditorAuthorizedKey{}",
+            'r.Host != expectedHost',
+            'len(r.Header.Values("Origin")) != 0 || len(r.Header.Values("Referer")) != 0',
+            'strings.HasPrefix(strings.ToLower(name), "sec-fetch-")',
+            "androidPluginGatewayRestorePath",
+            'redirect:"error"',
+            "HTMLAnchorElement.prototype.click",
+            "editor API redirect blocked",
+            "Cache-Control",
+        ):
+            self.assertIn(guard, editor)
+        self.assertNotIn("http.SetCookie(", editor)
+        self.assertIn('w.Header().Del("Set-Cookie")', editor)
+        self.assertNotIn("/api/androidhost/browser-proof", editor)
+        self.assertNotIn('CookiesNamed', editor)
+
+        repo = root.parents[1]
+        mobile_core = (repo / "scripts/smoke-mobile-core.py").read_text(encoding="utf-8")
+        tls = (repo / "scripts/smoke-model-discovery-tls.py").read_text(encoding="utf-8")
+        plugins = (repo / "scripts/smoke-official-plugins.py").read_text(encoding="utf-8")
+        for source in (mobile_core, tls, plugins):
+            self.assertIn("X-Magpie-Android-Manager", source)
+        self.assertIn("sessionStorage", mobile_core)
+        self.assertIn("X-Magpie-Android-Editor-Proof", mobile_core)
+
 
 if __name__ == "__main__":
     unittest.main()

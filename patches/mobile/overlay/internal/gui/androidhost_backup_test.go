@@ -23,7 +23,7 @@ import (
 	"github.com/yetone/magpie/internal/settings"
 )
 
-const androidBackupTestCookie = "synthetic-backup-manager-key-123456"
+const androidBackupTestManagerKey = "synthetic-backup-manager-key-123456"
 const androidBackupTestPass = "synthetic backup passphrase"
 
 type androidBackupWindows struct {
@@ -39,14 +39,15 @@ func (w *androidBackupWindows) OpenFolder(dir string) error {
 func androidBackupHandler(w Windows) http.Handler {
 	mux := http.NewServeMux()
 	backupRoutes(mux, w)
-	return webHandler("3430", androidBackupTestCookie, 0, nil, mobileAPI(mux))
+	return webHandler("3430", androidBackupTestManagerKey, 0, nil,
+		mobileAPI(androidHostEditorProof(mux)))
 }
 
-func androidBackupRequest(method, path, body, cookie string) *http.Request {
+func androidBackupRequest(method, path, body, managerKey string) *http.Request {
 	r := httptest.NewRequest(method, "http://127.0.0.1:3430"+path, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	if cookie != "" {
-		r.AddCookie(&http.Cookie{Name: "magpie_web_3430", Value: cookie})
+	if managerKey != "" {
+		r.Header.Set(androidManagerHeader, managerKey)
 	}
 	return r
 }
@@ -58,7 +59,7 @@ func androidBackupPost(t *testing.T, h http.Handler, path string, value any) *ht
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, androidBackupRequest("POST", path, string(body), androidBackupTestCookie))
+	h.ServeHTTP(w, androidBackupRequest("POST", path, string(body), androidBackupTestManagerKey))
 	return w
 }
 
@@ -117,7 +118,7 @@ func TestAndroidHostBackupAppSinkRoundTripWithoutPrivateArchive(t *testing.T) {
 				w.Header().Get("X-Content-Type-Options") != "nosniff" {
 				t.Fatalf("not a private, downloadable backup: status=%d headers=%v", w.Code, w.Header())
 			}
-			for _, secret := range []string{original.Key, original.Chat, instructions, androidBackupTestPass, androidBackupTestCookie} {
+			for _, secret := range []string{original.Key, original.Chat, instructions, androidBackupTestPass, androidBackupTestManagerKey} {
 				if bytes.Contains(w.Body.Bytes(), []byte(secret)) {
 					t.Fatal("export exposed plaintext rather than the sealed bundle")
 				}
@@ -291,29 +292,37 @@ func TestAndroidHostBackupDefaultSinkKeepsDesktopDownloadsAndHomeFallback(t *tes
 	}
 }
 
-func TestAndroidHostBackupAppSinkKeepsCookieOriginAndPathGuards(t *testing.T) {
+func TestAndroidHostBackupAppSinkKeepsManagerHeaderOriginAndPathGuards(t *testing.T) {
 	home := sandboxHome(t)
 	windows := &androidBackupWindows{}
 	h := androidBackupHandler(windows)
 	for _, tc := range []struct {
-		name, method, path, cookie, origin, site string
-		want                                  int
+		name, method, path, managerKey, origin, site, referer, fetchMode string
+		want                                                             int
 	}{
-		{"no cookie", "POST", "/api/backup/export", "", "", "", http.StatusUnauthorized},
-		{"wrong cookie", "POST", "/api/backup/export", "wrong", "", "", http.StatusUnauthorized},
-		{"foreign Origin", "POST", "/api/backup/export", androidBackupTestCookie, "https://foreign.example", "", http.StatusForbidden},
-		{"foreign site", "POST", "/api/backup/export", androidBackupTestCookie, "", "cross-site", http.StatusForbidden},
-		{"wrong method", "GET", "/api/backup/export", androidBackupTestCookie, "", "same-origin", http.StatusMethodNotAllowed},
-		{"encoded path", "POST", "/api/backup%2fexport", androidBackupTestCookie, "", "same-origin", http.StatusNotFound},
-		{"unclean path", "POST", "/api/other/../backup/export", androidBackupTestCookie, "", "same-origin", http.StatusNotFound},
+		{"no manager", "POST", "/api/backup/export", "", "", "", "", "", http.StatusUnauthorized},
+		{"wrong manager", "POST", "/api/backup/export", "wrong", "", "", "", "", http.StatusUnauthorized},
+		{"foreign Origin", "POST", "/api/backup/export", androidBackupTestManagerKey, "https://foreign.example", "", "", "", http.StatusForbidden},
+		{"foreign site", "POST", "/api/backup/export", androidBackupTestManagerKey, "", "cross-site", "", "", http.StatusForbidden},
+		{"browser Referer", "POST", "/api/backup/export", androidBackupTestManagerKey, "", "", "http://127.0.0.1:3430/", "", http.StatusForbidden},
+		{"browser fetch mode", "POST", "/api/backup/export", androidBackupTestManagerKey, "", "", "", "cors", http.StatusForbidden},
+		{"wrong method", "GET", "/api/backup/export", androidBackupTestManagerKey, "", "", "", "", http.StatusMethodNotAllowed},
+		{"encoded path", "POST", "/api/backup%2fexport", androidBackupTestManagerKey, "", "", "", "", http.StatusNotFound},
+		{"unclean path", "POST", "/api/other/../backup/export", androidBackupTestManagerKey, "", "", "", "", http.StatusNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := androidBackupRequest(tc.method, tc.path, `{"sink":"app","pass":"`+androidBackupTestPass+`"}`, tc.cookie)
+			r := androidBackupRequest(tc.method, tc.path, `{"sink":"app","pass":"`+androidBackupTestPass+`"}`, tc.managerKey)
 			if tc.origin != "" {
 				r.Header.Set("Origin", tc.origin)
 			}
 			if tc.site != "" {
 				r.Header.Set("Sec-Fetch-Site", tc.site)
+			}
+			if tc.referer != "" {
+				r.Header.Set("Referer", tc.referer)
+			}
+			if tc.fetchMode != "" {
+				r.Header.Set("Sec-Fetch-Mode", tc.fetchMode)
 			}
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, r)
@@ -322,16 +331,21 @@ func TestAndroidHostBackupAppSinkKeepsCookieOriginAndPathGuards(t *testing.T) {
 			}
 		})
 	}
+	r := androidBackupRequest("POST", "/api/backup/export", `{"sink":"app","pass":"`+androidBackupTestPass+`"}`, "")
+	r.AddCookie(&http.Cookie{Name: "magpie_web_3430", Value: androidBackupTestManagerKey})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized || w.Header().Get("Set-Cookie") != "" {
+		t.Fatal("manager cookie authenticated Android-host backup")
+	}
 	if files := androidBackupFiles(t, home); len(files) != 0 || len(windows.opened) != 0 {
 		t.Fatal("a rejected request exported a file")
 	}
-	r := androidBackupRequest("POST", "/api/backup/export", `{"sink":"app","pass":"`+androidBackupTestPass+`","library":false,"memory":false}`, androidBackupTestCookie)
-	r.Header.Set("Origin", "http://127.0.0.1:3430")
-	r.Header.Set("Sec-Fetch-Site", "same-origin")
-	w := httptest.NewRecorder()
+	r = androidBackupRequest("POST", "/api/backup/export", `{"sink":"app","pass":"`+androidBackupTestPass+`","library":false,"memory":false}`, androidBackupTestManagerKey)
+	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
-		t.Fatalf("same-origin cookie-authenticated download was refused: HTTP %d", w.Code)
+		t.Fatalf("native manager-authenticated download was refused: HTTP %d", w.Code)
 	}
 	if _, err := backup.Open(w.Body.Bytes(), androidBackupTestPass); err != nil {
 		t.Fatal("authenticated download did not return the official format", err)
@@ -348,7 +362,7 @@ func TestAndroidHostBackupFailuresAreNotDownloadAttachments(t *testing.T) {
 		`{"sink":"../../outside","pass":"` + androidBackupTestPass + `"}`,
 	} {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, androidBackupRequest("POST", "/api/backup/export", body, androidBackupTestCookie))
+		h.ServeHTTP(w, androidBackupRequest("POST", "/api/backup/export", body, androidBackupTestManagerKey))
 		if w.Code != http.StatusBadRequest || w.Header().Get("Content-Disposition") != "" ||
 			w.Header().Get("Content-Type") != "application/json" || w.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("backup error became a downloadable file: HTTP %d", w.Code)

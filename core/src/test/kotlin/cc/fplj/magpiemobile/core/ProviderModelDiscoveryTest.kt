@@ -180,7 +180,7 @@ class ProviderModelDiscoveryTest {
         val rpc = api.requests.single { it.path.endsWith("/models") }
         assertEquals("POST", rpc.method)
         assertEquals(setOf("chat"), Json.parseToJsonElement(rpc.body).jsonObject.keys)
-        assertEquals(api.credential.cookieHeader(), rpc.cookie)
+        assertEquals(api.credential.managerHeaderValue(), rpc.managerHeader)
         assertNull(rpc.authorization)
         assertNull(rpc.query)
         assertNull(rpc.origin)
@@ -218,7 +218,7 @@ class ProviderModelDiscoveryTest {
             else assertEquals(JsonPrimitive(requestedPin.trim()), body["serverPin"])
             assertEquals(if (requestedPin == null) setOf("chat", "key") else setOf("chat", "key", "serverPin"), body.keys)
             assertEquals("POST", rpc.method)
-            assertEquals(api.credential.cookieHeader(), rpc.cookie)
+            assertEquals(api.credential.managerHeaderValue(), rpc.managerHeader)
             assertNull(rpc.query)
             assertNull(rpc.authorization)
             assertNull(rpc.origin)
@@ -422,7 +422,7 @@ class ProviderModelDiscoveryTest {
             assertEquals(JsonPrimitive(pin), temporary.requestBody()["serverPin"])
         } finally { release.countDown(); assertTrue(done.await(2, TimeUnit.SECONDS)) }
     }
-    @Test fun readonlyRedirectsNeverFollowOrLeakManagerCookieOrKeyToAnotherPort() {
+    @Test fun readonlyRedirectsNeverFollowOrLeakManagerHeaderOrKeyToAnotherPort() {
         ProviderApiFixture().use { target ->
             for (status in listOf(302, 303, 307, 308)) {
                 api.modelsHook = { exchange, _ ->

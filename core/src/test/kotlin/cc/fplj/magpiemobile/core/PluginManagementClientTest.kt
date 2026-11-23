@@ -223,7 +223,7 @@ private class PluginApiFixture {
     data class Request(
         val method: String,
         val path: String,
-        val cookie: String?,
+        val managerHeader: String?,
         val body: String,
         val contentLength: String?,
     )
@@ -249,12 +249,12 @@ private class PluginApiFixture {
                 val request = Request(
                     exchange.requestMethod,
                     exchange.requestURI.path + if (exchange.requestURI.rawQuery.isNullOrEmpty()) "" else "?" + exchange.requestURI.rawQuery,
-                    exchange.requestHeaders.getFirst("Cookie"),
+                    exchange.requestHeaders.getFirst(BoundedCoreHttp.ANDROID_MANAGER_HEADER),
                     body,
                     exchange.requestHeaders.getFirst("Content-Length"),
                 )
                 requests.add(request)
-                if (request.cookie != credential.cookieHeader()) {
+                if (request.managerHeader != credential.managerHeaderValue()) {
                     respond(exchange, 401, "untrusted auth error $MANAGER_KEY")
                 } else {
                     val handler = handlers[request.method + " " + exchange.requestURI.path]

@@ -77,7 +77,7 @@ internal class ProviderPanelHttpPeer(
     fun assertHealthy() {
         check(failure.get() == null) { "Loopback provider fixture encountered an unexpected request or transport failure" }
         check(requests.all { it.authenticated && !it.hasAuthorization && !it.hasOrigin }) {
-            "Provider management requests must use the fixture's own cookie and no gateway authorization"
+            "Provider management requests must use the fixture's own manager header and no gateway authorization"
         }
     }
 
@@ -115,7 +115,7 @@ internal class ProviderPanelHttpPeer(
         }
         val request = Request(
             method = first[0], path = first[1], body = bytes.toString(Charsets.UTF_8),
-            authenticated = headers["cookie"] == credential.cookieHeader(),
+            authenticated = headers["x-magpie-android-manager"] == credential.managerHeaderValue() && headers["cookie"] == null,
             hasAuthorization = headers["authorization"] != null, hasOrigin = headers["origin"] != null,
         )
         requests.add(request)

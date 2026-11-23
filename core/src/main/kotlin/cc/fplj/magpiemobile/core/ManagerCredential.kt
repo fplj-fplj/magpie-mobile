@@ -1,16 +1,15 @@
 package cc.fplj.magpiemobile.core
 
-/** A process-only MAGPIE_WEB_KEY. Never use this credential on the gateway. */
+/** Process-only Android-host manager credential. Never use it on the model gateway. */
 class ManagerCredential private constructor(
-    val cookieName: String,
-    private val cookieValue: String,
+    private val value: String,
     val port: Int,
 ) {
-    /** Explicit native requests use the correct cookie directly; no sign-in redirect is needed. */
-    fun cookieHeader(): String = "$cookieName=$cookieValue"
+    /** Android-host management calls send this only to the exact loopback GUI endpoint. */
+    fun managerHeaderValue(): String = value
 
     /** Compatibility display: never exposes the complete key. */
-    fun redacted(): String = cookieName + "=" + cookieValue.take(4) + "…"
+    fun redacted(): String = "manager@127.0.0.1:$port=" + value.take(4) + "…"
     override fun toString(): String = redacted()
 
     companion object {
@@ -20,16 +19,7 @@ class ManagerCredential private constructor(
             require(key.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it in "-._~" }) {
                 "管理 key 含非法字符"
             }
-            return ManagerCredential("magpie_web_$port", key, port)
-        }
-
-        /** Kept for existing callers/tests; the name must have a canonical, valid port. */
-        fun create(cookieName: String, cookieValue: String): ManagerCredential {
-            val suffix = cookieName.removePrefix("magpie_web_")
-            val port = suffix.toIntOrNull()
-            require(cookieName.startsWith("magpie_web_") && port != null &&
-                port in 1..65535 && suffix == port.toString()) { "管理 cookie 名无效" }
-            return fromKey(cookieValue, port)
+            return ManagerCredential(key, port)
         }
     }
 }

@@ -3,8 +3,10 @@ package cc.fplj.magpiemobile
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -35,12 +37,21 @@ internal fun SessionHistoryDialog(
     viewModel: ChatViewModel,
 ) {
     Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = MaterialTheme.shapes.large) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 560.dp)
+                .fillMaxHeight(0.9f),
+            shape = MaterialTheme.shapes.large,
+        ) {
+            Column(
+                Modifier.fillMaxSize().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text("历史会话（本机）", style = MaterialTheme.typography.titleMedium)
                 var editingId by remember { mutableStateOf<String?>(null) }
                 var editTitle by remember { mutableStateOf("") }
-                LazyColumn(Modifier.fillMaxWidth().height(360.dp)) {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                     items(state.conversations, key = { it.id }) { conversation ->
                         val isEditing = editingId == conversation.id && !conversation.legacy
                         if (isEditing) {
@@ -74,7 +85,7 @@ internal fun SessionHistoryDialog(
                         TextButton(enabled = idle, onClick = viewModel::moreConversations) { Text("加载更多会话") }
                     }
                 }
-                TextButton(onClick = onDismiss) { Text("关闭") }
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
             }
         }
     }

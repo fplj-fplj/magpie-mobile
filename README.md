@@ -2,6 +2,14 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
+## 最新候选：0.1.65-editor-session（等待 Actions 完整验收）
+
+0.1.65 尚未发布，当前可用版本仍为 0.1.64。候选改动和验收边界见 [0.1.65 记录](docs/bugfixes-0.1.65.md)。
+
+- Android 宿主管理 API 改用原生请求头和浏览器 session proof，避免管理密钥通过跨端口共享的 Cookie 暴露。
+- 修复浅色对比度、短屏历史弹窗、提供商页签及模型分组读屏状态；插件登录敏感字段的复制会标记为敏感。
+- Release 附件上传后重新核验同提交 Validation，旧版本恢复默认不替换 Latest，增加受保护的 Release 清理脚本。
+
 ## 当前已验证版本：0.1.64-reasoning-aliases
 
 - **流式思考别名**：部分 OpenAI 兼容中转把思考增量放在 `delta.reasoning` 而不是 `delta.reasoning_content`。聊天与连通测试现在兼容两种字段；同一事件中优先使用非空的 `reasoning_content`，避免重复显示。别名沿用原有思考长度限制，思考与正文分开保存，不会进入下一轮上下文。`a589171` 的 JVM 1,137 项、Android 23 项及完整 Go 与插件验收通过，正式签名包已与公开 Release 逐字节核对，详见 [0.1.64 验收记录](docs/bugfixes-0.1.64.md)。
@@ -39,6 +47,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/bugfixes-0.1.65.md](docs/bugfixes-0.1.65.md) | 管理凭据隔离、敏感剪贴板、界面可访问性与发布防护候选 |
 | [docs/bugfixes-0.1.64.md](docs/bugfixes-0.1.64.md) | 流式 `reasoning` 别名、重复思考防护、预算与上下文边界 |
 | [docs/bugfixes-0.1.63.md](docs/bugfixes-0.1.63.md) | 官方加密备份的浏览器下载桥接、真实文件往返与正式发布 |
 | [docs/bugfixes-0.1.62.md](docs/bugfixes-0.1.62.md) | 聊天分页与跨会话草稿隔离、系统敏感剪贴板及完整验收／正式发布 |
@@ -88,7 +97,7 @@
 
 ## 安全边界
 
-完整核心继承 Android 宿主的鉴权与进程管理适配。管理 3430 Cookie 与网关 3425 Bearer 隔离；同 UID 插件不是沙箱。官方配置 API 已开放，退出、重启与原生升级由 Android 宿主负责。原生基础 OpenAI 兼容编辑使用 canonical/HMAC revision/严格锁/原子保存；浏览器和原生写入共用锁与版本检查。
+完整核心继承 Android 宿主的鉴权与进程管理适配。Android 宿主管理 API 使用独立原生请求头与浏览器 session proof；网关 3425 只使用 Bearer。同 UID 插件不是沙箱。官方配置 API 已开放，退出、重启与原生升级由 Android 宿主负责。原生基础 OpenAI 兼容编辑使用 canonical/HMAC revision/严格锁/原子保存；浏览器和原生写入共用锁与版本检查。
 
 ## 验证与操作
 
