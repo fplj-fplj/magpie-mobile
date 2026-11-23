@@ -110,7 +110,7 @@ class BrowserBackupInstrumentedTest {
                         rejectBrowserFirstRun()
                         device.currentPackageName == CHROME && device.hasObject(By.res(CHROME, "url_bar"))
                     }
-                    confirmOfficialPage(CLEAN_ENTRY_URL)
+                    confirmOfficialPage(entryUrl(CLEAN_ENTRY))
                     cleanRedirectObserved = true
                     safeHierarchy("browser-backup-clean-entry.xml")
 
@@ -163,11 +163,11 @@ class BrowserBackupInstrumentedTest {
                     phase = "reopening_official_import_for_correct_phrase"
                     // Chrome can keep the form alive while hiding its complete
                     // accessibility subtree. Reopen the official clean page in
-                    // a fresh real-browser tab, then choose the same public
-                    // download again. No export, alternate URI, JS, or API
-                    // import is used.
-                    openFreshOfficialTab()
-                    openSyncSettings().click()
+                    // a fresh real-browser tab at its supported Settings deep
+                    // link, then choose the same public download again. This is
+                    // the official page URL, not a ticket, JS, or API import.
+                    openFreshOfficialTab(CLEAN_SYNC_ENTRY)
+                    confirmOfficialSyncContent()
                     openWebForm(IMPORT_OPEN, expectedPasswords = 1)
                     clickWebControl(CHOOSE)
                     chooseActualDownload(requireNotNull(downloaded))
@@ -186,8 +186,7 @@ class BrowserBackupInstrumentedTest {
                     assertPrivateArchivesUnchanged(privateArchiveBaseline)
                     // The successful import may have removed the content tree.
                     // Open a fresh tab before taking the final evidence.
-                    openFreshOfficialTab()
-                    openSyncSettings().click()
+                    openFreshOfficialTab(CLEAN_SYNC_ENTRY)
                     confirmOfficialSyncContent()
                     safeHierarchy("browser-backup-restored.xml")
                     // Import replaces the form; never capture a password form or a ticket URL.
@@ -321,7 +320,7 @@ class BrowserBackupInstrumentedTest {
             !device.hasObject(By.res(CHROME, "signin_fre_dismiss_button")), FailureReason.BROWSER_SETUP_REQUIRED)
     }
 
-    private fun openFreshOfficialTab() {
+    private fun openFreshOfficialTab(entry: String = CLEAN_ENTRY) {
         rejectBrowserFirstRun()
         accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
         // A failed import can leave the current tab alive but permanently omit
@@ -340,9 +339,9 @@ class BrowserBackupInstrumentedTest {
             chromeNavigationField()?.isFocused == true
         }
         val focused = requireNotNull(chromeNavigationField())
-        focused.setText(CLEAN_ENTRY)
+        focused.setText(entry)
         await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            CLEAN_ENTRY_URL.matches(chromeNavigationField()?.text?.trim().orEmpty())
+            entryUrl(entry).matches(chromeNavigationField()?.text?.trim().orEmpty())
         }
         accept(device.pressKeyCode(KeyEvent.KEYCODE_ENTER),
             FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
@@ -368,6 +367,12 @@ class BrowserBackupInstrumentedTest {
             }
         }
         confirmOfficialPageContent()
+        if (entry == CLEAN_SYNC_ENTRY) confirmOfficialSyncContent()
+    }
+
+    private fun entryUrl(entry: String): Regex = when (entry) {
+        CLEAN_SYNC_ENTRY -> Regex("(?:http://)?127\\.0\\.0\\.1:3430/?\\?view=settings&tab=sync")
+        else -> Regex("(?:http://)?127\\.0\\.0\\.1:3430/?(?:\\?view=providers)?")
     }
 
     private fun confirmOfficialPageContent() {
@@ -1425,6 +1430,7 @@ class BrowserBackupInstrumentedTest {
         private const val B_URL = "https://changed.example.invalid/v1"
         private const val B_MODEL = "backup-after"
         private const val CLEAN_ENTRY = "http://127.0.0.1:3430/"
+        private const val CLEAN_SYNC_ENTRY = "http://127.0.0.1:3430/?view=settings&tab=sync"
         private const val WRONG_PHRASE_ERROR = "wrong passphrase, or the file was changed"
         private val SETTINGS = listOf("Settings", "设置")
         // The fixed official .warm-tabs CSS applies text-transform: uppercase;
@@ -1442,7 +1448,6 @@ class BrowserBackupInstrumentedTest {
         // Both gates reject tickets, extra parameters, fragments and other origins.
         // CoreManagementClient independently rejects userinfo before the production ACTION_VIEW;
         // Chrome's editing formatter is not evidence of userinfo absence.
-        private val CLEAN_ENTRY_URL = Regex("(?:http://)?127\\.0\\.0\\.1:3430/?(?:\\?view=providers)?")
         private val SAFE_BASENAME = Regex("magpie(?: \\([0-9]+\\))?\\.magpie-backup")
         private val HASH_LINE = Regex("([0-9a-fA-F]{64})[ \\t]+(.+)")
         private val MISSING_DOWNLOAD_DIRECTORY = Regex("find: '?/sdcard/Download'?: No such file or directory")
