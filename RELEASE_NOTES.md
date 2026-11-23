@@ -1,3 +1,12 @@
+## Magpie-Mobile 0.1.64-reasoning-aliases（流式思考别名）
+
+- 修复部分 OpenAI 兼容中转在 SSE `delta` 中使用 `reasoning` 而不是 `reasoning_content` 时，聊天思考预览与连通测试丢弃思考内容的问题。
+- 同一事件同时出现两个思考字段时优先采用 `reasoning_content`，不会把镜像内容重复拼接；缺失、`null`、空串或非字符串主字段可安全回退到 `reasoning` 别名。
+- 别名与主字段共用思考及组合字符预算，非字符串值不进入正文或思考；取消回调仍停止同一事件的正文派发。思考继续独立保存，不进入下一轮模型上下文。
+- 新增 10 项核心回归，覆盖纯别名、混合字段、空白增量、重复防护、非法类型、超限、取消，以及真实 SSE 持久化和下一轮请求隔离。所有编译与运行测试继续由 GitHub Actions 完成；只有同提交完整 Validation 通过后才发布。
+
+versionCode 65，metadata appVersion `0.1.64`；核心保持 `0.1.3781-androidhost.3`。
+
 ## Magpie-Mobile 0.1.63-browser-backup-bridge（官方加密备份文件桥接）
 
 - 官方备份导出增加 `sink: "app"`，直接返回官方 Seal 生成的密文字节；不写应用私有的 Downloads，不接受任意文件路径。空目标和 `downloads` 继续使用原桌面行为，官方导入格式不变。
@@ -5,7 +14,8 @@
 - 新增 8 项 Go 顶层回归，覆盖加密、密钥与备份选项、官方导入、鉴权／路径限制及真实网页模块的 Node 行为；GitHub Actions 为该回归固定 Node 22。本机不运行测试或编译。
 - 同代码提交的完整 Validation 已通过：JVM core 645＋app 482＝1,127 项，Android API 35 x86_64 23 项，Go/plugin/forward/RPC/TLS/race 均零失败、错误或跳过。
 - 独立真实浏览器验收通过：从生产按钮进入 Chrome，官方网页导出到公共 Downloads，DocumentsUI 选回同一文件；错误口令保留配置 B，正确口令恢复 A，三次检查均未创建应用私有备份档案，公开下载哈希保持不变。最终 Sync 页面截图与脱敏 XML 已归档。
-- 验收证据：Actions run `44974211901`，生产代码 `26639e1ed74ca60a2d4cd46b7374affeaa628dc8`，下载文件 1,124 bytes、SHA-256 `5eb497d76db3a62fcb91972fe8f75338565d78c34281b56ec607e3871229098a`。原生 SAF 占位入口仍不在本版范围内；详情见 `docs/bugfixes-0.1.63.md`。
+- 验收证据：Validation run `44975487599`，最终源码 `f187e8faf80cd4471769cc65f551430216370529`；真实浏览器 run `44975723246`，下载文件 1,124 bytes、SHA-256 `adb96dd2aac3d6f6a65f408b630d33f23fef52e55a925a307cf51c6b3c6f7442`。原生 SAF 占位入口仍不在本版范围内；详情见 `docs/bugfixes-0.1.63.md`。
+- 正式 Release `v0.1.63-browser-backup-bridge-f187e8fa` 的公开 APK 为 103,617,244 bytes、SHA-256 `4407a4a9a0a192de81c6cb5370b2ff33ee5580a99cc3f55ffa5305db210db3ac`，与 checksum、GitHub asset digest 及 Actions 签名产物逐字节一致。
 
 versionCode 64，metadata appVersion `0.1.63`；核心 `0.1.3781-androidhost.3`。所有编译和运行测试均由 GitHub Actions 完成。
 

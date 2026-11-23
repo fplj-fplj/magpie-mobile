@@ -61,8 +61,10 @@ Python patch fixture 同时核对新增补丁与平台常量的打包约束。Go
 
 入口票据只有 30 秒；首次欢迎／默认应用弹窗不得消耗本机票据后再以注入 cookie 补救。API35 作用域存储下使用测试 shell 只读观察公共文件，不给正式 App 增加全盘存储权限。非标准备份扩展名能否通过浏览器 input 及系统选择器选回，也须实测。
 
-最终真实往返为 Actions run `44974211901`、harness 提交 `8e211f24b0483cf9cf8ac584b510c1b62421cfad`，结果为 `status=PASS`、`phase=passed`：`wrongPhraseStatePreserved=true`、`correctPhraseStateRestored=true`、`privateArchiveChecks=3`，公共文件保持 1,124 bytes，SHA-256 为 `5eb497d76db3a62fcb91972fe8f75338565d78c34281b56ec607e3871229098a`。最终 Sync 页面脱敏 XML 与截图均已核验，验收过程未使用 JS 注入、合成文件、直接 import RPC 或私有路径绕行。
+最终真实往返为 Actions run `44975723246`、harness 提交 `a079fe006a285bbb8e19a6822e5d31baa6d85690`，使用最终源码 `f187e8faf80cd4471769cc65f551430216370529`。结果为 `status=PASS`、`phase=passed`：`wrongPhraseStatePreserved=true`、`correctPhraseStateRestored=true`、`privateArchiveChecks=3`，公共文件为 1,124 bytes，SHA-256 为 `adb96dd2aac3d6f6a65f408b630d33f23fef52e55a925a307cf51c6b3c6f7442`。最终 Sync 页面脱敏 XML 与截图均已核验，验收过程未使用 JS 注入、合成文件、直接 import RPC 或私有路径绕行。
 
 ## 发布状态
 
-代码提交 `26639e1` 的签名候选构建 `44974804808` 已通过固定证书、ARM64-only 载荷、嵌入核心、版本字段和运行时探测检查。正式发布仍要求文档收尾提交自身的完整 Validation、签名构建和发布门禁全部通过；任何环境缺失、文件未落盘、无法被选择或未恢复配置都必须明确失败，不 skip 后宣称可用。
+最终源码 `f187e8faf80cd4471769cc65f551430216370529` 的 Validation run `44975487599` 完整通过：JVM core 645／app 482，共 1,127 项；Android API 35 x86_64 的 23 项；Go mobile／AndroidHost、参数转发、RPC／TLS、官方与社区插件、Hooks／MCP／SSE 及 race 均通过，实际报告中的失败、错误和跳过均为零。
+
+正式构建 run `44976834215` 的 build 与 publish 均成功，发布门禁重新核对了上述同提交 Validation。Release `v0.1.63-browser-backup-bridge-f187e8fa` 已公开并成为 Latest，恰好包含 APK、checksum、build-info 与 mobile-core-build-info 四项附件。公开 APK 为 103,617,244 bytes、SHA-256 `4407a4a9a0a192de81c6cb5370b2ff33ee5580a99cc3f55ffa5305db210db3ac`，与 checksum、GitHub asset digest、Actions 签名产物逐字节一致；固定证书、ARM64-only 载荷、Go／Bun ELF、内嵌核心、版本字段和源码标记均已静态核对。
