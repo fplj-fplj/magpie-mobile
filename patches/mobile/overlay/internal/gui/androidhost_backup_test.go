@@ -429,8 +429,14 @@ func TestAndroidHostBackupBootFlagIsRestrictedToAndroidHostBrowser(t *testing.T)
 		{"native desktop window", &androidBackupWindows{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			page := Handler(tc.win, nil)
+			h := androidHostEditor("3430", androidEditorTestKey, 0, nil, page)
+			link, _ := mintAndroidEditorTicket(t, h)
+			proof := exchangeAndroidEditorTicket(t, h, link)
 			w := httptest.NewRecorder()
-			Handler(tc.win, nil).ServeHTTP(w, httptest.NewRequest("GET", "/boot.js", nil))
+			boot := androidEditorRequest(http.MethodGet, "/boot.js", "")
+			boot.Header.Set(androidEditorProofHeader, proof)
+			h.ServeHTTP(w, boot)
 			if w.Code != http.StatusOK {
 				t.Fatalf("boot failed: HTTP %d", w.Code)
 			}

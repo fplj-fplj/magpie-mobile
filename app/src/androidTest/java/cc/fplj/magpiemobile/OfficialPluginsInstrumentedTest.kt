@@ -1895,18 +1895,23 @@ class OfficialPluginsInstrumentedTest {
     private fun assertSensitivePluginClipboard(field: androidx.test.uiautomator.BySelector) {
         val input = device.findObject(field)
         input.longClick()
-        val selectAll = By.textMatches("(?i)select all|全选")
-        assertTrue("Plugin credential field did not expose Select all",
-            device.wait(Until.hasObject(selectAll), 5_000))
-        device.findObject(selectAll).click()
-        val copy = By.textMatches("(?i)copy|复制")
-        assertTrue("Plugin credential field did not expose Copy",
-            device.wait(Until.hasObject(copy), 5_000))
-        device.findObject(copy).click()
+        findClipboardMenuItem("Select all", "全选").click()
+        findClipboardMenuItem("Copy", "复制").click()
         val clipboard = checkNotNull(context.getSystemService(android.content.ClipboardManager::class.java))
         assertTrue("Plugin credential copy must carry Android's sensitive marker",
             clipboard.primaryClipDescription?.extras?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE, false) == true)
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("", ""))
+    }
+
+    private fun findClipboardMenuItem(english: String, chinese: String): UiObject2 {
+        val englishSelector = By.text(english)
+        if (device.wait(Until.hasObject(englishSelector), 5_000)) {
+            return checkNotNull(device.findObject(englishSelector))
+        }
+        val chineseSelector = By.text(chinese)
+        assertTrue("Plugin credential field did not expose $english/$chinese",
+            device.wait(Until.hasObject(chineseSelector), 5_000))
+        return checkNotNull(device.findObject(chineseSelector))
     }
 
     private class LocalUpstream : Closeable {

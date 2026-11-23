@@ -20,3 +20,5 @@
 Release 上传附件后在公开前重新核验精确同 SHA 的 Validation run/attempt；Latest 标记会在发布前后与 GitHub 实际状态对照，旧版恢复默认不抢 Latest。新增需显式保留 tag、dry-run 与二次确认的 Release 对象清理脚本；清理不删除 Git tag。
 
 本版版本号 `0.1.65-editor-session`，versionCode 66，核心 `0.1.3781-androidhost.4`。所有构建和运行测试仅由 GitHub Actions 执行，通过完整验证前不会发布。
+
+候选 `287400e39bef75d1d7f5edfc0865ae20cd9aec23` 的首轮 Validation `45248885240` 未通过：Android 测试因 UiAutomator 不支持的正则文本选择器而未能编译；Go 启动清单回归以未认证方式请求受保护的 `/boot.js`。已修正测试选择器及 Go 测试夹具，未改变应用运行逻辑；修正提交仍需通过新的完整 Validation 和真实浏览器验收。
