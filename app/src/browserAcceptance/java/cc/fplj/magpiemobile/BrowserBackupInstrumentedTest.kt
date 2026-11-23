@@ -493,7 +493,16 @@ class BrowserBackupInstrumentedTest {
             if (now >= nextClickAt) {
                 accept(clickAttempts < 4, FailureReason.SYNC_TAB_NOT_REACHED)
                 clickAttempts += 1
-                namedControl(CHROME, SETTINGS)?.click()
+                val settingsButtons = webNodes { node ->
+                    node.className?.toString() == "android.widget.Button" && node.isEnabled && node.isClickable &&
+                        node.text?.toString() in SETTINGS
+                }
+                try {
+                    accept(settingsButtons.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
+                    settingsButtons.singleOrNull()?.let { tryClickWebNode(it) }
+                } finally {
+                    settingsButtons.forEach { it.recycle() }
+                }
                 nextClickAt = now + 2_000
             }
             false
