@@ -329,9 +329,8 @@ class BrowserBackupInstrumentedTest {
         device.pressBack()
         await(30_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
             device.currentPackageName == context.packageName &&
-                device.hasObject(By.res(context.packageName, "gateway-power-switch"))
+                device.hasObject(By.res("provider-row:$FIXTURE_ID"))
         }
-        clickNamed(context.packageName, listOf("提供商"))
         revealNativeBrowserButton().click()
         await(30_000, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED) {
             rejectBrowserFirstRun()
