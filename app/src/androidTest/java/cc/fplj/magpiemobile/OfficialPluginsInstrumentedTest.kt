@@ -2,7 +2,6 @@ package cc.fplj.magpiemobile
 
 import android.content.Intent
 import android.graphics.Rect
-import android.content.ClipDescription
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.view.accessibility.AccessibilityNodeInfo
