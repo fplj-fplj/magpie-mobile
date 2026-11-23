@@ -325,10 +325,36 @@ class BrowserBackupInstrumentedTest {
         accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
         // The browser proof lives in tab-scoped sessionStorage. Keep using
         // this tab instead of opening a new tab, which would lose that proof.
-        accept(device.pressKeyCode(KeyEvent.KEYCODE_R, KeyEvent.META_CTRL_ON),
-            FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
+        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
+            device.currentPackageName == CHROME && chromeNavigationField() != null
+        }
+        requireNotNull(chromeNavigationField()).click()
+        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
+            chromeNavigationField()?.isFocused == true
+        }
+        requireNotNull(chromeNavigationField()).setText(CLEAN_ENTRY)
+        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
+            CLEAN_ENTRY_URL.matches(chromeNavigationField()?.text?.trim().orEmpty())
+        }
+        accept(device.pressKeyCode(KeyEvent.KEYCODE_ENTER), FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
         await(30_000, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED) {
             device.currentPackageName == CHROME && webViewOrNull() != null
+        }
+        dismissWebImeOnce()
+        var backPresses = 0
+        var nextBackAt = 0L
+        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
+            val field = chromeNavigationField()
+            val suggestionsVisible = device.hasObject(By.res(CHROME, "omnibox_suggestions_dropdown"))
+            if (field != null && !field.isFocused && !suggestionsVisible) true else {
+                val now = SystemClock.elapsedRealtime()
+                if ((field?.isFocused == true || suggestionsVisible) && backPresses < 2 && now >= nextBackAt) {
+                    device.pressBack()
+                    backPresses += 1
+                    nextBackAt = SystemClock.elapsedRealtime() + 1_000
+                }
+                false
+            }
         }
         confirmOfficialPageContent()
     }
