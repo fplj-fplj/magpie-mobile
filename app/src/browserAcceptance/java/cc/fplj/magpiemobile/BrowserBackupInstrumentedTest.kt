@@ -115,8 +115,7 @@ class BrowserBackupInstrumentedTest {
                     safeHierarchy("browser-backup-clean-entry.xml")
 
                     phase = "opening_official_sync_settings"
-                    clickNamed(CHROME, SETTINGS)
-                    revealSyncTab().click()
+                    openSyncSettings().click()
                     openWebForm(EXPORT_OPEN, expectedPasswords = 2)
                     phase = "exporting_via_official_web_form"
                     setRealPasswordFields(listOf(phrase, phrase))
@@ -168,8 +167,7 @@ class BrowserBackupInstrumentedTest {
                     // download again. No export, alternate URI, JS, or API
                     // import is used.
                     openFreshOfficialTab()
-                    clickNamed(CHROME, SETTINGS)
-                    revealSyncTab().click()
+                    openSyncSettings().click()
                     openWebForm(IMPORT_OPEN, expectedPasswords = 1)
                     clickWebControl(CHOOSE)
                     chooseActualDownload(requireNotNull(downloaded))
@@ -189,8 +187,7 @@ class BrowserBackupInstrumentedTest {
                     // The successful import may have removed the content tree.
                     // Open a fresh tab before taking the final evidence.
                     openFreshOfficialTab()
-                    clickNamed(CHROME, SETTINGS)
-                    revealSyncTab().click()
+                    openSyncSettings().click()
                     confirmOfficialSyncContent()
                     safeHierarchy("browser-backup-restored.xml")
                     // Import replaces the form; never capture a password form or a ticket URL.
@@ -465,12 +462,17 @@ class BrowserBackupInstrumentedTest {
         }
     }
 
-    private fun revealSyncTab(): UiObject2 {
+    private fun openSyncSettings(): UiObject2 {
         // The pinned phone layout wraps its tabs; it has no horizontal tab scroller.
         // Chrome's native tab text need not equal its DOM label. Match that static
         // label only inside the unique real Settings TabWidget, never page-wide.
+        // On a freshly opened Chrome tab the first click can land during WebView
+        // restoration and be dropped. Confirm navigation through the tab itself,
+        // then retry the visible Settings button a bounded number of times.
         var tab: UiObject2? = null
-        await(15_000, FailureReason.SYNC_TAB_NOT_REACHED) {
+        var clickAttempts = 0
+        var nextClickAt = 0L
+        await(30_000, FailureReason.SYNC_TAB_NOT_REACHED) {
             accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
             val document = webViewOrNull()
             val lists = SETTINGS.flatMap { name ->
@@ -485,7 +487,16 @@ class BrowserBackupInstrumentedTest {
             }.orEmpty()
             accept(matches.size <= 1, FailureReason.AMBIGUOUS_ACCESSIBLE_CONTROL)
             tab = matches.singleOrNull()
-            tab != null
+            if (tab != null) return@await true
+
+            val now = SystemClock.elapsedRealtime()
+            if (now >= nextClickAt) {
+                accept(clickAttempts < 4, FailureReason.SYNC_TAB_NOT_REACHED)
+                clickAttempts += 1
+                namedControl(CHROME, SETTINGS)?.click()
+                nextClickAt = now + 2_000
+            }
+            false
         }
         return requireNotNull(tab)
     }
