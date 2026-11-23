@@ -162,10 +162,10 @@ class BrowserBackupInstrumentedTest {
 
                     phase = "reopening_official_import_for_correct_phrase"
                     // Chrome can keep the form alive while hiding its complete
-                    // accessibility subtree. Reload the official page in the
-                    // same real-browser tab so its sessionStorage proof remains
-                    // available, then choose the same public download again.
-                    reopenOfficialTab()
+                    // accessibility subtree. Return to the Android app and
+                    // open a fresh one-use browser ticket through the real
+                    // production button before choosing the same public file.
+                    reopenOfficialEditorFromApp()
                     openSyncSettings().click()
                     openWebForm(IMPORT_OPEN, expectedPasswords = 1)
                     clickWebControl(CHOOSE)
@@ -184,8 +184,9 @@ class BrowserBackupInstrumentedTest {
                     assertDownloadUnchanged()
                     assertPrivateArchivesUnchanged(privateArchiveBaseline)
                     // The successful import may have removed the content tree.
-                    // Reload this proof-bearing tab before final evidence.
-                    reopenOfficialTab()
+                    // Reopen the editor through the production ticket flow for
+                    // final page evidence.
+                    reopenOfficialEditorFromApp()
                     openSyncSettings().click()
                     confirmOfficialSyncContent()
                     safeHierarchy("browser-backup-restored.xml")
@@ -320,43 +321,24 @@ class BrowserBackupInstrumentedTest {
             !device.hasObject(By.res(CHROME, "signin_fre_dismiss_button")), FailureReason.BROWSER_SETUP_REQUIRED)
     }
 
-    private fun reopenOfficialTab() {
+    private fun reopenOfficialEditorFromApp() {
         rejectBrowserFirstRun()
         accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
-        // The browser proof lives in tab-scoped sessionStorage. Keep using
-        // this tab instead of opening a new tab, which would lose that proof.
-        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            device.currentPackageName == CHROME && chromeNavigationField() != null
+        // ACTION_VIEW sits above the Android app. Back closes the external
+        // browser surface and lets the app mint a fresh one-use ticket.
+        accept(device.pressBack(), FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
+        await(30_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
+            device.currentPackageName == context.packageName &&
+                device.hasObject(By.res(context.packageName, "gateway-power-switch"))
         }
-        requireNotNull(chromeNavigationField()).click()
-        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            chromeNavigationField()?.isFocused == true
-        }
-        requireNotNull(chromeNavigationField()).setText(CLEAN_ENTRY)
-        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            CLEAN_ENTRY_URL.matches(chromeNavigationField()?.text?.trim().orEmpty())
-        }
-        accept(device.pressKeyCode(KeyEvent.KEYCODE_ENTER), FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
+        clickNamed(context.packageName, listOf("提供商"))
+        revealNativeBrowserButton().click()
         await(30_000, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED) {
-            device.currentPackageName == CHROME && webViewOrNull() != null
+            rejectBrowserFirstRun()
+            device.currentPackageName == CHROME &&
+                chromeNavigationField() != null && webViewOrNull() != null
         }
-        dismissWebImeOnce()
-        var backPresses = 0
-        var nextBackAt = 0L
-        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            val field = chromeNavigationField()
-            val suggestionsVisible = device.hasObject(By.res(CHROME, "omnibox_suggestions_dropdown"))
-            if (field != null && !field.isFocused && !suggestionsVisible) true else {
-                val now = SystemClock.elapsedRealtime()
-                if ((field?.isFocused == true || suggestionsVisible) && backPresses < 2 && now >= nextBackAt) {
-                    device.pressBack()
-                    backPresses += 1
-                    nextBackAt = SystemClock.elapsedRealtime() + 1_000
-                }
-                false
-            }
-        }
-        confirmOfficialPageContent()
+        confirmOfficialPage(CLEAN_ENTRY_URL)
     }
 
     private fun confirmOfficialPageContent() {
@@ -1413,7 +1395,6 @@ class BrowserBackupInstrumentedTest {
         private const val B_NAME = "Browser backup modified"
         private const val B_URL = "https://changed.example.invalid/v1"
         private const val B_MODEL = "backup-after"
-        private const val CLEAN_ENTRY = "http://127.0.0.1:3430/"
         private const val WRONG_PHRASE_ERROR = "wrong passphrase, or the file was changed"
         private val SETTINGS = listOf("Settings", "设置")
         private val CLEAN_ENTRY_URL = Regex("(?:http://)?127\\.0\\.0\\.1:3430/?(?:\\?view=providers)?")
