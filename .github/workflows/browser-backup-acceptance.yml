@@ -1,0 +1,254 @@
+name: Browser backup acceptance
+
+# No release job or publication permission. This does not replace Validation.
+on:
+  workflow_dispatch:
+  push:
+    branches: [browser-backup-acceptance-65-final4]
+    paths:
+      - .github/workflows/browser-backup-acceptance.yml
+      - .github/workflows/browser-backup-probe.yml
+      - scripts/run-browser-backup-acceptance.sh
+      - scripts/browser-backup-probe.py
+      - app/src/browserAcceptance/**
+
+permissions:
+  contents: read
+
+jobs:
+  real-browser-backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    env:
+      PINNED_CANDIDATE_SOURCE_SHA: 9cdab250d543054740058581ce2629171491461d
+      EXPECTED_CORE_VERSION: 0.1.3781-androidhost.4
+      PINNED_UPSTREAM_SHA: b52c711142a662fe18fedf5a80cb1e4aa94bce62
+    steps:
+      - name: Seed evidence and require the isolated acceptance branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          export BROWSER_ACCEPTANCE_OUTPUT="${RUNNER_TEMP:?}/browser-backup-acceptance"
+          mkdir -p "$BROWSER_ACCEPTANCE_OUTPUT"
+          printf 'BROWSER_ACCEPTANCE_OUTPUT=%s\n' "$BROWSER_ACCEPTANCE_OUTPUT" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import datetime, json, os
+          from pathlib import Path
+          result = {
+              "schemaVersion": 1, "status": "NOT_RUN", "testsPassed": False,
+              "candidateSourceSHA": os.environ["PINNED_CANDIDATE_SOURCE_SHA"],
+              "harnessSourceSHA": os.environ["GITHUB_SHA"],
+              "expectedCoreVersion": os.environ["EXPECTED_CORE_VERSION"],
+              "upstreamSourceSHA": os.environ["PINNED_UPSTREAM_SHA"],
+              "actionsRunId": os.environ["GITHUB_RUN_ID"],
+              "actionsRunAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "actionsRunURL": os.environ["GITHUB_SERVER_URL"] + "/" + os.environ["GITHUB_REPOSITORY"] + "/actions/runs/" + os.environ["GITHUB_RUN_ID"],
+              "startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "scope": "Independent real-browser acceptance only; no release publication.",
+          }
+          (Path(os.environ["BROWSER_ACCEPTANCE_OUTPUT"]) / "workflow-summary.json").write_text(json.dumps(result, indent=2) + "\n")
+          PY
+          test "$GITHUB_REF" = refs/heads/browser-backup-acceptance-65-final4
+
+      - name: Check out the exact acceptance harness commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Lock production source and stage the opt-in test byte for byte
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, shutil, subprocess
+          from pathlib import Path
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+          base = os.environ["PINNED_CANDIDATE_SOURCE_SHA"]
+          head = git("rev-parse", "HEAD")
+          if head != os.environ["GITHUB_SHA"] or git("status", "--porcelain"):
+              raise SystemExit("Exact clean harness checkout required")
+          subprocess.run(["git", "merge-base", "--is-ancestor", base, head], check=True)
+          allowed = {
+              ".github/workflows/browser-backup-acceptance.yml", ".github/workflows/browser-backup-probe.yml",
+              "scripts/run-browser-backup-acceptance.sh", "scripts/browser-backup-probe.py",
+              "app/src/browserAcceptance/java/cc/fplj/magpiemobile/BrowserBackupInstrumentedTest.kt",
+          }
+          changed = set(filter(None, git("diff", "--name-only", base, head).splitlines()))
+          if changed - allowed:
+              raise SystemExit("Production source differs from the frozen core .4 candidate")
+          expected = os.environ["EXPECTED_CORE_VERSION"]
+          if expected not in Path("app/build.gradle.kts").read_text() or "main.version=" + expected not in Path("scripts/build-android-test-runtime.sh").read_text():
+              raise SystemExit("Expected Android host .4 build contract missing")
+          source = Path("app/src/browserAcceptance/java/cc/fplj/magpiemobile/BrowserBackupInstrumentedTest.kt")
+          target = Path("app/src/androidTest/java/cc/fplj/magpiemobile/BrowserBackupInstrumentedTest.kt")
+          if not source.is_file() or target.exists():
+              raise SystemExit("Opt-in source missing or already exposed to the ordinary test suite")
+          target.parent.mkdir(parents=True, exist_ok=True)
+          shutil.copyfile(source, target)
+          if target.read_bytes() != source.read_bytes():
+              raise SystemExit("Instrumentation staging changed the test source")
+          paths = [str(source), "scripts/browser-backup-probe.py", "scripts/run-browser-backup-acceptance.sh",
+                   "patches/mobile/manifest.json", "scripts/build-android-test-runtime.sh", "app/build.gradle.kts"]
+          provenance = {
+              "candidateSourceSHA": base, "harnessSourceSHA": head, "candidateAncestorConfirmed": True,
+              "productionSourceUnchanged": True, "changedHarnessPaths": sorted(changed),
+              "expectedCoreVersion": expected, "upstreamSourceSHA": os.environ["PINNED_UPSTREAM_SHA"],
+              "testClass": "cc.fplj.magpiemobile.BrowserBackupInstrumentedTest", "testCopiedByteForByte": True,
+              "sourceSHA256": {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths},
+          }
+          (Path(os.environ["BROWSER_ACCEPTANCE_OUTPUT"]) / "candidate-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+          PY
+
+      - name: Check out the fixed upstream core
+        uses: actions/checkout@v4
+        with:
+          repository: yetone/magpie
+          ref: b52c711142a662fe18fedf5a80cb1e4aa94bce62
+          path: build-tmp/upstream
+          persist-credentials: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Identify Android compiler version
+        id: ndk
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk_root="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          test -n "$ndk_root"
+          printf 'version=%s\n' "$(basename "$ndk_root")" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the same exact payload cache used by Validation
+        id: test-core-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build-tmp/magpie-mobile-android-x86_64
+            build-tmp/test-core-x86_64.sha256
+            build-tmp/test-core-x86_64-build-info.txt
+            build-tmp/bun-x86_64.zip
+          key: ${{ runner.os }}-androidhost-x86_64-go1.26.8-ndk${{ steps.ndk.outputs.version }}-b52c7111-${{ hashFiles('patches/mobile/**', 'scripts/apply-mobile-core.py', 'scripts/build-android-test-runtime.sh') }}
+
+      - uses: actions/setup-go@v5
+        if: steps.test-core-cache.outputs.cache-hit != 'true'
+        with:
+          go-version-file: build-tmp/upstream/go.mod
+          cache-dependency-path: build-tmp/upstream/go.sum
+
+      - name: Prepare and verify the Android host .4 test payloads
+        shell: bash
+        env:
+          MAGPIE_TEST_CORE_CACHE_HIT: ${{ steps.test-core-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          python3 scripts/apply-mobile-core.py --source-root build-tmp/upstream
+          bash scripts/build-android-test-runtime.sh build-tmp/upstream
+          sha256sum -c build-tmp/test-core-x86_64.sha256
+          # Trimmed Go module metadata omits the -X value; the real .3 version
+          # is asserted through the installed core's production capabilities RPC.
+          grep -F -- '-tags=nogui,androidhost' build-tmp/test-core-x86_64-build-info.txt > /dev/null
+          mkdir -p "$BROWSER_ACCEPTANCE_OUTPUT/payloads"
+          cp build-tmp/test-core-x86_64.sha256 build-tmp/test-core-x86_64-build-info.txt "$BROWSER_ACCEPTANCE_OUTPUT/payloads/"
+          sha256sum build-tmp/bun-x86_64.zip > "$BROWSER_ACCEPTANCE_OUTPUT/payloads/bun-archive.sha256"
+
+      - name: Save verified test payloads on an exact cache miss
+        if: steps.test-core-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build-tmp/magpie-mobile-android-x86_64
+            build-tmp/test-core-x86_64.sha256
+            build-tmp/test-core-x86_64-build-info.txt
+            build-tmp/bun-x86_64.zip
+          key: ${{ steps.test-core-cache.outputs.cache-primary-key }}
+
+      - name: Build the isolated test APK and inspect its real payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Compressing the Go/Bun ELF payloads exhausted the default 2 GiB heap.
+          # This pre-emulator packaging process is bounded independently of the AVD.
+          gradle :app:assembleDebug :app:assembleDebugAndroidTest -PmagpieTestAbi=x86_64 -Dorg.gradle.jvmargs=-Xmx4g --max-workers=2 --no-daemon --stacktrace --build-cache
+          python3 scripts/runtimeprobe.py --apk app/build/outputs/apk/debug/app-debug.apk --abi x86_64 | tee "$BROWSER_ACCEPTANCE_OUTPUT/payloads/android-runtime-probe.txt"
+          sha256sum app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk > "$BROWSER_ACCEPTANCE_OUTPUT/payloads/test-apks.sha256"
+
+      - name: Require KVM access
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm
+          sudo chmod 666 /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+
+      - name: Prepare Chrome then run only the real backup acceptance class
+        id: emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          # The probe validates this name; force creation and no snapshots still
+          # provide a fresh, disposable AVD with its profile preserved between stages.
+          avd-name: browser-probe-google_apis
+          force-avd-creation: true
+          emulator-port: 5554
+          emulator-boot-timeout: 600
+          disable-linux-hw-accel: false
+          disable-animations: true
+          emulator-options: -accel on -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-back none
+          script: bash scripts/run-browser-backup-acceptance.sh
+
+      - name: Finalize the acceptance outcome even after a setup failure
+        if: always()
+        shell: bash
+        env:
+          EMULATOR_OUTCOME: ${{ steps.emulator.outcome }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime, json, os
+          from pathlib import Path
+          output = Path(os.environ["RUNNER_TEMP"]) / "browser-backup-acceptance"
+          output.mkdir(parents=True, exist_ok=True)
+          def read(name):
+              try:
+                  return json.loads((output / name).read_text())
+              except (OSError, ValueError):
+                  return {}
+          summary, execution = read("workflow-summary.json"), read("execution.json")
+          passed = execution.get("status") == "PASS" and os.environ["EMULATOR_OUTCOME"] == "success"
+          summary.update(status="PASS" if passed else "FAIL", testsPassed=passed,
+                         emulatorOutcome=os.environ["EMULATOR_OUTCOME"], executionStatus=execution.get("status", "NOT_RUN"),
+                         finishedAt=datetime.datetime.now(datetime.timezone.utc).isoformat())
+          (output / "workflow-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as report:
+              report.write("### Real browser backup acceptance\n\n")
+              report.write("- Status: `" + summary["status"] + "`\n")
+              report.write("- Candidate source: `" + os.environ["PINNED_CANDIDATE_SOURCE_SHA"] + "`\n")
+              report.write("- Harness source: `" + os.environ["GITHUB_SHA"] + "`\n")
+              report.write("- Run: `" + os.environ["GITHUB_RUN_ID"] + "`\n")
+              report.write("- Scope: isolated browser round trip; no release is published.\n")
+          if not passed:
+              raise SystemExit(1)
+          PY
+
+      - name: Always upload preparation and sanitized acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-backup-acceptance-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/browser-backup-acceptance/
+          if-no-files-found: error
+          retention-days: 7
