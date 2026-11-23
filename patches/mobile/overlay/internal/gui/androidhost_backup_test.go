@@ -434,9 +434,9 @@ func TestAndroidHostBackupBootFlagIsRestrictedToAndroidHostBrowser(t *testing.T)
 			link, _ := mintAndroidEditorTicket(t, h)
 			proof := exchangeAndroidEditorTicket(t, h, link)
 			w := httptest.NewRecorder()
-			boot := androidEditorRequest(http.MethodGet, "/boot.js", "")
-			boot.Header.Set(androidEditorProofHeader, proof)
-			h.ServeHTTP(w, boot)
+			bootRequest := androidEditorRequest(http.MethodGet, "/boot.js", "")
+			bootRequest.Header.Set(androidEditorProofHeader, proof)
+			h.ServeHTTP(w, bootRequest)
 			if w.Code != http.StatusOK {
 				t.Fatalf("boot failed: HTTP %d", w.Code)
 			}
