@@ -48,7 +48,7 @@ jobs:
           }
           (Path(os.environ["BROWSER_ACCEPTANCE_OUTPUT"]) / "workflow-summary.json").write_text(json.dumps(result, indent=2) + "\n")
           PY
-          test "$GITHUB_REF" = refs/heads/browser-backup-acceptance
+          test "$GITHUB_REF" = refs/heads/browser-backup-acceptance-65
 
       - name: Check out the exact acceptance harness commit
         uses: actions/checkout@v4
