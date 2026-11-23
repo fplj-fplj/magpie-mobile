@@ -319,7 +319,7 @@ class OfficialPluginsInstrumentedTest {
                     assertTrue(device.wait(Until.hasObject(loginEditor), 10_000))
                     device.findObject(loginEditor).click()
                     device.findObject(loginEditor).text = "synthetic-ui-key"
-                    assertSensitivePluginClipboard(loginEditor)
+                    assertPluginPasswordClipboardIsolation(loginEditor)
                     device.pressBack()
                     device.findObject(By.text("保存并连接")).click()
                     assertTrue(device.wait(Until.hasObject(By.text("连接成功")), 20_000))
@@ -1892,17 +1892,18 @@ class OfficialPluginsInstrumentedTest {
         } finally { connection.disconnect() }
     }
 
-    private fun assertSensitivePluginClipboard(field: androidx.test.uiautomator.BySelector) {
+    private fun assertPluginPasswordClipboardIsolation(field: androidx.test.uiautomator.BySelector) {
+        val clipboard = checkNotNull(context.getSystemService(android.content.ClipboardManager::class.java))
+        val sentinel = "clipboard-sentinel"
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("sentinel", sentinel))
         val input = device.findObject(field)
         input.longClick()
         findClipboardMenuItem("Select all", "全选").click()
-        // Android dismisses the floating toolbar after Select all. Reopen it
-        // on the selected credential before invoking the actual Copy action.
-        device.findObject(field).longClick()
-        findClipboardMenuItem("Copy", "复制").click()
-        val clipboard = checkNotNull(context.getSystemService(android.content.ClipboardManager::class.java))
-        assertTrue("Plugin credential copy must carry Android's sensitive marker",
-            clipboard.primaryClipDescription?.extras?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE, false) == true)
+        // PasswordTransformation intentionally does not expose a system Copy
+        // action. Verify the attempt leaves the existing clipboard untouched.
+        assertFalse("Password field must not offer a plaintext Copy action",
+            device.wait(Until.hasObject(By.text("Copy")), 500))
+        assertEquals(sentinel, clipboard.primaryClip?.getItemAt(0)?.text?.toString())
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("", ""))
     }
 
