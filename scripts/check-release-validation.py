@@ -133,13 +133,23 @@ def latest_run(api, base, repository, sha, workflow_id):
             created = datetime.datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
             if created.tzinfo is None:
                 raise ValueError()
+            # GitHub preserves created_at when an old run is rerun. The new
+            # attempt's run_started_at is the relevant ordering signal; a run
+            # which has not started yet still orders by its creation time.
+            started_text = run.get("run_started_at")
+            started = (datetime.datetime.fromisoformat(started_text.replace("Z", "+00:00"))
+                       if started_text else created)
+            if started.tzinfo is None:
+                raise ValueError()
         except (KeyError, AttributeError, TypeError, ValueError):
-            raise ValidationError("Validation run creation time is missing or invalid") from None
-        candidates.append((created, run["id"], run))
+            raise ValidationError("Validation run timestamp is missing or invalid") from None
+        candidates.append((started, run["run_attempt"], run["id"], run))
     if not candidates:
         raise ValidationError("No trusted Validation run exists for this exact commit")
     # Never search for a successful run: a newer failed/pending run must win.
-    return max(candidates, key=lambda entry: entry[:2])[2]
+    # The most recently started attempt wins, even when it belongs to an older
+    # run record. Attempt and run id make equal timestamps deterministic.
+    return max(candidates, key=lambda entry: entry[:3])[3]
 
 
 def require_success(run):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline release API fixtures: publication happens only after asset verification."""
+"""Offline fixtures for assets, final Validation, and guarded Latest publication."""
 import copy
 import hashlib
 import importlib.util
@@ -17,15 +17,18 @@ publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
 REPOSITORY, SHA, VERSION = "release-fixture/magpie-mobile", "a" * 40, "0.1.0-fixture"
 BASE, TAG = "/repos/" + REPOSITORY, f"v{VERSION}-{SHA[:8]}"
+_AUTO_LATEST = object()
 
 
 class FakeApi:
-    def __init__(self, expected, draft=None, existing=None):
+    def __init__(self, expected, draft=None, existing=None, latest=_AUTO_LATEST):
         self.expected = expected
         self.release = None if draft is None else {
             "id": 77, "tag_name": TAG, "target_commitish": SHA, "draft": draft,
             "prerelease": False, "name": "Keep this title", "body": "Keep these notes",
         }
+        self.latest = (copy.deepcopy(self.release) if latest is _AUTO_LATEST and draft is False
+                       else None if latest is _AUTO_LATEST else copy.deepcopy(latest))
         self.tag = {"type": "commit", "sha": SHA} if draft is not None else None
         self.assets = copy.deepcopy(existing or [])
         self.annotations, self.calls = {}, []
@@ -37,6 +40,8 @@ class FakeApi:
         parsed = urlsplit(path)
         route = parsed.path
         if method == "GET":
+            if route == BASE + "/releases/latest":
+                return None if self.latest is None else copy.deepcopy(self.latest)
             if route == BASE + "/releases/tags/" + TAG or route == BASE + "/releases/77":
                 return copy.deepcopy(self.release)
             if route == BASE + "/git/ref/tags/" + TAG:
@@ -84,6 +89,10 @@ class FakeApi:
                 raise AssertionError("Must not change an existing public release")
             publisher.verify_assets(self.assets, self.expected)
             self.release.update(payload)
+            if payload.get("make_latest") == "true":
+                self.latest = copy.deepcopy(self.release)
+            elif self.latest is not None and self.latest.get("id") == self.release["id"]:
+                self.latest = None
             return copy.deepcopy(self.release)
         raise AssertionError("Unexpected release API call: " + method + " " + path)
 
@@ -101,14 +110,26 @@ class ReleasePublicationTest(unittest.TestCase):
         core.parent.mkdir(parents=True)
         core.write_text("fixed core evidence")
         self.expected = publisher.collect_assets(VERSION, self.root)
+        self.validation_calls = 0
+        self.validation_result = {"run_id": 10, "attempt": 1}
+        self.validation_error = None
 
     def assets(self):
         return [{"id": index + 1, "name": name, "size": asset["size"],
                  "digest": asset["digest"], "state": "uploaded"}
                 for index, (name, asset) in enumerate(self.expected.items())]
 
-    def publish(self, api):
-        return publisher.publish_release(api, REPOSITORY, SHA, VERSION, "verified notes", self.expected)
+    def validation(self):
+        self.validation_calls += 1
+        if self.validation_error is not None:
+            raise self.validation_error
+        return copy.deepcopy(self.validation_result)
+
+    def publish(self, api, make_latest=None):
+        return publisher.publish_release(
+            api, REPOSITORY, SHA, VERSION, "verified notes", self.expected,
+            expected_validation=(10, 1), validation_check=self.validation,
+            make_latest=make_latest)
 
     def assert_no_mutation(self, api):
         self.assertTrue(all(method == "GET" for method, _, _ in api.calls))
@@ -122,11 +143,108 @@ class ReleasePublicationTest(unittest.TestCase):
         self.assertFalse(api.release["draft"])
         self.assertFalse(api.release["prerelease"])
         self.assertEqual("true", api.release["make_latest"])
+        self.assertEqual(1, self.validation_calls)
         last_upload = max(index for index, (method, path, _) in enumerate(api.calls)
                           if method == "POST" and "/assets?" in path)
         publication = next(index for index, (method, _, _) in enumerate(api.calls) if method == "PATCH")
         self.assertTrue(any(method == "GET" and "/assets?" in path
                             for method, path, _ in api.calls[last_upload + 1:publication]))
+
+    def test_final_validation_runs_after_uploads_and_immediately_before_publication(self):
+        api = FakeApi(self.expected)
+        validation_ids = []
+        api_calls_before_validation = []
+
+        def validation():
+            self.assertTrue(any(method == "POST" and "/assets?" in path
+                                for method, path, _ in api.calls))
+            self.assertFalse(any(method == "PATCH" for method, _, _ in api.calls))
+            validation_ids.append((10, 1))
+            api_calls_before_validation.append(len(api.calls))
+            return {"run_id": 10, "attempt": 1}
+
+        publisher.publish_release(
+            api, REPOSITORY, SHA, VERSION, "verified notes", self.expected,
+            expected_validation=(10, 1), validation_check=validation)
+        self.assertEqual([(10, 1)], validation_ids)
+        publication = next(index for index, (method, _, _) in enumerate(api.calls)
+                           if method == "PATCH")
+        self.assertEqual(api_calls_before_validation, [publication])
+
+    def test_changed_or_failed_final_validation_leaves_release_as_draft(self):
+        cases = (
+            ({"run_id": 11, "attempt": 1}, None),
+            (None, publisher.validation_gate.ValidationError("new Validation failed")),
+        )
+        for result, error in cases:
+            with self.subTest(result=result, error=type(error).__name__ if error else None):
+                self.validation_calls = 0
+                self.validation_result = result
+                self.validation_error = error
+                api = FakeApi(self.expected)
+                with self.assertRaises(publisher.PublicationError):
+                    self.publish(api)
+                self.assertTrue(api.release["draft"])
+                self.assert_not_published(api)
+                self.assertEqual(1, self.validation_calls)
+
+    def test_older_recovery_never_replaces_current_latest(self):
+        newer_latest = {
+            "id": 88, "tag_name": "v0.1.1-newer-release", "draft": False,
+            "prerelease": False,
+        }
+        api = FakeApi(self.expected, latest=newer_latest)
+        self.publish(api)
+        self.assertEqual("false", api.release["make_latest"])
+        self.assertEqual(newer_latest, api.latest)
+        self.assertEqual(1, self.validation_calls)
+
+    def test_concurrent_latest_change_during_upload_keeps_candidate_draft(self):
+        api = FakeApi(self.expected)
+        api.after_upload = lambda peer: setattr(peer, "latest", {
+            "id": 88, "tag_name": "v0.1.1-newer-release", "draft": False,
+            "prerelease": False,
+        })
+        with self.assertRaisesRegex(publisher.PublicationError, "Latest changed"):
+            self.publish(api)
+        self.assertTrue(api.release["draft"])
+        self.assert_not_published(api)
+
+    def test_explicit_latest_override_is_passed_through(self):
+        newer_latest = {
+            "id": 88, "tag_name": "v9.9.9-newer-release", "draft": False,
+            "prerelease": False,
+        }
+        api = FakeApi(self.expected, latest=newer_latest)
+        self.publish(api, make_latest=True)
+        self.assertEqual("true", api.release["make_latest"])
+        self.assertEqual(api.release, api.latest)
+
+    def test_keep_current_requires_an_existing_latest(self):
+        api = FakeApi(self.expected, latest=None)
+        with self.assertRaises(publisher.PublicationError):
+            self.publish(api, make_latest=False)
+        self.assertTrue(all(method == "GET" for method, _, _ in api.calls))
+
+    def test_equal_version_at_different_commit_does_not_replace_latest(self):
+        equal_latest = {
+            "id": 88, "tag_name": "v0.1.0-existing", "draft": False,
+            "prerelease": False,
+        }
+        api = FakeApi(self.expected, latest=equal_latest)
+        self.publish(api)
+        self.assertEqual("false", api.release["make_latest"])
+        self.assertEqual(equal_latest, api.latest)
+
+    def test_validation_url_identity_is_exact(self):
+        url = f"https://github.com/{REPOSITORY}/actions/runs/123/attempts/2"
+        self.assertEqual((123, 2), publisher.validation_url_identity(url, REPOSITORY))
+        for invalid in (
+                url + "/extra",
+                url.replace("github.com", "example.com"),
+                f"https://github.com/another/repo/actions/runs/123/attempts/2"):
+            with self.subTest(url=invalid), self.assertRaises(publisher.PublicationError):
+                publisher.validation_url_identity(invalid, REPOSITORY)
 
     def test_partial_upload_leaves_draft_and_retry_reuses_matching_assets(self):
         api = FakeApi(self.expected)
@@ -160,6 +278,23 @@ class ReleasePublicationTest(unittest.TestCase):
         self.assertIn("left unchanged", self.publish(api)[1])
         self.assertEqual(before, api.release)
         self.assert_no_mutation(api)
+        self.assertEqual(1, self.validation_calls)
+
+    def test_public_idempotent_path_requires_non_prerelease_and_expected_latest_state(self):
+        cases = []
+
+        prerelease = FakeApi(self.expected, draft=False, existing=self.assets())
+        prerelease.release["prerelease"] = True
+        cases.append(prerelease)
+
+        not_latest = FakeApi(self.expected, draft=False, existing=self.assets(), latest=None)
+        cases.append(not_latest)
+
+        for api in cases:
+            with self.subTest(pre=api.release["prerelease"], latest=api.latest):
+                with self.assertRaises(publisher.PublicationError):
+                    self.publish(api)
+                self.assert_no_mutation(api)
 
     def test_public_asset_missing_extra_wrong_name_size_digest_or_state_refuses_changes(self):
         for problem in ("missing", "extra", "name", "size", "digest", "state"):
@@ -235,7 +370,9 @@ class ReleasePublicationTest(unittest.TestCase):
                 changed = dict(self.expected)
                 changed["unexpected.txt"] = changed.pop(original)
                 with self.assertRaises(publisher.PublicationError):
-                    publisher.publish_release(api, REPOSITORY, SHA, VERSION, "notes", changed)
+                    publisher.publish_release(
+                        api, REPOSITORY, SHA, VERSION, "notes", changed,
+                        expected_validation=(10, 1), validation_check=self.validation)
         self.assertEqual([], api.calls)
 
     def test_network_errors_do_not_echo_token_or_response_content(self):

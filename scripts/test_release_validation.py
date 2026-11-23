@@ -31,6 +31,7 @@ def run_record(run_id=10, attempt=1, status="completed", conclusion="success"):
         "name": "Validation", "head_sha": SHA, "event": "push",
         "status": status, "conclusion": conclusion, "run_attempt": attempt,
         "created_at": created.isoformat(),
+        "run_started_at": created.isoformat(),
         "repository": {"id": 7, "full_name": REPOSITORY},
         "head_repository": {"id": 7, "full_name": REPOSITORY},
     }
@@ -44,7 +45,8 @@ def job_record(name, job_id=1, run_id=10, attempt=1):
 class FakeApi:
     def __init__(self, runs=None, detail=None, jobs=None, final_runs=None):
         self.runs = copy.deepcopy(runs if runs is not None else [run_record()])
-        selected = max(self.runs, key=lambda run: (run["created_at"], run["id"]))
+        selected = max(self.runs, key=lambda run: (run.get("run_started_at") or run["created_at"],
+                                                   run["run_attempt"], run["id"]))
         self.detail = copy.deepcopy(detail if detail is not None else selected)
         self.jobs = copy.deepcopy(jobs if jobs is not None else [
             job_record("regression", run_id=self.detail["id"], attempt=self.detail["run_attempt"]),
@@ -140,6 +142,15 @@ class ReleaseValidationTest(unittest.TestCase):
                 latest = run_record(11, status=status, conclusion=conclusion)
                 # Deliberately put the older success last to catch order assumptions.
                 self.blocked(FakeApi(runs=[latest, run_record()]))
+
+    def test_rerun_of_older_created_run_becomes_latest_by_attempt_start_time(self):
+        older_rerun = run_record(10, attempt=2, conclusion="failure")
+        newer_created = run_record(11, attempt=1, conclusion="success")
+        older_rerun["run_started_at"] = "2026-01-01T00:30:00+00:00"
+        newer_created["run_started_at"] = "2026-01-01T00:20:00+00:00"
+        # The failed rerun is deliberately listed after a newer-created success.
+        api = FakeApi(runs=[older_rerun, newer_created], detail=older_rerun)
+        self.blocked(api)
 
     def test_non_successful_completed_run_is_rejected(self):
         for conclusion in (None, "skipped", "neutral", "timed_out", "action_required"):
@@ -257,6 +268,7 @@ class ReleaseValidationTest(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True), patch.object(gate, "GitHubApi", return_value=FakeApi()), \
                  patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 self.assertEqual(0, gate.main())
+            self.assertIn("run_id=10\n", output.read_text())
             self.assertIn("attempt=1\n", output.read_text())
             self.assertIn("/actions/runs/10/attempts/1", output.read_text())
             self.assertNotIn(env["GH_TOKEN"], stdout.getvalue() + output.read_text())

@@ -14,10 +14,19 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: Publish this verified signed APK as the Latest GitHub Release
+        description: Publish this verified signed APK as a GitHub Release
         required: true
         default: false
         type: boolean
+      latest_mode:
+        description: Latest behavior when publishing
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - latest
+          - keep-current
 
 concurrency:
   group: magpie-mobile-${{ github.ref }}
@@ -81,6 +90,7 @@ jobs:
           python3 scripts/test_apk_signature.py
           python3 scripts/test_release_validation.py
           python3 scripts/test_release_publication.py
+          python3 scripts/test_cleanup_releases.py
           python3 scripts/test-device-stability.py
 
       - name: Apply hash-pinned Android host adaptation
@@ -195,7 +205,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VALIDATION_URL: ${{ steps.validation.outputs.url }}
+          VALIDATION_RUN_ID: ${{ steps.validation.outputs.run_id }}
           VALIDATION_ATTEMPT: ${{ steps.validation.outputs.attempt }}
+          LATEST_MODE: ${{ inputs.latest_mode }}
         run: |
           set -euo pipefail
           version_name=$(grep -E 'versionName\s*=\s*' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
@@ -204,6 +216,7 @@ jobs:
           cp release-artifacts/app/build/outputs/apk/release/app-release.apk "$apk_name"
           sha256sum "$apk_name" | tee "${apk_name}.sha256"
           printf 'Commit: %s\nSource: b52c711142a662fe18fedf5a80cb1e4aa94bce62\nCore: 0.1.3781-androidhost.3 (nogui,androidhost; official plugins)\nActions run: %s/%s/actions/runs/%s\nPublication: manually approved via workflow_dispatch publish_release=true\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
+          printf 'Latest mode: %s\n' "$LATEST_MODE" >> build-info.txt
           cat release-artifacts/build-tmp/mobile-core.sha256 release-artifacts/build-tmp/apk-signature.txt >> build-info.txt
           printf 'Validation: %s\nValidation attempt: %s (regression and runtime-emulator completed successfully)\n' "$VALIDATION_URL" "$VALIDATION_ATTEMPT" >> build-info.txt
           notes_file="release-artifacts/release-notes.md"
@@ -213,5 +226,13 @@ jobs:
             printf 'Magpie-Mobile 自动化发布 %s\n提交：%s\n' "$version_name" "$GITHUB_SHA" > "$notes_file"
           fi
           printf '\n构建提交：`%s`\n\n签名与载荷校验通过；同提交最新 Validation 的 regression 与 runtime-emulator 均已完成并通过，发布由人工显式批准。\n\n[构建流程](%s/%s/actions/runs/%s) · [同提交验证结果（具体 attempt）](%s)\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$VALIDATION_URL" >> "$notes_file"
-          python3 scripts/publish-verified-release.py --version "$version_name" --notes-file "$notes_file"
+          latest_args=()
+          case "$LATEST_MODE" in
+            auto) ;;
+            latest) latest_args+=(--make-latest) ;;
+            keep-current) latest_args+=(--no-make-latest) ;;
+            *) printf 'Unsupported latest_mode: %s\n' "$LATEST_MODE" >&2; exit 1 ;;
+          esac
+          python3 scripts/publish-verified-release.py --version "$version_name" --notes-file "$notes_file" \
+            "${latest_args[@]}"
           printf '发布附件已核对 [%s](%s/%s/releases/tag/%s)\n' "$apk_name" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Stage four verified assets in a draft; publish Latest only after API verification."""
+"""Stage verified assets, recheck Validation, then publish the exact draft."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import sys
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
@@ -21,6 +22,19 @@ class PublicationError(Exception):
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+def load_validation_gate():
+    path = Path(__file__).with_name("check-release-validation.py")
+    spec = importlib.util.spec_from_file_location("release_validation_gate", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Validation gate could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+validation_gate = load_validation_gate()
 
 
 class GitHubApi:
@@ -51,11 +65,94 @@ class GitHubApi:
             raise PublicationError("GitHub API request or JSON decoding failed") from None
 
 
+class ValidationApi:
+    def __init__(self, api):
+        self.api = api
+
+    def get(self, path, params=None):
+        if params:
+            path += "?" + urlencode(params)
+        return self.api.request("GET", path)
+
+
 def object_id(record):
     value = record.get("id") if isinstance(record, dict) else None
     if type(value) is not int or value <= 0:
         raise PublicationError("GitHub API returned an invalid object id")
     return value
+
+
+def positive_validation_identity(value):
+    if (not isinstance(value, tuple) or len(value) != 2 or
+            any(type(item) is not int or item <= 0 for item in value)):
+        raise PublicationError("Expected Validation run id and attempt are invalid")
+    return value
+
+
+def validation_url_identity(url, repository):
+    pattern = (r"^https://github\.com/" + re.escape(repository) +
+               r"/actions/runs/([1-9][0-9]*)/attempts/([1-9][0-9]*)$")
+    match = re.fullmatch(pattern, url or "")
+    if match is None:
+        raise PublicationError("VALIDATION_URL is missing or does not identify this repository")
+    return int(match.group(1)), int(match.group(2))
+
+
+def version_key(value):
+    match = re.fullmatch(r"v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+][0-9A-Za-z._-]*)?", value or "")
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def current_latest(api, base):
+    latest = api.request("GET", base + "/releases/latest", missing=True)
+    if latest is None:
+        return None
+    if (not isinstance(latest, dict) or latest.get("draft") is not False or
+            latest.get("prerelease") is not False or not isinstance(latest.get("tag_name"), str)):
+        raise PublicationError("GitHub API returned an invalid Latest release")
+    object_id(latest)
+    return latest
+
+
+def should_promote_latest(latest, version, tag, make_latest):
+    if make_latest is not None:
+        if type(make_latest) is not bool:
+            raise PublicationError("make_latest must be true or false")
+        if make_latest is False and latest is None:
+            raise PublicationError("Cannot preserve Latest because no current Latest exists")
+        return make_latest
+    if latest is None:
+        return True
+    if latest["tag_name"] == tag:
+        return True
+    requested = version_key(version)
+    current = version_key(latest["tag_name"])
+    if requested is None or current is None:
+        raise PublicationError(
+            "Cannot compare release versions with Latest; pass --make-latest or --no-make-latest")
+    # Equal versions at a different commit are not promoted implicitly.
+    return requested > current
+
+
+def verify_latest_state(api, base, release_id, promote_latest):
+    latest = current_latest(api, base)
+    is_latest = latest is not None and object_id(latest) == release_id
+    if promote_latest and not is_latest:
+        raise PublicationError("GitHub did not confirm the published release as Latest")
+    if not promote_latest and is_latest:
+        raise PublicationError("Release unexpectedly replaced Latest")
+
+
+def recheck_validation(api, repository, sha, expected):
+    expected = positive_validation_identity(expected)
+    try:
+        result = validation_gate.verify_validation(ValidationApi(api), repository, sha)
+    except validation_gate.ValidationError as error:
+        raise PublicationError(f"Final Validation recheck failed: {error}") from None
+    actual = positive_validation_identity((result.get("run_id"), result.get("attempt")))
+    if actual != expected:
+        raise PublicationError("Validation run/attempt changed after the build evidence was recorded")
+    return actual
 
 
 def tag_matches(api, base, tag, sha):
@@ -129,16 +226,33 @@ def collect_assets(version, root=Path(".")):
     return result
 
 
-def publish_release(api, repository, sha, version, notes, expected):
+def publish_release(api, repository, sha, version, notes, expected, *,
+                    expected_validation, validation_check=None, make_latest=None):
     if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or
             not re.fullmatch(r"[0-9a-f]{40}", sha) or
             not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version)):
         raise PublicationError("Release repository, commit or version is invalid")
+    expected_validation = positive_validation_identity(expected_validation)
     apk = f"magpie-mobile-{version}.apk"
     if set(expected) != {apk, apk + ".sha256", "build-info.txt", "mobile-core-build-info.txt"}:
         raise PublicationError("Exactly the four fixed release artifact names are required")
     base, tag = "/repos/" + repository, f"v{version}-{sha[:8]}"
     title = f"Magpie-Mobile {version} ({sha[:8]})"
+    latest_before = current_latest(api, base)
+    promote_latest = should_promote_latest(latest_before, version, tag, make_latest)
+
+    def final_validation_check():
+        if validation_check is None:
+            recheck_validation(api, repository, sha, expected_validation)
+            return
+        try:
+            result = validation_check()
+        except validation_gate.ValidationError as error:
+            raise PublicationError(f"Final Validation recheck failed: {error}") from None
+        actual = positive_validation_identity((result.get("run_id"), result.get("attempt")))
+        if actual != expected_validation:
+            raise PublicationError("Validation run/attempt changed after the build evidence was recorded")
+
     release = api.request("GET", base + "/releases/tags/" + quote(tag, safe=""), missing=True)
     has_tag = tag_matches(api, base, tag, sha)
     if release is not None:
@@ -148,8 +262,13 @@ def publish_release(api, repository, sha, version, notes, expected):
         if not release["draft"]:
             if not has_tag:
                 raise PublicationError("Published release tag is missing; refusing to alter the release")
+            if release.get("prerelease") is not False:
+                raise PublicationError("Published release is still marked as a prerelease")
             verify_assets(release_assets(api, base, release_id), expected)
-            return tag, "already public; identical assets verified, release left unchanged"
+            final_validation_check()
+            verify_latest_state(api, base, release_id, promote_latest)
+            latest_outcome = "Latest" if promote_latest else "current Latest preserved"
+            return tag, f"already public; assets and {latest_outcome} verified, release left unchanged"
         if not has_tag and release.get("target_commitish") != sha:
             raise PublicationError("Existing draft targets a different commit")
     if not has_tag:
@@ -190,19 +309,35 @@ def publish_release(api, repository, sha, version, notes, expected):
         raise PublicationError("Release tag disappeared before publication")
     require_draft()
     verify_assets(release_assets(api, base, release_id), expected)
+    latest_now = current_latest(api, base)
+    if (None if latest_now is None else (object_id(latest_now), latest_now["tag_name"])) != (
+            None if latest_before is None else (object_id(latest_before), latest_before["tag_name"])):
+        raise PublicationError("Latest changed while staging the release; retry publication")
+    # This is deliberately the last check after the potentially long attachment
+    # upload and before the public PATCH. A newer or changed Validation blocks.
+    final_validation_check()
     published = api.request("PATCH", base + f"/releases/{release_id}", {
-        "name": title, "body": notes, "draft": False, "prerelease": False, "make_latest": "true",
+        "name": title, "body": notes, "draft": False, "prerelease": False,
+        "make_latest": "true" if promote_latest else "false",
     })
     if (object_id(published) != release_id or published.get("tag_name") != tag or
             published.get("draft") is not False or published.get("prerelease") is not False):
         raise PublicationError("GitHub API did not confirm the requested public release state")
-    return tag, "published Latest after verifying all four assets"
+    verify_latest_state(api, base, release_id, promote_latest)
+    outcome = "published Latest" if promote_latest else "published without replacing Latest"
+    return tag, outcome + " after verifying all four assets"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
     parser.add_argument("--notes-file", required=True, type=Path)
+    parser.add_argument("--validation-run-id", default=os.environ.get("VALIDATION_RUN_ID"))
+    parser.add_argument("--validation-attempt", default=os.environ.get("VALIDATION_ATTEMPT"))
+    parser.add_argument("--validation-url", default=os.environ.get("VALIDATION_URL"))
+    latest = parser.add_mutually_exclusive_group()
+    latest.add_argument("--make-latest", dest="make_latest", action="store_const", const=True)
+    latest.add_argument("--no-make-latest", dest="make_latest", action="store_const", const=False)
     args = parser.parse_args()
     try:
         token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
@@ -210,9 +345,18 @@ def main():
             raise PublicationError("A GitHub token with contents:write is required")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", args.version):
             raise PublicationError("Release version is invalid")
-        tag, outcome = publish_release(GitHubApi(token), os.environ.get("GITHUB_REPOSITORY", ""),
-                                       os.environ.get("GITHUB_SHA", ""), args.version,
-                                       args.notes_file.read_text(), collect_assets(args.version))
+        repository = os.environ.get("GITHUB_REPOSITORY", "")
+        if args.validation_run_id is not None or args.validation_attempt is not None:
+            try:
+                expected_validation = (int(args.validation_run_id), int(args.validation_attempt))
+            except (TypeError, ValueError):
+                raise PublicationError("Validation run id and attempt must both be positive integers") from None
+        else:
+            expected_validation = validation_url_identity(args.validation_url, repository)
+        tag, outcome = publish_release(
+            GitHubApi(token), repository, os.environ.get("GITHUB_SHA", ""), args.version,
+            args.notes_file.read_text(), collect_assets(args.version),
+            expected_validation=expected_validation, make_latest=args.make_latest)
         print(f"PASS: {outcome}: {tag}")
         return 0
     except PublicationError as error:
