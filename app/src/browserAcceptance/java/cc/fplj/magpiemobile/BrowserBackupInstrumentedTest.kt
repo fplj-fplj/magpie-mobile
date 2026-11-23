@@ -337,7 +337,11 @@ class BrowserBackupInstrumentedTest {
             device.currentPackageName == CHROME &&
                 chromeNavigationField() != null && webViewOrNull() != null
         }
-        confirmOfficialPage(CLEAN_ENTRY_URL)
+        // This URL was minted by the real native ACTION_VIEW. Do not inspect
+        // the transient Chrome omnibox here: returning to an existing Chrome
+        // task can skip its current-URL suggestion UI while the official page
+        // and fresh proof-bearing session are already live.
+        confirmOfficialPageContent()
     }
 
     private fun confirmOfficialPageContent() {
