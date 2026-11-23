@@ -145,7 +145,7 @@ jobs:
           go-version-file: build-tmp/upstream/go.mod
           cache-dependency-path: build-tmp/upstream/go.sum
 
-      - name: Prepare and verify the Android host .3 test payloads
+      - name: Prepare and verify the Android host .4 test payloads
         shell: bash
         env:
           MAGPIE_TEST_CORE_CACHE_HIT: ${{ steps.test-core-cache.outputs.cache-hit }}
