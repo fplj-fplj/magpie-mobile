@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ "${GITHUB_ACTIONS:-}" == true ]]
-[[ "${GITHUB_REF:-}" == refs/heads/browser-backup-acceptance-65-final3 ]]
+[[ "${GITHUB_REF:-}" == refs/heads/browser-backup-acceptance-65-final4 ]]
 [[ "${BROWSER_ACCEPTANCE_OUTPUT:?}" == "${RUNNER_TEMP:?}/browser-backup-acceptance" ]]
 mkdir -p "$BROWSER_ACCEPTANCE_OUTPUT"
 
