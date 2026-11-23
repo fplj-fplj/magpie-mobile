@@ -110,7 +110,7 @@ class BrowserBackupInstrumentedTest {
                         rejectBrowserFirstRun()
                         device.currentPackageName == CHROME && device.hasObject(By.res(CHROME, "url_bar"))
                     }
-                    confirmOfficialPage(entryUrl(CLEAN_ENTRY))
+                    confirmOfficialPage(CLEAN_ENTRY_URL)
                     cleanRedirectObserved = true
                     safeHierarchy("browser-backup-clean-entry.xml")
 
@@ -162,12 +162,11 @@ class BrowserBackupInstrumentedTest {
 
                     phase = "reopening_official_import_for_correct_phrase"
                     // Chrome can keep the form alive while hiding its complete
-                    // accessibility subtree. Reopen the official clean page in
-                    // a fresh real-browser tab at its supported Settings deep
-                    // link, then choose the same public download again. This is
-                    // the official page URL, not a ticket, JS, or API import.
-                    openFreshOfficialTab(CLEAN_SYNC_ENTRY)
-                    confirmOfficialSyncContent()
+                    // accessibility subtree. Reload the official page in the
+                    // same real-browser tab so its sessionStorage proof remains
+                    // available, then choose the same public download again.
+                    reopenOfficialTab()
+                    openSyncSettings().click()
                     openWebForm(IMPORT_OPEN, expectedPasswords = 1)
                     clickWebControl(CHOOSE)
                     chooseActualDownload(requireNotNull(downloaded))
@@ -185,8 +184,9 @@ class BrowserBackupInstrumentedTest {
                     assertDownloadUnchanged()
                     assertPrivateArchivesUnchanged(privateArchiveBaseline)
                     // The successful import may have removed the content tree.
-                    // Open a fresh tab before taking the final evidence.
-                    openFreshOfficialTab(CLEAN_SYNC_ENTRY)
+                    // Reload this proof-bearing tab before final evidence.
+                    reopenOfficialTab()
+                    openSyncSettings().click()
                     confirmOfficialSyncContent()
                     safeHierarchy("browser-backup-restored.xml")
                     // Import replaces the form; never capture a password form or a ticket URL.
@@ -320,59 +320,17 @@ class BrowserBackupInstrumentedTest {
             !device.hasObject(By.res(CHROME, "signin_fre_dismiss_button")), FailureReason.BROWSER_SETUP_REQUIRED)
     }
 
-    private fun openFreshOfficialTab(entry: String = CLEAN_ENTRY) {
+    private fun reopenOfficialTab() {
         rejectBrowserFirstRun()
         accept(device.currentPackageName == CHROME, FailureReason.INDEPENDENT_BROWSER_NOT_FOREGROUND)
-        // A failed import can leave the current tab alive but permanently omit
-        // its WebView subtree from Chrome's accessibility hierarchy. Chrome's
-        // native new-tab shortcut gives the next official navigation a clean
-        // browser tab without JavaScript, RPC, or process-state manipulation.
-        accept(device.pressKeyCode(KeyEvent.KEYCODE_T, KeyEvent.META_CTRL_ON),
-            FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
-        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            device.currentPackageName == CHROME &&
-                chromeNavigationField() != null
-        }
-        val bar = requireNotNull(chromeNavigationField())
-        bar.click()
-        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            chromeNavigationField()?.isFocused == true
-        }
-        val focused = requireNotNull(chromeNavigationField())
-        focused.setText(entry)
-        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            entryUrl(entry).matches(chromeNavigationField()?.text?.trim().orEmpty())
-        }
-        accept(device.pressKeyCode(KeyEvent.KEYCODE_ENTER),
+        // The browser proof lives in tab-scoped sessionStorage. Keep using
+        // this tab instead of opening a new tab, which would lose that proof.
+        accept(device.pressKeyCode(KeyEvent.KEYCODE_R, KeyEvent.META_CTRL_ON),
             FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED)
         await(30_000, FailureReason.OFFICIAL_UI_NOT_RECOGNIZED) {
             device.currentPackageName == CHROME && webViewOrNull() != null
         }
-        dismissWebImeOnce()
-        var backPresses = 0
-        var nextBackAt = 0L
-        await(5_000, FailureReason.OFFICIAL_BROWSER_NAVIGATION_REJECTED) {
-            val field = chromeNavigationField()
-            val suggestionsVisible = device.hasObject(By.res(CHROME, "omnibox_suggestions_dropdown"))
-            if (field != null && !field.isFocused && !suggestionsVisible) {
-                true
-            } else {
-                val now = SystemClock.elapsedRealtime()
-                if ((field?.isFocused == true || suggestionsVisible) && backPresses < 2 && now >= nextBackAt) {
-                    device.pressBack()
-                    backPresses += 1
-                    nextBackAt = SystemClock.elapsedRealtime() + 1_000
-                }
-                false
-            }
-        }
         confirmOfficialPageContent()
-        if (entry == CLEAN_SYNC_ENTRY) confirmOfficialSyncContent()
-    }
-
-    private fun entryUrl(entry: String): Regex = when (entry) {
-        CLEAN_SYNC_ENTRY -> Regex("(?:http://)?127\\.0\\.0\\.1:3430/?\\?view=settings&tab=sync")
-        else -> Regex("(?:http://)?127\\.0\\.0\\.1:3430/?(?:\\?view=providers)?")
     }
 
     private fun confirmOfficialPageContent() {
@@ -1429,10 +1387,9 @@ class BrowserBackupInstrumentedTest {
         private const val B_NAME = "Browser backup modified"
         private const val B_URL = "https://changed.example.invalid/v1"
         private const val B_MODEL = "backup-after"
-        private const val CLEAN_ENTRY = "http://127.0.0.1:3430/"
-        private const val CLEAN_SYNC_ENTRY = "http://127.0.0.1:3430/?view=settings&tab=sync"
         private const val WRONG_PHRASE_ERROR = "wrong passphrase, or the file was changed"
         private val SETTINGS = listOf("Settings", "设置")
+        private val CLEAN_ENTRY_URL = Regex("(?:http://)?127\\.0\\.0\\.1:3430/?(?:\\?view=providers)?")
         // The fixed official .warm-tabs CSS applies text-transform: uppercase;
         // retain both static forms within the Settings-only tab selector.
         private val SYNC_TAB = listOf("Sync and backup", "SYNC AND BACKUP", "同步与备份")
