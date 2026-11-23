@@ -23,4 +23,18 @@
 - 模型连通测试 3 项：纯别名响应保留思考详情、双字段不重复且正文独立、超限后仍执行工具检查。
 - 聊天存储与实际 SSE 请求 2 项：思考只提交一次且不进入下一轮请求；取消后不提交答案或重发请求。
 
-候选版本为 `0.1.64-reasoning-aliases`、versionCode 65，metadata appVersion `0.1.64`；核心保持 `0.1.3781-androidhost.3`。本机只做源码、AST 与差异静态检查，不运行 Gradle、Kotlin/JVM、Go、Android、Node 或 Python 测试。只有该提交的完整 GitHub Actions Validation 通过后才触发签名构建与正式发布；失败候选只保留 Actions 产物。
+发布版本为 `0.1.64-reasoning-aliases`、versionCode 65，metadata appVersion `0.1.64`；核心保持 `0.1.3781-androidhost.3`。本机只做源码、AST、产物与差异静态检查，未运行 Gradle、Kotlin/JVM、Go、Android、Node 或 Python 测试。
+
+## 同提交验收
+
+最终源码 `a589171b7534b60f13943f549d4040fd151a470c` 的 Validation `45109998062` 中，`regression` 与 `runtime-emulator` 均完成并成功。实际下载归档核验：
+
+- JVM core 655＋app 482＝1,137 项，零失败、错误或跳过；新增用例的实际名称均在 XML 报告中且结果为通过。
+- Android API 35 x86_64 的 23 项实际仪器用例，零失败、错误或跳过；`android-errors.txt` 为空。
+- Go mobile／AndroidHost、官方与社区插件、参数转发、RPC／TLS、Hooks／MCP／SSE 与 race 证据均通过。
+
+## 正式发布
+
+签名发布 run `45216001353` 的 build 与 publish 均成功，发布门禁重新核对了同提交 Validation。Release `v0.1.64-reasoning-aliases-a589171b` 已公开并成为 Latest，恰好包含 APK、checksum、build-info 与 mobile-core-build-info 四项附件。
+
+公开 APK 为 103,617,320 bytes、SHA-256 `c3b8c92bfb5172dc773447109d776ff9476ac49a32985138eddbfb4c6c89dc8a`，与 checksum、GitHub asset digest 及签名的 Actions artifact 逐字节一致。静态产物检查确认固定证书 `dee1d3f485ee17a6184178eaab318d6333fb8b67e7276146a30a03e1f9ee09d6`、ARM64-only Go／Bun ELF、内嵌核心 `70f21f9308fc8b8e1dce886c919f3fa0f2618d4af62810ad82361ec4b0d79835`、包名、versionName、versionCode 65 和源码标记均符合预期。
