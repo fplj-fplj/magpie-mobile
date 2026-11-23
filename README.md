@@ -6,10 +6,10 @@
 
 - **流式思考别名**：部分 OpenAI 兼容中转把思考增量放在 `delta.reasoning` 而不是 `delta.reasoning_content`。聊天与连通测试现在兼容两种字段；同一事件中优先使用非空的 `reasoning_content`，避免重复显示。别名沿用原有思考长度限制，思考与正文分开保存，不会进入下一轮上下文。`a589171` 的 JVM 1,137 项、Android 23 项及完整 Go 与插件验收通过，正式签名包已与公开 Release 逐字节核对，详见 [0.1.64 验收记录](docs/bugfixes-0.1.64.md)。
 
-## 上一已验证版本：0.1.63-browser-backup-bridge
+## 前一已验证版本：0.1.63-browser-backup-bridge
 
 - **官方加密备份文件桥接**：Android 宿主的官方网页导出直接返回官方 Seal 生成的密文字节，由真实 Chrome 保存到公共 Downloads；系统文件选择器选回同一文件后，错误口令保留配置 B，正确口令恢复 A。最终 `f187e8f` 的 JVM 1,127 项、Android 23 项及完整 Go／插件验收通过，真实浏览器往返、正式签名、载荷、tag、Latest 与四项附件均已核对。详见 [0.1.63 验收记录](docs/bugfixes-0.1.63.md)。
-- **历史版本**：0.1.62-chat-session-clipboard-fixes。删除非当前会话或重命名当前会话时保留聊天旧页、草稿、失败预览与已加载历史范围；删除已提交而读取失败时撤销旧发送上下文。原生密钥和含密钥 cURL 的复制核对连接轮次并设置敏感标记，提供商字段的系统 Copy/Cut 也携带该标记。修复提供商页面 ART 崩溃及启动前取消的忙碌状态收尾，并加固同提交验证与完整附件发布门禁。详见 [0.1.62 验收记录](docs/bugfixes-0.1.62.md)。
+- **历史版本**：0.1.62-chat-session-clipboard-fixes。删除或重命名会话时保留聊天旧页和草稿，跨会话恢复只使用目标会话内容；密钥复制核对连接轮次并带系统敏感标记，提供商页面 ART 崩溃及操作收尾已修复。详见 [0.1.62 验收记录](docs/bugfixes-0.1.62.md)。
 - **历史版本**：0.1.61-session-editor-fixes。同提交 JVM 1,114 项、Android 19 项及完整 Go 与插件验收通过，详见 [0.1.61 记录](docs/bugfixes-0.1.61.md)。
 - **提供商模型摘要**：已保存 `models[].on` 决定“启用 E / 目录 D”，明确区分未保存草稿。0.1.60 的 JVM 1,080 项、Android 10 项及完整 Go／插件验收通过，详见 [0.1.60 验收记录](docs/bugfixes-0.1.60.md)。
 - **自动选择模型的连通测试**：原生候选按已保存列表的实际 `models[].on` 识别，空显式 `chosen` 不再误报无模型。停用、未就绪和明确禁用继续不可测，未保存草稿与发现目录不进入候选，保留真实网关路由核验。详见 [0.1.59 修复与验收记录](docs/bugfixes-0.1.59.md)。
@@ -94,7 +94,7 @@
 
 `Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`；发布门禁还要求同提交最新可信 `Validation` attempt 的 `regression` 与 `runtime-emulator` 均已完成并成功。附件先上传至草稿并核对名称、大小和 SHA-256，再公开为 Latest，已公开版本不覆盖附件或移动 tag。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
-[下载 GitHub Latest 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/latest)。每个正式 Release 都附带 APK 的 SHA-256、构建信息和核心构建信息。当前 0.1.64 APK 为 103,617,320 bytes、SHA-256 `c3b8c92bfb5172dc773447109d776ff9476ac49a32985138eddbfb4c6c89dc8a`。[同提交完整验证](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45109998062/attempts/1)和[签名发布流程](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45216001353)均已通过。正式 APK 提供 `arm64-v8a`，已核对签名与载荷；Android 运行测试在 API 35 x86_64 模拟器上完成。
+[下载 GitHub Latest 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/latest)。0.1.64 的完整验证、签名构建与正式发布均已通过。JVM core 655＋app 482 共 1,137 项、Android API 35 x86_64 的 23 项及 Go／插件验证全部通过。正式 APK 为 103,617,320 bytes，SHA-256 `c3b8c92bfb5172dc773447109d776ff9476ac49a32985138eddbfb4c6c89dc8a`，并已与签名 Actions artifact 逐字节比对。ARM64 包的签名和载荷已核验；Android 运行测试在 x86_64 模拟器上完成。
 
 官方插件完整通过基线仍可通过 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)追溯；对应历史 Release 条目已按清理策略移除，运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 

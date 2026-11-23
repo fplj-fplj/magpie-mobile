@@ -3,7 +3,9 @@
 - 修复部分 OpenAI 兼容中转在 SSE `delta` 中使用 `reasoning` 而不是 `reasoning_content` 时，聊天思考预览与连通测试丢弃思考内容的问题。
 - 同一事件同时出现两个思考字段时优先采用 `reasoning_content`，不会把镜像内容重复拼接；缺失、`null`、空串或非字符串主字段可安全回退到 `reasoning` 别名。
 - 别名与主字段共用思考及组合字符预算，非字符串值不进入正文或思考；取消回调仍停止同一事件的正文派发。思考继续独立保存，不进入下一轮模型上下文。
-- 新增 10 项核心回归，覆盖纯别名、混合字段、空白增量、重复防护、非法类型、超限、取消，以及真实 SSE 持久化和下一轮请求隔离。GitHub Actions 的同提交 Validation `45109998062` 与签名发布流程 `45216001353` 均通过。
+- 新增 10 项核心回归，覆盖纯别名、混合字段、空白增量、重复防护、非法类型、超限、取消，以及真实 SSE 持久化和下一轮请求隔离。
+- 同提交 Validation `45109998062` 已通过：JVM core 655＋app 482 共 1,137 项；Android API 35 x86_64 的 23 项；Go mobile／AndroidHost、核心参数转发、RPC／TLS、官方与社区插件及 race 均通过。
+- 正式 Release `v0.1.64-reasoning-aliases-a589171b` 已成为 Latest。公开 APK 为 103,617,320 bytes，SHA-256 `c3b8c92bfb5172dc773447109d776ff9476ac49a32985138eddbfb4c6c89dc8a`，与 checksum、GitHub digest 和签名 Actions artifact 逐字节一致；固定证书、ARM64 载荷、版本与核心均已核验。
 
 versionCode 65，metadata appVersion `0.1.64`；核心保持 `0.1.3781-androidhost.3`。
 
