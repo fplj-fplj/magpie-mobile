@@ -5,9 +5,9 @@
 - 提高浅色操作文字和错误提示的对比度。历史会话弹窗适配较矮窗口，提供商标签与模型分组补充读屏状态。沿用暖纸色与霞鹜文楷屏幕阅读版。
 - 发布在附件核对后重新检查同提交的最新 Validation。恢复旧版时，默认保留当前 Latest。清理工具默认预览并保护指定版本与 Git 标签。
 
-同提交 GitHub Actions Validation `45259206292` 已通过：JVM core 652＋app 482 共 1,134 项；Android API 35 x86_64 的 23 项；Go mobile／AndroidHost、核心参数转发、RPC／TLS、官方与社区插件及 race 均通过。
-- 独立真实浏览器验收 `45280547700` 通过：从原生提供商页的正式入口打开 Chrome，导出到公共 Downloads，并通过 DocumentsUI 选回该文件；错误口令保留配置 B，返回应用重新打开官方编辑器后正确口令恢复配置 A。三次私有归档检查均无变化，脱敏结果与最终 Sync 页面截图已归档。
-- 同提交签名 Release 构建、正式 APK、校验和、固定签名、核心载荷、Release 附件和 Latest 尚待最终候选 SHA 核验后执行。
+同提交 GitHub Actions Validation `45282705514` 已通过：JVM core 652＋app 482 共 1,134 项；Android API 35 x86_64 的 23 项；Go mobile／AndroidHost、核心参数转发、RPC／TLS、官方与社区插件及 race 均通过。
+- 独立真实浏览器验收 `45284632751` 通过：从原生提供商页的正式入口打开 Chrome，导出到公共 Downloads，并通过 DocumentsUI 选回该文件；错误口令保留配置 B，返回应用重新打开官方编辑器后正确口令恢复配置 A。三次私有归档检查均无变化，真实下载为 1,124 bytes，SHA-256 `9f6e06bb3baa7f29d714fb8724d093a6d0f96f55994ae67259e24529e8141368`，脱敏结果与最终页面截图已归档。
+- 正式构建 run `45285958373` 已成功并发布为 Latest。最终 APK 为 103,626,016 bytes，SHA-256 `c9431617ebd5ee02b273e63f9738b5569f56908e3b30f03426330438e3af69fc`；签名、ARM64 核心载荷、版本及 Release 附件均已核验。
 
 版本号 0.1.65，versionCode 66，核心 0.1.3781-androidhost.4。所有构建与运行测试仅由 GitHub Actions 执行。
 
