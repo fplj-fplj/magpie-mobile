@@ -21,4 +21,4 @@ Release 上传附件后在公开前重新核验精确同 SHA 的 Validation run/
 
 本版版本号 `0.1.65-editor-session`，versionCode 66，核心 `0.1.3781-androidhost.4`。所有构建和运行测试仅由 GitHub Actions 执行，通过完整验证前不会发布。
 
-候选 `287400e39bef75d1d7f5edfc0865ae20cd9aec23` 的首轮 Validation `45248885240` 未通过：Android 测试因 UiAutomator 不支持的正则文本选择器而未能编译；Go 启动清单回归以未认证方式请求受保护的 `/boot.js`。第二轮 `f4fefa6574eb6eca6b7a19ec09969c49aeb656a4` 已修正 Android 选择器并让 Go 夹具使用真实浏览器 proof，但 Go 测试编译发现局部变量名冲突。已修正该测试变量；最终提交仍需通过新的完整 Validation 和真实浏览器验收。
+候选 `287400e39bef75d1d7f5edfc0865ae20cd9aec23` 的首轮 Validation `45248885240` 未通过：Android 测试因 UiAutomator 不支持的正则文本选择器而未能编译；Go 启动清单回归以未认证方式请求受保护的 `/boot.js`。第二轮 `f4fefa6574eb6eca6b7a19ec09969c49aeb656a4` 已修正 Android 选择器并让 Go 夹具使用真实浏览器 proof，但 Go 测试编译发现局部变量名冲突。第三轮 `0178b5e120704b77814a5aeb3d286694130e90f8` 修正该命名后，完整 Android 测试运行并发现插件密钥复制用例需在“全选”后重新打开系统操作菜单；该测试夹具已补上此步骤。最终候选仍需新的完整 Validation 和真实浏览器验收。

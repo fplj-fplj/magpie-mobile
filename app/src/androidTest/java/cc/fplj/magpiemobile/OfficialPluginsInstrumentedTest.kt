@@ -1896,6 +1896,9 @@ class OfficialPluginsInstrumentedTest {
         val input = device.findObject(field)
         input.longClick()
         findClipboardMenuItem("Select all", "全选").click()
+        // Android dismisses the floating toolbar after Select all. Reopen it
+        // on the selected credential before invoking the actual Copy action.
+        device.findObject(field).longClick()
         findClipboardMenuItem("Copy", "复制").click()
         val clipboard = checkNotNull(context.getSystemService(android.content.ClipboardManager::class.java))
         assertTrue("Plugin credential copy must carry Android's sensitive marker",
