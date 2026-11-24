@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -7,7 +9,7 @@ plugins {
 
 // 仅测试构建可用 -PmagpieTestAbi=x86_64 限定 ABI；生产 APK 不设置该属性，保持默认打包。
 val magpieTestAbi = providers.gradleProperty("magpieTestAbi").orNull
-val upstreamLock = java.util.Properties().apply {
+val upstreamLock = Properties().apply {
     rootProject.file("upstream.lock.properties").inputStream().use { load(it) }
 }
 fun upstreamLockValue(name: String): String =
