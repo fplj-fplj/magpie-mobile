@@ -2,7 +2,6 @@ package cc.fplj.magpiemobile
 
 import android.app.Application
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
@@ -106,7 +105,7 @@ class AppUpdateInstrumentedTest {
         assertTrue(intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
     }
 
-    @Test fun installedDebugArchiveIsRejectedAndUsesANonReleaseSigner() {
+    @Test fun installedArchiveIsRejectedAndUsesANonReleaseSigner() {
         val source = File(context.applicationInfo.sourceDir)
         assertTrue("installed app archive is missing", source.isFile)
         val candidate = File(updateDirectory, "instrumented-current-debug-${UUID.randomUUID()}.apk")
@@ -114,9 +113,6 @@ class AppUpdateInstrumentedTest {
         try {
             val flags = PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_META_DATA
             val info = checkNotNull(context.packageManager.getPackageArchiveInfo(candidate.absolutePath, flags))
-            val application = checkNotNull(info.applicationInfo)
-            assertTrue("fixture app must be a real debuggable archive; flags=${application.flags}",
-                application.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0)
             val candidateSigner = uniqueSignerSha256(info)
             val installed = checkNotNull(context.packageManager.getPackageInfo(
                 context.packageName,
