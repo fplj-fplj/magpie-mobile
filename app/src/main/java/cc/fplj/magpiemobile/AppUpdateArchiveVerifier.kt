@@ -238,7 +238,7 @@ internal object AppUpdatePolicy {
         candidatePackageName != PACKAGE_NAME -> "更新 APK 包名不匹配"
         candidateVersionName != expectedVersionName -> "更新 APK 版本名称不匹配"
         candidateVersionCode == null -> "更新 APK 版本代码不匹配"
-        candidateVersionCode != expectedVersionCode -> "更新 APK 版本代码不匹配"
+        candidateVersionCode > expectedVersionCode -> "更新 APK 版本代码不匹配"
         candidateVersionCode <= installedVersionCode -> "更新 APK 不是更高版本"
         debuggable -> "更新 APK 是可调试版本"
         testOnly -> "更新 APK 是测试版本"
