@@ -115,7 +115,7 @@ class AppUpdateInstrumentedTest {
             val flags = PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_META_DATA
             val info = checkNotNull(context.packageManager.getPackageArchiveInfo(candidate.absolutePath, flags))
             val application = checkNotNull(info.applicationInfo)
-            assertTrue("fixture app must be a real debuggable archive",
+            assertTrue("fixture app must be a real debuggable archive; flags=${application.flags}",
                 application.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0)
             val candidateSigner = uniqueSignerSha256(info)
             val installed = checkNotNull(context.packageManager.getPackageInfo(

@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"io"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,6 +27,7 @@ import (
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/filelock"
 	"github.com/yetone/magpie/internal/filememo"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/mobilepolicy"
 	"github.com/yetone/magpie/internal/steady"
@@ -49,8 +49,8 @@ var (
 		_, err := rand.Read(key)
 		return key, err
 	})
-	mobileCreateID = regexp.MustCompile("^[a-z0-9][a-z0-9-]{0,63}$")
-	mobileExistingID = regexp.MustCompile("^[a-z0-9][a-z0-9._-]{0,63}$")
+	mobileCreateID = lazyre.New("^[a-z0-9][a-z0-9-]{0,63}$")
+	mobileExistingID = lazyre.New("^[a-z0-9][a-z0-9._-]{0,63}$")
 )
 
 type MobileProviderKey struct {

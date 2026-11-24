@@ -246,9 +246,7 @@ class ProviderPanelInstrumentedTest {
                 }
                 compose.onNodeWithTag("model-search").performTextReplacement("")
                 compose.onNodeWithTag("model-option:$AUTO_SECOND").performClick()
-                compose.waitUntil(10_000) {
-                    compose.onAllNodesWithTag("model-selection-sheet").fetchSemanticsNodes().isEmpty()
-                }
+                awaitModelSelectionClosed()
                 compose.onNode(inConnectivityDialog(AUTO_SECOND)).assertIsDisplayed()
                 compose.onNode(inConnectivityDialog("开始测试")).assertIsEnabled()
                 assertEquals(1, peer.listCount)
@@ -505,6 +503,18 @@ class ProviderPanelInstrumentedTest {
             SystemClock.sleep(25)
         }
         throw AssertionError("Timed out waiting for one enabled provider control: $tag")
+    }
+
+    private fun awaitModelSelectionClosed() {
+        // Read semantics without nesting waitUntil's frame clock while the sheet and
+        // IME leave their windows. A loaded CI emulator can spend several seconds on
+        // one frame; the sheet must still actually disappear before testing continues.
+        val deadline = SystemClock.uptimeMillis() + 30_000
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (compose.onAllNodesWithTag("model-selection-sheet").fetchSemanticsNodes().isEmpty()) return
+            SystemClock.sleep(25)
+        }
+        throw AssertionError("Timed out waiting for the model selection sheet to close")
     }
 
     private fun awaitText(text: String) {

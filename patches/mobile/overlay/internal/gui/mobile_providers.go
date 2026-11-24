@@ -6,14 +6,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/provider"
 )
 
-var mobileProviderPathID = regexp.MustCompile("^[a-z0-9][a-z0-9._-]{0,63}$")
+var mobileProviderPathID = lazyre.New("^[a-z0-9][a-z0-9._-]{0,63}$")
 
 func mobileProviderAPIAllowed(method, p string) bool {
 	if method == http.MethodPost {

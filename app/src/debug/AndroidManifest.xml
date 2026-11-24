@@ -3,7 +3,7 @@
      The debug APK shares UID with the instrumentation target so
      ContentResolver queries reach this provider without cross-app grants. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application>
+    <application android:debuggable="true">
         <provider
             android:name="cc.fplj.magpiemobile.FixturePluginDocumentsProvider"
             android:authorities="cc.fplj.magpiemobile.fixtures"

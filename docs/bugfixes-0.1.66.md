@@ -19,3 +19,13 @@
 静态适配核对：4759 manifest 为 13 个上游整文件补丁和 28 个 Android overlay，干净上游应用检查共 41 个文件；公开 `chatPageOpen` 继续受 Android 路由策略拦截，备份导出保留 `usage` 字段和 Android 下载桥，原生 updater 在启动副作用前关闭。同步器只自动合并已明确限定的 import 和 updater 护栏冲突，语义冲突仍要求人工处理。上述静态核对不代替 Actions 验证。
 
 本机不运行 Gradle、Kotlin/JVM、Go、Android、Node 或测试。当前代码仍为待验收候选；完整 Go/JVM/模拟器回归、签名构建与 APK 检查必须经 GitHub Actions 通过后，才可发布。
+
+## Actions 收尾记录
+
+候选 `c64c1b415c214a2a5f21dae55b376d79d235872c` 的签名构建 `45447667303` 成功，未发布 Release。完整 Validation `45447591342` 中，JVM core 668＋app 487 共 1,155 项零失败、错误与跳过；Go 回归和 Android 运行验收仍发现问题，不能作为可用版本发布。
+
+- 上游 `testenv` 在测试退出时检查包级正则初始化，Android overlay 的三处 `regexp.MustCompile` 触发失败。已改用上游 `lazyre.New`，保持原匹配模式及 `MatchString` 调用，并更新 manifest 的文件哈希。
+- Android API 35 x86_64 完成 32 项，30 项通过。更新器用例未读到预期 Debug APK 标志，现由 debug manifest 显式声明 `android:debuggable="true"`；生产 APK 的不可调试要求保持不变。
+- 提供商用例在选择第二个模型后等待底部页关闭超时，同阶段日志记录单帧停顿约 9.3 秒。改为在 Compose 帧推进循环之外读取语义树，给予 30 秒退场预算；仍要求选择页实际消失并验证已选模型及未保存草稿边界。
+
+上述修正待新的同提交 Validation 和签名候选核验；Latest 仍为 0.1.65。
