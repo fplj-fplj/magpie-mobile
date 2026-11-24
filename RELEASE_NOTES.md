@@ -2,7 +2,9 @@
 
 - “更多”页新增 GitHub 稳定版检查与 APK 下载。固定 Release 元数据、四项附件、APK 哈希、包名、版本、固定签名和 ARM64 Go/Bun 核心载荷均通过检查后，交由 Android 系统安装确认；不热替换 native 文件。
 - 新增构建侧上游锁定和 GitHub Actions 自动同步流程，三方合并 Android 宿主适配；冲突或回归失败保留报告，不自动发布。
-- Release 机器字段与更新协议由 Actions 注入。本版验证通过前不会发布。
+- Release 机器字段与更新协议由 Actions 注入；更新器固定校验仓库、资产协议、摘要、签名和核心载荷，再交由 Android 系统安装。
+- 上游固定为 v0.1.4759（commit `95e6a418`）。完整 JVM／Go／插件／race 与 Android 模拟器验收均通过，最终签名 APK 的固定证书、版本、核心和 Bun 载荷经 Actions 校验。
+- Release 提供固定签名 ARM64 APK、SHA-256、构建信息和核心构建信息；Actions 在同提交完整验证成功后核对四项附件并公开。所有编译与运行测试均由 GitHub Actions 完成，Android 运行验收使用 API 35 x86_64 模拟器，ARM64 正式包核验签名和载荷。
 
 versionName `0.1.66-update-center`，versionCode 67。
 
