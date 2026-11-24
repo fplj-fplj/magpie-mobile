@@ -24,7 +24,7 @@
 
 候选 `c64c1b415c214a2a5f21dae55b376d79d235872c` 的签名构建 `45447667303` 成功，未发布 Release。完整 Validation `45447591342` 中，JVM core 668＋app 487 共 1,155 项零失败、错误与跳过；Go 回归和 Android 运行验收仍发现问题，不能作为可用版本发布。
 
-- 上游 `testenv` 在测试退出时检查包级正则初始化，Android overlay 的三处 `regexp.MustCompile` 触发失败。已改用上游 `lazyre.New`，保持原匹配模式及 `MatchString` 调用，并更新 manifest 的文件哈希。
+- 上游 `testenv` 在测试退出时检查包级正则初始化，Android overlay 的三处 `regexp.MustCompile` 触发失败。已改用上游 `lazyre.New`，保持原匹配模式及 `MatchString` 调用，并更新 manifest 的文件哈希。正则检查修复后，Go 又发现官方备份导出请求包含上游新增 `usage: true` 字段，而 fixture 期望未更新；生产桥本来就保留该字段，现同步补齐预期。
 - Android API 35 x86_64 完成 32 项，30 项通过。更新器用例未读到预期 Debug APK 标志，现由 debug manifest 显式声明 `android:debuggable="true"`；生产 APK 的不可调试要求保持不变。
 - 提供商用例在选择第二个模型后等待底部页关闭超时，同阶段日志记录单帧停顿约 9.3 秒。改为在 Compose 帧推进循环之外读取语义树，给予 30 秒退场预算；仍要求选择页实际消失并验证已选模型及未保存草稿边界。
 

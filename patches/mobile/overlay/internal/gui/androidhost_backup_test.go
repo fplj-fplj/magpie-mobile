@@ -641,7 +641,7 @@ function fixture(androidHost, response = {}, faults = {}) {
   assert.equal(request.options.redirect, "error");
   assert.equal(request.options.cache, "no-store");
   assert.equal(request.options.headers.Accept, "application/octet-stream");
-  assert.deepEqual(JSON.parse(request.options.body), { sink: "app", pass: "synthetic browser passphrase", keys: true, library: true, memory: true, signIns: false });
+  assert.deepEqual(JSON.parse(request.options.body), { sink: "app", pass: "synthetic browser passphrase", keys: true, library: true, memory: true, usage: true, signIns: false });
   assert.equal(page.apiCalls.length, 0);
   assert.equal(page.downloads.length, 1);
   assert.equal(page.downloads[0].name, "magpie.magpie-backup");
