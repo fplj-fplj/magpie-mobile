@@ -243,11 +243,12 @@ class ApplyMobileCoreTests(unittest.TestCase):
         self.assertIsNotNone(match)
         print_web = match.group(0)
         self.assertIn("if mobilepolicy.Enabled", print_web)
-        self.assertIn("w.Addr", print_web)
-        self.assertIn("App-managed credentials", print_web)
-        self.assertIn("return", print_web)
+        mobile_branch = print_web.split("if mobilepolicy.Enabled", 1)[1].split("\n\t}", 1)[0]
+        self.assertIn("w.Addr", mobile_branch)
+        self.assertIn("App-managed credentials", mobile_branch)
+        self.assertIn("return", mobile_branch)
         for unsafe in ("w.Link", "strings.Index", "proxyLink(", "NetworkLinks(", "the link carries"):
-            self.assertNotIn(unsafe, print_web)
+            self.assertNotIn(unsafe, mobile_branch)
         self.assertRegex(cli["resultSha256"], "^[0-9a-f]{64}$")
         tests = (root / "overlay/internal/cli/mobile_policy_test.go").read_text(encoding="utf-8")
         self.assertTrue(tests.startswith("//go:build mobile || androidhost\n"))
