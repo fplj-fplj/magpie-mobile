@@ -316,7 +316,7 @@ class AppUpdateInstaller(private val context: Context) {
         val intent = Intent(Intent.ACTION_VIEW)
             .setDataAndType(uri, APK_MIME_TYPE)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            .setClipData(ClipData.newRawUri("Magpie Mobile update", uri))
+        intent.clipData = ClipData.newRawUri("Magpie Mobile update", uri)
         if (context !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (intent.resolveActivity(context.packageManager) == null) {
             throw AppUpdateRejected("系统中没有可用的 APK 安装器")
