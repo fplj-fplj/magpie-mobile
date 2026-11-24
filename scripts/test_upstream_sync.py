@@ -75,11 +75,11 @@ class UpstreamSyncTests(unittest.TestCase):
             "module github.com/yetone/magpie\n\ngo 1.26.8\n",
             encoding="utf-8",
         )
-        (self.repo / "internal").mkdir()
-        base = (
-            'package sample\n\nconst Value = "old"\nconst Keep = true\n'
-        ).encode()
-        (self.repo / "internal/sample.go").write_bytes(base)
+        source_dir = self.repo / "internal"
+        source_dir.mkdir()
+        padding = "".join(f"const Padding{index} = {index}\n" for index in range(12))
+        base = f'package sample\n\nconst Value = "old"\n{padding}const Keep = true\n'.encode()
+        (source_dir / "sample.go").write_bytes(base)
         base_revision = self.commit("base")
 
         overlay = self.patch_root / "overlay/internal/mobilepolicy"
@@ -243,6 +243,7 @@ class UpstreamSyncTests(unittest.TestCase):
         self.assertTrue(self.report.with_suffix(".md").is_file())
 
     def test_known_import_and_updater_conflicts_are_resolved_narrowly(self):
+        (self.repo / "internal").mkdir(parents=True)
         imported = self.repo / "internal/imports.go"
         imported.write_text(
             "package sample\n\nimport (\n"
