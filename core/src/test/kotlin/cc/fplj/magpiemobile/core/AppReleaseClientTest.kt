@@ -174,7 +174,7 @@ class AppReleaseClientTest {
         ) }
         transport.redirectedApkResponse = { response(fixture.apkData) }
         val downloaded = client.download(release, partFile())
-        assertEquals(fixture.apkData, downloaded.readBytes())
+        assertTrue(fixture.apkData.contentEquals(downloaded.readBytes()))
         assertTrue(transport.urls.any {
             it.startsWith("https://release-assets.githubusercontent.com/")
         })
@@ -264,11 +264,11 @@ class AppReleaseClientTest {
 
         var probeChecks = 0
         val probe = File(directory, "probe.apk.part")
-        assertEquals(fixture.apkData, client.download(
+        assertTrue(fixture.apkData.contentEquals(client.download(
             release = release,
             destination = probe,
             ensureActive = { probeChecks++ },
-        ).readBytes())
+        ).readBytes()))
         assertTrue(probeChecks > 0)
         assertTrue(probe.delete())
 
@@ -331,7 +331,7 @@ class AppReleaseClientTest {
             assertEquals(0L, primary.length())
 
             allowDownload.countDown()
-            assertEquals(fixture.apkData, first.get(5, TimeUnit.SECONDS).readBytes())
+            assertTrue(fixture.apkData.contentEquals(first.get(5, TimeUnit.SECONDS).readBytes()))
         } finally {
             allowDownload.countDown()
             executor.shutdownNow()

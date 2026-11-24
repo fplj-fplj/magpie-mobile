@@ -296,6 +296,8 @@ class AppReleaseClient internal constructor(
                 val location = response.location ?: throw AppReleaseException.Protocol()
                 url = try {
                     validateDownloadUrl(URI(url).resolve(location).toString())
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (_: Exception) {
                     throw AppReleaseException.Protocol()
                 }
