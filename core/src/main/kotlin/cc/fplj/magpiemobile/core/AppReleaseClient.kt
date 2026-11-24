@@ -175,7 +175,7 @@ class AppReleaseClient internal constructor(
 
         var completed = false
         var stream: AppReleaseHttpResponse? = null
-        try {
+        return try {
             progress(0L, release.apkSize)
             active(control, ensureActive)
             stream = followDownloadRedirects(
@@ -532,7 +532,7 @@ class AppReleaseClient internal constructor(
         ensureActive()
     }
 
-    private inline fun <T> guarded(
+    private fun <T> guarded(
         control: ReleaseRequestControl?,
         ensureActive: () -> Unit,
         failureCleanup: () -> Unit = {},
