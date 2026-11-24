@@ -141,13 +141,13 @@ func androidHostEditorProof(next http.Handler) http.Handler {
 	})
 }
 
-func androidHostEditor(port, key string, keep time.Duration, box boxSignIn, page http.Handler) http.Handler {
-	return androidHostEditorWithClock(port, key, keep, box, page, time.Now)
+func androidHostEditor(port, key, where string, box boxSignIn, page http.Handler) http.Handler {
+	return androidHostEditorWithClock(port, key, where, box, page, time.Now)
 }
 
-func androidHostEditorWithClock(port, key string, keep time.Duration, box boxSignIn, page http.Handler, clock func() time.Time) http.Handler {
+func androidHostEditorWithClock(port, key, where string, box boxSignIn, page http.Handler, clock func() time.Time) http.Handler {
 	if !mobilepolicy.FullAdmin {
-		return webGuard("magpie_web_"+port, key, keep, box, webOwnPage(page))
+		return webGuard("magpie_web_"+port, key, where, box, webOwnPage(page))
 	}
 	var mu sync.Mutex
 	tickets := make(map[string]time.Time)

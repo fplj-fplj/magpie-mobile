@@ -7,6 +7,7 @@ on:
       - 'app/**'
       - 'core/**'
       - 'patches/**'
+      - 'upstream.lock.properties'
       - 'scripts/**'
       - '.github/workflows/build.yml'
       - '*.gradle.kts'
@@ -41,11 +42,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check out the fixed upstream core
+      - name: Read pinned upstream lock
+        id: upstream
+        run: python3 scripts/read-upstream-lock.py --format github-output >> "$GITHUB_OUTPUT"
+
+      - name: Check out the locked upstream core
         uses: actions/checkout@v4
         with:
-          repository: yetone/magpie
-          ref: b52c711142a662fe18fedf5a80cb1e4aa94bce62
+          repository: ${{ steps.upstream.outputs.repository }}
+          ref: ${{ steps.upstream.outputs.revision }}
           path: build-tmp/upstream
           persist-credentials: false
 
@@ -73,12 +78,12 @@ jobs:
             build-tmp/magpie-mobile-android-arm64
             build-tmp/mobile-core.sha256
             build-tmp/mobile-core-build-info.txt
-          key: ${{ runner.os }}-androidhost-arm64-go1.26.8-ndk${{ steps.ndk.outputs.version }}-b52c7111-${{ hashFiles('patches/mobile/**', 'scripts/apply-mobile-core.py', 'scripts/build-android-release-runtime.sh') }}
+          key: ${{ runner.os }}-androidhost-arm64-go${{ steps.upstream.outputs.go_version }}-ndk${{ steps.ndk.outputs.version }}-${{ steps.upstream.outputs.revision }}-${{ hashFiles('patches/mobile/**', 'upstream.lock.properties', 'scripts/apply-mobile-core.py', 'scripts/read-upstream-lock.py', 'scripts/build-android-release-runtime.sh') }}
 
       - uses: actions/setup-go@v5
         if: steps.core-cache.outputs.cache-hit != 'true'
         with:
-          go-version-file: build-tmp/upstream/go.mod
+          go-version: ${{ steps.upstream.outputs.go_version }}
           cache-dependency-path: build-tmp/upstream/go.sum
 
       - name: Check actual startup manifest contract
@@ -92,6 +97,7 @@ jobs:
           python3 scripts/test_release_publication.py
           python3 scripts/test_cleanup_releases.py
           python3 scripts/test-device-stability.py
+          python3 scripts/read-upstream-lock.py --get revision
 
       - name: Apply hash-pinned Android host adaptation
         run: |
@@ -189,6 +195,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read pinned upstream lock
+        id: upstream
+        run: python3 scripts/read-upstream-lock.py --format github-output >> "$GITHUB_OUTPUT"
+
       - name: Download the verified signed APK and evidence
         uses: actions/download-artifact@v4
         with:
@@ -211,11 +221,21 @@ jobs:
         run: |
           set -euo pipefail
           version_name=$(grep -E 'versionName\s*=\s*' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
+          version_code=$(grep -E 'versionCode\s*=\s*' app/build.gradle.kts | sed -E 's/[^0-9]*([0-9]+).*/\1/')
+          package_name=$(grep -E 'applicationId\s*=\s*' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
+          core_version=$(python3 scripts/read-upstream-lock.py --get coreVersion)
+          upstream_tag=$(python3 scripts/read-upstream-lock.py --get tag)
+          upstream_revision=$(python3 scripts/read-upstream-lock.py --get revision)
+          upstream_repository=$(python3 scripts/read-upstream-lock.py --get repository)
+          test -n "$version_name" && test -n "$version_code" && test -n "$package_name"
           tag="v${version_name}-${GITHUB_SHA:0:8}"
+          test "${tag##*-}" = "${GITHUB_SHA:0:8}"
           apk_name="magpie-mobile-${version_name}.apk"
           cp release-artifacts/app/build/outputs/apk/release/app-release.apk "$apk_name"
           sha256sum "$apk_name" | tee "${apk_name}.sha256"
-          printf 'Commit: %s\nSource: b52c711142a662fe18fedf5a80cb1e4aa94bce62\nCore: 0.1.3781-androidhost.4 (nogui,androidhost; official plugins)\nActions run: %s/%s/actions/runs/%s\nPublication: manually approved via workflow_dispatch publish_release=true\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
+          printf 'Package: %s\nVersionName: %s\nVersionCode: %s\nCoreVersion: %s\nUpstreamTag: %s\nUpstreamRevision: %s\nCommit: %s\nSource: %s\nActions run: %s/%s/actions/runs/%s\nPublication: manually approved via workflow_dispatch publish_release=true\n' \
+            "$package_name" "$version_name" "$version_code" "$core_version" "$upstream_tag" "$upstream_revision" "$GITHUB_SHA" "$upstream_repository" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > build-info.txt
+          printf 'Core: %s (nogui,androidhost; official plugins)\n' "$core_version" >> build-info.txt
           printf 'Latest mode: %s\n' "$LATEST_MODE" >> build-info.txt
           cat release-artifacts/build-tmp/mobile-core.sha256 release-artifacts/build-tmp/apk-signature.txt >> build-info.txt
           printf 'Validation: %s\nValidation attempt: %s (regression and runtime-emulator completed successfully)\n' "$VALIDATION_URL" "$VALIDATION_ATTEMPT" >> build-info.txt

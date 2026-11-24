@@ -39,7 +39,7 @@ func (w *androidBackupWindows) OpenFolder(dir string) error {
 func androidBackupHandler(w Windows) http.Handler {
 	mux := http.NewServeMux()
 	backupRoutes(mux, w)
-	return webHandler("3430", androidBackupTestManagerKey, 0, nil,
+	return webHandler("3430", androidBackupTestManagerKey, "", nil,
 		mobileAPI(androidHostEditorProof(mux)))
 }
 
@@ -430,7 +430,7 @@ func TestAndroidHostBackupBootFlagIsRestrictedToAndroidHostBrowser(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			page := Handler(tc.win, nil)
-			h := androidHostEditor("3430", androidEditorTestKey, 0, nil, page)
+			h := androidHostEditor("3430", androidEditorTestKey, "", nil, page)
 			link, _ := mintAndroidEditorTicket(t, h)
 			proof := exchangeAndroidEditorTicket(t, h, link)
 			w := httptest.NewRecorder()

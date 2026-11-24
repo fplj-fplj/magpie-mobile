@@ -7,6 +7,7 @@ on:
       - 'app/**'
       - 'core/**'
       - 'patches/**'
+      - 'upstream.lock.properties'
       - 'scripts/**'
       - '.github/workflows/**'
       - '*.gradle.kts'
@@ -26,11 +27,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check out the fixed upstream core
+      - name: Read pinned upstream lock
+        id: upstream
+        run: python3 scripts/read-upstream-lock.py --format github-output >> "$GITHUB_OUTPUT"
+
+      - name: Check out the locked upstream core
         uses: actions/checkout@v4
         with:
-          repository: yetone/magpie
-          ref: b52c711142a662fe18fedf5a80cb1e4aa94bce62
+          repository: ${{ steps.upstream.outputs.repository }}
+          ref: ${{ steps.upstream.outputs.revision }}
           path: build-tmp/upstream
           persist-credentials: false
 
@@ -45,7 +50,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: build-tmp/upstream/go.mod
+          go-version: ${{ steps.upstream.outputs.go_version }}
           cache-dependency-path: build-tmp/upstream/go.sum
 
       - name: Prepare Node for the embedded browser module regression
@@ -60,6 +65,7 @@ jobs:
           python3 scripts/check-android-network-build.py
           python3 scripts/check-ui-assets.py
           python3 scripts/test_apk_signature.py
+          python3 scripts/test_upstream_sync.py
           python3 scripts/test_release_validation.py
           python3 scripts/test_release_publication.py
           python3 scripts/test_cleanup_releases.py
@@ -107,9 +113,11 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           set -euo pipefail
-          go build -trimpath -tags nogui,mobile -ldflags '-s -w -X main.version=0.1.3781-mobile.1' -o ../magpie-mobile-host .
+          upstream_version=$(python3 ../../scripts/read-upstream-lock.py --get version)
+          core_version=$(python3 ../../scripts/read-upstream-lock.py --get coreVersion)
+          go build -trimpath -tags nogui,mobile -ldflags "-s -w -X main.version=${upstream_version}-mobile.1" -o ../magpie-mobile-host .
           python3 ../../scripts/smoke-mobile-core.py --exe ../magpie-mobile-host --evidence ../mobile-chat-profile.json
-          go build -trimpath -tags nogui,androidhost -ldflags '-s -w -X main.version=0.1.3781-androidhost.4' -o ../magpie-full-host .
+          go build -trimpath -tags nogui,androidhost -ldflags "-s -w -X main.version=${core_version}" -o ../magpie-full-host .
           python3 ../../scripts/smoke-mobile-core.py --exe ../magpie-full-host --full-admin --evidence ../androidhost-chat-profile.json
 
       - name: Verify real model directory TLS and pin boundaries
@@ -158,10 +166,15 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read pinned upstream lock
+        id: upstream
+        run: python3 scripts/read-upstream-lock.py --format github-output >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
         with:
-          repository: yetone/magpie
-          ref: b52c711142a662fe18fedf5a80cb1e4aa94bce62
+          repository: ${{ steps.upstream.outputs.repository }}
+          ref: ${{ steps.upstream.outputs.revision }}
           path: build-tmp/upstream
           persist-credentials: false
       - uses: actions/setup-java@v4
@@ -187,12 +200,12 @@ jobs:
             build-tmp/test-core-x86_64.sha256
             build-tmp/test-core-x86_64-build-info.txt
             build-tmp/bun-x86_64.zip
-          key: ${{ runner.os }}-androidhost-x86_64-go1.26.8-ndk${{ steps.ndk.outputs.version }}-b52c7111-${{ hashFiles('patches/mobile/**', 'scripts/apply-mobile-core.py', 'scripts/build-android-test-runtime.sh') }}
+          key: ${{ runner.os }}-androidhost-x86_64-go${{ steps.upstream.outputs.go_version }}-ndk${{ steps.ndk.outputs.version }}-${{ steps.upstream.outputs.revision }}-${{ hashFiles('patches/mobile/**', 'upstream.lock.properties', 'scripts/apply-mobile-core.py', 'scripts/read-upstream-lock.py', 'scripts/build-android-test-runtime.sh') }}
 
       - uses: actions/setup-go@v5
         if: steps.test-core-cache.outputs.cache-hit != 'true'
         with:
-          go-version-file: build-tmp/upstream/go.mod
+          go-version: ${{ steps.upstream.outputs.go_version }}
           cache-dependency-path: build-tmp/upstream/go.sum
       - name: Prepare Android test payloads
         env:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -13,13 +14,32 @@ import sys
 import tempfile
 from dataclasses import dataclass
 
-SOURCE_REVISION = "b52c711142a662fe18fedf5a80cb1e4aa94bce62"
-GO_VERSION = "1.26.8"
 DEFAULT_PATCH_ROOT = Path(__file__).resolve().parent.parent / "patches" / "mobile"
+DEFAULT_LOCK = Path(__file__).resolve().parent.parent / "upstream.lock.properties"
 
 
 class PatchError(ValueError):
     """A source/package mismatch; no fuzzy patch or partial fallback is allowed."""
+
+
+def _load_lock_reader():
+    path = Path(__file__).with_name("read-upstream-lock.py")
+    spec = importlib.util.spec_from_file_location("magpie_upstream_lock", path)
+    if spec is None or spec.loader is None:
+        raise PatchError("cannot load upstream lock reader")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+LOCK_READER = _load_lock_reader()
+
+
+def load_upstream_lock(path: Path | str = DEFAULT_LOCK) -> dict[str, str]:
+    try:
+        return LOCK_READER.load_lock(path)
+    except (OSError, ValueError) as error:
+        raise PatchError(f"invalid upstream lock: {error}") from None
 
 
 def digest(data: bytes) -> str:
@@ -65,9 +85,14 @@ class Change:
     mode: int
 
 
-def plan(source_root: Path, patch_root: Path = DEFAULT_PATCH_ROOT) -> list[Change]:
+def plan(
+    source_root: Path,
+    patch_root: Path = DEFAULT_PATCH_ROOT,
+    lock_path: Path = DEFAULT_LOCK,
+) -> list[Change]:
     source_root = source_root.absolute()
     patch_root = patch_root.absolute()
+    lock = load_upstream_lock(lock_path)
     if any(p.is_symlink() for root in (source_root, patch_root) for p in (root, *root.parents)):
         raise PatchError("roots and their parents must not be symlinks")
     if not source_root.is_dir() or not patch_root.is_dir():
@@ -75,16 +100,16 @@ def plan(source_root: Path, patch_root: Path = DEFAULT_PATCH_ROOT) -> list[Chang
     manifest = json.loads(read_regular(patch_root, "manifest.json"))
     if not isinstance(manifest, dict):
         raise PatchError("manifest must be an object")
-    if manifest.get("schemaVersion") != 1 or manifest.get("sourceRevision") != SOURCE_REVISION:
+    if manifest.get("schemaVersion") != 1 or manifest.get("sourceRevision") != lock["revision"]:
         raise PatchError("unsupported manifest schema or source revision")
-    if manifest.get("goVersion") != GO_VERSION:
-        raise PatchError("unsupported Go version; expected 1.26.8")
+    if manifest.get("goVersion") != lock["goVersion"]:
+        raise PatchError("manifest Go version differs from upstream lock")
     # Git checkouts must really be the pinned commit. Archives are accepted only
     # through the same full-file hashes, never by a caller's revision assertion.
     if (source_root / ".git").exists():
         result = subprocess.run(["git", "-C", str(source_root), "rev-parse", "HEAD"],
                                 check=False, capture_output=True, text=True)
-        if result.returncode or result.stdout.strip() != SOURCE_REVISION:
+        if result.returncode or result.stdout.strip() != lock["revision"]:
             raise PatchError("git HEAD is not the pinned source revision")
     checks = manifest.get("checks", [])
     if not any(c.get("path") == "go.mod" for c in checks):
@@ -92,8 +117,8 @@ def plan(source_root: Path, patch_root: Path = DEFAULT_PATCH_ROOT) -> list[Chang
     for check in checks:
         require_hash(read_regular(source_root, check["path"]), check["sha256"], check["path"])
     go_mod = read_regular(source_root, "go.mod").decode("utf-8")
-    if not re.search(r"(?m)^go " + re.escape(GO_VERSION) + r"$", go_mod):
-        raise PatchError("source go.mod does not require Go 1.26.8")
+    if not re.search(r"(?m)^go " + re.escape(lock["goVersion"]) + r"$", go_mod):
+        raise PatchError("source go.mod differs from the upstream lock")
     changes = []
     destinations = set()
     for patch in manifest.get("patches", []):
@@ -184,16 +209,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", required=True, type=Path, help="pinned Magpie checkout/archive root")
     parser.add_argument("--patch-root", type=Path, default=DEFAULT_PATCH_ROOT, help="trusted manifest/overlay package root")
+    parser.add_argument("--lock", type=Path, default=DEFAULT_LOCK, help="validated upstream lock file")
     parser.add_argument("--check", action="store_true", help="validate and plan only; write nothing")
     args = parser.parse_args(argv)
     try:
-        changes = plan(args.source_root, args.patch_root)
+        lock = load_upstream_lock(args.lock)
+        changes = plan(args.source_root, args.patch_root, args.lock)
         if not args.check:
             apply(changes)
     except (PatchError, OSError, ValueError, KeyError, TypeError) as err:
         print(f"mobile patch rejected: {err}", file=sys.stderr)
         return 1
-    print(f"mobile patch {'verified' if args.check else 'applied'}: {SOURCE_REVISION}; Go {GO_VERSION}; {len(changes)} files; no build executed")
+    print(
+        f"mobile patch {'verified' if args.check else 'applied'}: "
+        f"{lock['tag']} {lock['revision']}; Go {lock['goVersion']}; "
+        f"{len(changes)} files; no build executed"
+    )
     return 0
 
 

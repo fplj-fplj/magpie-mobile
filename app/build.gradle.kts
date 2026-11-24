@@ -7,6 +7,14 @@ plugins {
 
 // 仅测试构建可用 -PmagpieTestAbi=x86_64 限定 ABI；生产 APK 不设置该属性，保持默认打包。
 val magpieTestAbi = providers.gradleProperty("magpieTestAbi").orNull
+val upstreamLock = java.util.Properties().apply {
+    rootProject.file("upstream.lock.properties").inputStream().use { load(it) }
+}
+fun upstreamLockValue(name: String): String =
+    upstreamLock.getProperty(name)?.takeIf { it.isNotBlank() }
+        ?: error("Missing upstream lock value: $name")
+fun buildConfigString(value: String): String =
+    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 android {
     namespace = "cc.fplj.magpiemobile"
@@ -16,9 +24,11 @@ android {
         applicationId = "cc.fplj.magpiemobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 66
-        versionName = "0.1.65-editor-session"
-        buildConfigField("String", "CORE_VERSION", "\"0.1.3781-androidhost.4\"")
+        versionCode = 67
+        versionName = "0.1.66-update-center"
+        buildConfigField("String", "CORE_VERSION", buildConfigString(upstreamLockValue("coreVersion")))
+        buildConfigField("String", "UPSTREAM_TAG", buildConfigString(upstreamLockValue("tag")))
+        buildConfigField("String", "UPSTREAM_SHA", buildConfigString(upstreamLockValue("revision")))
         buildConfigField("String", "GIT_SHA", "\"" + (System.getenv("GITHUB_SHA")?.take(8) ?: "local") + "\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters.add(magpieTestAbi ?: "arm64-v8a") }

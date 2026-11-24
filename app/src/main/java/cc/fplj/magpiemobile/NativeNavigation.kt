@@ -78,6 +78,23 @@ fun Dashboard(
     val externalEditor: ExternalEditorViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val externalState by externalEditor.state.collectAsStateWithLifecycle()
     val providerCache: ProviderListCacheViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val appUpdateViewModel: AppUpdateViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    var providerBusy by remember { mutableStateOf(false) }
+    AppUpdateInstallHandler(
+        viewModel = appUpdateViewModel,
+        enabled = shell.page == AppPage.MORE,
+        appIdle = {
+            val currentChat = chatViewModel.state.value
+            val currentPlugins = officialPlugins.state.value
+            val currentUsage = usageViewModel.state.value
+            currentChat.ready && !currentChat.busy && !currentChat.sending &&
+                !appShell.state.value.loadingModels && !providerBusy &&
+                !currentPlugins.loading && !currentPlugins.busy && !currentPlugins.pending &&
+                !currentPlugins.authBusy && currentPlugins.authWorkers == 0 &&
+                !externalEditor.state.value.opening && !externalEditor.awaitingReturn &&
+                !keysViewModel.state.value.loading && !currentUsage.loading && !currentUsage.insightsLoading
+        },
+    )
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, externalEditor, providerCache, appShell, officialPlugins) {
         val observer = LifecycleEventObserver { _, event ->
@@ -98,7 +115,6 @@ fun Dashboard(
             scope.launch { providerCache.invalidate(); appShell.refreshModels() }
         }
     }
-    var providerBusy by remember { mutableStateOf(false) }
     var gatewaySectionName by rememberSaveable { mutableStateOf<String?>(null) }
     var moreSectionName by rememberSaveable { mutableStateOf<String?>(null) }
     var chatSettings by rememberSaveable { mutableStateOf(false) }
@@ -342,6 +358,27 @@ fun Dashboard(
                                 }
                             }
                             PreferencesCard(shell, appShell)
+                            AppUpdateCard(
+                                viewModel = appUpdateViewModel,
+                                appIdleSnapshot = chat.ready && !chat.busy && !chat.sending &&
+                                    !shell.loadingModels && !providerBusy &&
+                                    !pluginsState.loading && !pluginsState.busy && !pluginsState.pending &&
+                                    !pluginsState.authBusy && pluginsState.authWorkers == 0 &&
+                                    !externalState.opening && !externalEditor.awaitingReturn && !keysState.loading &&
+                                    !usageState.loading && !usageState.insightsLoading,
+                                appIdle = {
+                                    val currentChat = chatViewModel.state.value
+                                    val currentPlugins = officialPlugins.state.value
+                                    val currentUsage = usageViewModel.state.value
+                                    currentChat.ready && !currentChat.busy && !currentChat.sending &&
+                                        !appShell.state.value.loadingModels && !providerBusy &&
+                                        !currentPlugins.loading && !currentPlugins.busy && !currentPlugins.pending &&
+                                        !currentPlugins.authBusy && currentPlugins.authWorkers == 0 &&
+                                        !externalEditor.state.value.opening && !externalEditor.awaitingReturn &&
+                                        !keysViewModel.state.value.loading && !currentUsage.loading && !currentUsage.insightsLoading
+                                },
+                                onGateway = { appShell.selectPage(AppPage.GATEWAY) },
+                            )
                         }
                     }
                 }

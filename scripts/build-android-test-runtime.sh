@@ -6,6 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 UPSTREAM="${1:?usage: build-android-test-runtime.sh <patched-upstream-root>}"
+core_version="$(python3 scripts/read-upstream-lock.py --get coreVersion)"
 DEST=app/src/main/jniLibs/x86_64
 mkdir -p "$DEST" build-tmp
 
@@ -19,7 +20,7 @@ if [[ "${MAGPIE_TEST_CORE_CACHE_HIT:-false}" != true ]]; then
     cd "$UPSTREAM"
     export CGO_ENABLED=1 GOOS=android GOARCH=amd64 CC="$CC"
     go build -trimpath -buildmode=pie -tags nogui,androidhost \
-      -ldflags '-s -w -X main.version=0.1.3781-androidhost.4 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
+      -ldflags "-s -w -X main.version=${core_version} -linkmode=external -extldflags=-Wl,-z,max-page-size=16384" \
       -o "$OLDPWD/build-tmp/magpie-mobile-android-x86_64" .
   )
   sha256sum build-tmp/magpie-mobile-android-x86_64 > build-tmp/test-core-x86_64.sha256

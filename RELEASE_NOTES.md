@@ -1,3 +1,11 @@
+## Magpie-Mobile 0.1.66-update-center（上游核心同步与 GitHub 更新）
+
+- “更多”页新增 GitHub 稳定版检查与 APK 下载。固定 Release 元数据、四项附件、APK 哈希、包名、版本、固定签名和 ARM64 Go/Bun 核心载荷均通过检查后，交由 Android 系统安装确认；不热替换 native 文件。
+- 新增构建侧上游锁定和 GitHub Actions 自动同步流程，三方合并 Android 宿主适配；冲突或回归失败保留报告，不自动发布。
+- Release 机器字段与更新协议由 Actions 注入。本版验证通过前不会发布。
+
+versionName `0.1.66-update-center`，versionCode 67。
+
 ## Magpie-Mobile 0.1.65-editor-session（编辑会话与界面收尾）
 
 - 官方浏览器编辑器使用限时会话凭证，管理密钥只由原生客户端向本机管理端口发送。浏览器首次打开时使用一次性链接，编辑会话到期后可从应用重新打开。

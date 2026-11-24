@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 upstream_root="${1:?usage: build-android-release-runtime.sh <patched-upstream-root>}"
+core_version="$(python3 scripts/read-upstream-lock.py --get coreVersion)"
 mkdir -p build-tmp app/src/main/jniLibs/arm64-v8a app/src/main/assets/licenses/magpie
 if [[ "${MAGPIE_CORE_CACHE_HIT:-false}" != true ]]; then
   ndk_root="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
@@ -13,7 +14,7 @@ if [[ "${MAGPIE_CORE_CACHE_HIT:-false}" != true ]]; then
     cd "$upstream_root"
     export CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC="$compiler"
     go build -trimpath -buildmode=pie -tags nogui,androidhost \
-      -ldflags '-s -w -X main.version=0.1.3781-androidhost.4 -linkmode=external -extldflags=-Wl,-z,max-page-size=16384' \
+      -ldflags "-s -w -X main.version=${core_version} -linkmode=external -extldflags=-Wl,-z,max-page-size=16384" \
       -o "$OLDPWD/build-tmp/magpie-mobile-android-arm64" .
   )
   sha256sum build-tmp/magpie-mobile-android-arm64 > build-tmp/mobile-core.sha256

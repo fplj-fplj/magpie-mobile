@@ -1,6 +1,6 @@
 # 受控 Provider 管理协议 · schema 1
 
-基线保持54dc257f100e2ca82a843b1eea6a24b8006781f5 / Go1.26.8。
+基线保持95e6a4180866afde186e0f1a25369388c7fd7e7f / Go1.26.8。
 管理Cookie与原webGuard/webOwnPage/CORS保持，不是网关推理key。既有GET /api/providers保持原前端列表契约，不把其中models对象/chosen或被删减的对象用于编辑。
 
 ## 最小路径和固定字段

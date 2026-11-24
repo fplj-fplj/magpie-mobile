@@ -18,11 +18,16 @@ and no new key; remove → still refused after a core restart; restore (the
 App's explicit POST) → answered again.
 """
 import argparse, json, os, secrets, signal, shutil, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request
+import importlib.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from powercontext_fixture import PowerContextFixture
 
-CORE_VERSION = "0.1.3781-androidhost.4"
+lock_spec = importlib.util.spec_from_file_location("magpie_plugin_upstream_lock", Path(__file__).with_name("read-upstream-lock.py"))
+lock_reader = importlib.util.module_from_spec(lock_spec)
+lock_spec.loader.exec_module(lock_reader)
+UPSTREAM_LOCK = lock_reader.load_lock(Path(__file__).resolve().parent.parent / "upstream.lock.properties")
+CORE_VERSION = UPSTREAM_LOCK["coreVersion"]
 VENDOR_KEY = "synthetic-provider-key-never-real"
 COMMUNITY_NPM = [
     "@magpie-community/tools-calc@0.1.0",

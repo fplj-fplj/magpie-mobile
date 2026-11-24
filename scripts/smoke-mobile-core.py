@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Host-only core integration with synthetic credentials and a fake chat upstream."""
 import argparse,json,os,re,secrets,socket,subprocess,tempfile,threading,time,urllib.request,urllib.error
+import importlib.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+lock_spec=importlib.util.spec_from_file_location('magpie_smoke_upstream_lock',Path(__file__).with_name('read-upstream-lock.py'))
+lock_reader=importlib.util.module_from_spec(lock_spec);lock_spec.loader.exec_module(lock_reader)
+upstream_lock=lock_reader.load_lock(Path(__file__).resolve().parent.parent/'upstream.lock.properties')
 
 def port():
     with socket.socket() as s:
@@ -27,7 +32,7 @@ def is_listening(p):
     except OSError: return False
 
 args=argparse.ArgumentParser();args.add_argument('--exe',required=True);args.add_argument('--full-admin',action='store_true');args.add_argument('--evidence');opts=args.parse_args()
-core_version='0.1.3781-androidhost.4' if opts.full_admin else '0.1.3781-mobile.1'
+core_version=upstream_lock['coreVersion'] if opts.full_admin else upstream_lock['version']+'-mobile.1'
 exe=Path(opts.exe).resolve();assert exe.is_file()
 with tempfile.TemporaryDirectory(prefix='magpie-mobile-smoke-') as temporary:
     root=Path(temporary)

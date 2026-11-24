@@ -105,7 +105,7 @@ func TestAndroidHostBrowserEditorUsesShortLivedHeaderProofNotManagerCookie(t *te
 	now := time.Unix(123456789, 0)
 	apiCalls := 0
 	page := androidEditorPage(&apiCalls)
-	h := androidHostEditorWithClock("3430", androidEditorTestKey, 0, nil, page, func() time.Time { return now })
+	h := androidHostEditorWithClock("3430", androidEditorTestKey, "", nil, page, func() time.Time { return now })
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, androidEditorRequest(http.MethodPost, androidEditorMintPath, ""))
@@ -207,7 +207,7 @@ func TestAndroidHostBrowserEditorUsesShortLivedHeaderProofNotManagerCookie(t *te
 
 func TestAndroidHostEditorExactHostMethodQueryAndNativeGuards(t *testing.T) {
 	pageCalls := 0
-	h := androidHostEditor("3430", androidEditorTestKey, 0, nil, androidEditorPage(&pageCalls))
+	h := androidHostEditor("3430", androidEditorTestKey, "", nil, androidEditorPage(&pageCalls))
 	for _, tc := range []struct {
 		name, method, path, host, key, origin, site, referer, fetchMode string
 		want                                                             int
@@ -251,7 +251,7 @@ func TestAndroidHostEditorExactHostMethodQueryAndNativeGuards(t *testing.T) {
 func TestAndroidHostEditorExpiredTicketAndProofCapacity(t *testing.T) {
 	now := time.Unix(123456789, 0)
 	pageCalls := 0
-	h := androidHostEditorWithClock("3430", androidEditorTestKey, 0, nil, androidEditorPage(&pageCalls), func() time.Time { return now })
+	h := androidHostEditorWithClock("3430", androidEditorTestKey, "", nil, androidEditorPage(&pageCalls), func() time.Time { return now })
 
 	expiredLink, _ := mintAndroidEditorTicket(t, h)
 	now = now.Add(androidEditorTicketTTL + time.Second)
@@ -294,7 +294,7 @@ func TestAndroidHostEditorProofMiddlewareAndSafeResourceBoundary(t *testing.T) {
 	}
 
 	page := androidEditorPage(&calls)
-	h := androidHostEditor("3430", androidEditorTestKey, 0, nil, page)
+	h := androidHostEditor("3430", androidEditorTestKey, "", nil, page)
 	icon := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3430/api/icons/provider.svg", nil)
 	icon.Header.Set("Sec-Fetch-Site", "same-origin")
 	w = httptest.NewRecorder()
@@ -314,7 +314,7 @@ func TestAndroidHostEditorProofMiddlewareAndSafeResourceBoundary(t *testing.T) {
 func TestAndroidHostEditorCapabilitiesAndPluginRestoreStayAvailable(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
 	pageCalls := 0
-	h := androidHostEditor("3430", androidEditorTestKey, 0, nil, androidEditorPage(&pageCalls))
+	h := androidHostEditor("3430", androidEditorTestKey, "", nil, androidEditorPage(&pageCalls))
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, androidEditorRequest(http.MethodGet, "/api/mobile/capabilities", androidEditorTestKey))

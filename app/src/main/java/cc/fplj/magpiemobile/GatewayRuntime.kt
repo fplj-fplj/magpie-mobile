@@ -111,6 +111,11 @@ object GatewayRuntime {
     @Synchronized
     fun mustStop(): Boolean = stopRequested
 
+    /** A terminal label alone is insufficient while its Service still owns cleanup. */
+    @Synchronized
+    fun canInstallUpdate(): Boolean = activeLease == null && !mutableStopping.value &&
+        mutableStatus.value.phase in setOf(GatewayEngineController.Phase.STOPPED, GatewayEngineController.Phase.FAILED)
+
     /** Completion is proof from the owning Service, never an Android stopService result. */
     @Synchronized
     internal fun cleanupCompleted(lease: ServiceLease): Boolean {

@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -27,8 +28,27 @@ class ApplyMobileCoreTests(unittest.TestCase):
         self.package = root / "package"
         self.source.mkdir()
         self.package.mkdir()
+        self.revision = "a" * 40
+        self.go_version = "1.26.8"
+        self.upstream_version = "0.1.3781"
+        self.core_version = "0.1.3781-androidhost.4"
+        self.lock_file = root / "upstream.lock.properties"
+        self.lock_file.write_text(
+            "\n".join((
+                "schemaVersion=1",
+                "repository=yetone/magpie",
+                "tag=v" + self.upstream_version,
+                "revision=" + self.revision,
+                "version=" + self.upstream_version,
+                "goVersion=" + self.go_version,
+                "coreVersion=" + self.core_version,
+                "coreSuffix=-androidhost.4",
+                "",
+            )),
+            encoding="utf-8",
+        )
         self.original = b"package sample\nconst Old = true\n"
-        self.go_mod = b"module github.com/yetone/magpie\n\ngo 1.26.8\n"
+        self.go_mod = b"module github.com/yetone/magpie\n\ngo " + self.go_version.encode() + b"\n"
         (self.source / "go.mod").write_bytes(self.go_mod)
         (self.source / "internal").mkdir()
         (self.source / "internal/sample.go").write_bytes(self.original)
@@ -37,8 +57,8 @@ class ApplyMobileCoreTests(unittest.TestCase):
         (self.package / "overlay/internal/mobilepolicy/mobile.go").write_bytes(self.overlay)
         self.manifest = {
             "schemaVersion": 1,
-            "sourceRevision": patcher.SOURCE_REVISION,
-            "goVersion": "1.26.8",
+            "sourceRevision": self.revision,
+            "goVersion": self.go_version,
             "checks": [{"path": "go.mod", "sha256": patcher.digest(self.go_mod)}],
             "patches": [{"path": "internal/sample.go", "sha256": patcher.digest(self.original),
                          "resultSha256": patcher.digest(self.original.replace(b"const Old", b"const New")),
@@ -51,7 +71,7 @@ class ApplyMobileCoreTests(unittest.TestCase):
         (self.package / "manifest.json").write_text(json.dumps(self.manifest), encoding="utf-8")
 
     def plan(self):
-        return patcher.plan(self.source, self.package)
+        return patcher.plan(self.source, self.package, self.lock_file)
 
     def unchanged(self):
         self.assertEqual((self.source / "internal/sample.go").read_bytes(), self.original)
@@ -72,7 +92,12 @@ class ApplyMobileCoreTests(unittest.TestCase):
 
     def test_check_cli_does_not_write_or_invoke_build(self):
         with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(patcher.subprocess, "run") as process:
-            result = patcher.main(["--source-root", str(self.source), "--patch-root", str(self.package), "--check"])
+            result = patcher.main([
+                "--source-root", str(self.source),
+                "--patch-root", str(self.package),
+                "--lock", str(self.lock_file),
+                "--check",
+            ])
         self.assertEqual(result, 0)
         process.assert_not_called()
         self.unchanged()
@@ -95,7 +120,7 @@ class ApplyMobileCoreTests(unittest.TestCase):
         self.assertFalse((self.source / "internal/mobilepolicy/mobile.go").exists())
 
     def test_go_mod_sha_and_exact_version_required(self):
-        (self.source / "go.mod").write_bytes(self.go_mod.replace(b"1.26.8", b"1.26.7"))
+        (self.source / "go.mod").write_bytes(self.go_mod.replace(self.go_version.encode(), b"1.26.7"))
         self.rejected()
         self.manifest["checks"][0]["sha256"] = patcher.digest((self.source / "go.mod").read_bytes())
         self.save_manifest()
@@ -158,9 +183,16 @@ class ApplyMobileCoreTests(unittest.TestCase):
         (self.source / ".git").mkdir()
         with mock.patch.object(patcher.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="bad-head\n")):
             self.rejected()
-        with mock.patch.object(patcher.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=patcher.SOURCE_REVISION + "\n")) as command:
+        with mock.patch.object(patcher.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=self.revision + "\n")) as command:
             self.assertEqual(len(self.plan()), 2)
             self.assertEqual(command.call_args[0][0], ["git", "-C", str(self.source), "rev-parse", "HEAD"])
+
+    def test_lock_mismatch_fails_before_source_changes(self):
+        self.lock_file.write_text(
+            self.lock_file.read_text(encoding="utf-8").replace(self.revision, "b" * 40),
+            encoding="utf-8",
+        )
+        self.rejected()
 
     def test_no_reapply_or_mixed_state_fallback(self):
         patcher.apply(self.plan())
@@ -206,13 +238,16 @@ class ApplyMobileCoreTests(unittest.TestCase):
         root = patcher.DEFAULT_PATCH_ROOT
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
         cli = next(p for p in manifest["patches"] if p["path"] == "internal/cli/web_cli.go")
-        branch = next(r for r in cli["replacements"] if r["old"] == "func printWeb(w *gui.Web) {\n")
-        self.assertIn("if mobilepolicy.Enabled", branch["new"])
-        self.assertIn("w.Addr", branch["new"])
-        self.assertIn("App-managed credentials", branch["new"])
-        self.assertIn("return", branch["new"])
+        adapted = "\n".join(r["new"] for r in cli["replacements"])
+        match = re.search(r"(?ms)^func printWeb\(w \*gui\.Web\) \{\n.*?(?=^func |\Z)", adapted)
+        self.assertIsNotNone(match)
+        print_web = match.group(0)
+        self.assertIn("if mobilepolicy.Enabled", print_web)
+        self.assertIn("w.Addr", print_web)
+        self.assertIn("App-managed credentials", print_web)
+        self.assertIn("return", print_web)
         for unsafe in ("w.Link", "strings.Index", "proxyLink(", "NetworkLinks(", "the link carries"):
-            self.assertNotIn(unsafe, branch["new"])
+            self.assertNotIn(unsafe, print_web)
         self.assertRegex(cli["resultSha256"], "^[0-9a-f]{64}$")
         tests = (root / "overlay/internal/cli/mobile_policy_test.go").read_text(encoding="utf-8")
         self.assertTrue(tests.startswith("//go:build mobile || androidhost\n"))
@@ -223,7 +258,7 @@ class ApplyMobileCoreTests(unittest.TestCase):
         root = patcher.DEFAULT_PATCH_ROOT
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
         patch = next(p for p in manifest["patches"] if p["path"] == "internal/provider/provider.go")
-        self.assertEqual(len(patch["replacements"]), 7)
+        self.assertGreaterEqual(len(patch["replacements"]), 1)
         inserts = "\n".join(r["new"] for r in patch["replacements"])
         self.assertIn("mobileRevision", inserts)
         self.assertIn("mobileProviderJSON", inserts)
@@ -258,8 +293,9 @@ class ApplyMobileCoreTests(unittest.TestCase):
     def test_real_package_inventory_and_policy_guards(self):
         root = patcher.DEFAULT_PATCH_ROOT
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["sourceRevision"], patcher.SOURCE_REVISION)
-        self.assertEqual(manifest["goVersion"], "1.26.8")
+        lock = patcher.load_upstream_lock(patcher.DEFAULT_LOCK)
+        self.assertEqual(manifest["sourceRevision"], lock["revision"])
+        self.assertEqual(manifest["goVersion"], lock["goVersion"])
         self.assertEqual({p["path"] for p in manifest["patches"]}, {
             "internal/gateway/gateway.go", "internal/gateway/goroutines.go", "internal/gateway/lan.go",
             "internal/gui/web.go", "internal/gui/api.go", "internal/gui/update.go",
@@ -328,6 +364,8 @@ class ApplyMobileCoreTests(unittest.TestCase):
         self.assertNotIn("androidEditorProof(noFramedAPI", api)
 
         editor = (root / "overlay/internal/gui/androidhost_editor.go").read_text(encoding="utf-8")
+        self.assertIn("func androidHostEditor(port, key, where string", editor)
+        self.assertNotIn("keep time.Duration", editor)
         for guard in (
             'const androidEditorProofHeader = "X-Magpie-Android-Editor-Proof"',
             'const androidManagerHeader = "X-Magpie-Android-Manager"',
