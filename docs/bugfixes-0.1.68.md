@@ -26,5 +26,6 @@
 - Release [`v0.1.68-upstream-v0.1.4807-72ee9065`](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.68-upstream-v0.1.4807-72ee9065) 已公开并成为 Latest。公开 APK 的 SHA-256 为 `b0b1cf7f68ce50e4dd9b8cbb00864b9e4bd374b1faaa9dad83da3508df1f082f`，大小 114,210,220 bytes；与签名候选、checksum 附件及 GitHub asset digest 一致。Release 恰有四个附件，build-info、核心构建信息、APK 与 checksum 均已核验。
 - 同时重新下载并核对长期保留 Release `v0.1.62-chat-session-clipboard-fixes-90971632` 的 APK、checksum、GitHub digest 与附件大小，全部一致。
 - Release 清理 dry-run 只列出旧 Latest `v0.1.66-update-center-7890bf89` 为删除对象。清理已完成，最终列表仅包含 0.1.68 Latest 与长期保留的 0.1.62；旧 0.1.66 Git tag 保留，未删除任何 tag。
+- 收尾文档提交 `b50e976605c60f04fd55b8c27f7a3a4f90e48d9e` 的 Validation `45665351499` 与非发布签名构建 `45665272516` 也全部通过；JVM／Go／插件／race 与 Android 32 项再次验收成功。该提交候选包版本、签名及载荷匹配，APK SHA-256 为 `cbbd9dcbd4d61242a009f20946d91659807f475e71309eef993c58f300d6cbfd`；它与正式 Release APK 摘要不同，因为 APK 内嵌了各自源码提交的 SHA。
 
 最终版本号：`0.1.68-upstream-v0.1.4807`，versionCode 69，核心 `0.1.4807-androidhost.4`。

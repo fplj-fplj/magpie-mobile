@@ -10,7 +10,7 @@
 
 ## 上一正式版本：0.1.66-update-center
 
-Release [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.66-update-center-7890bf89) 是 0.1.68 之前的正式版本；当前 Latest 为 0.1.68。上游固定于 v0.1.4759；应用内更新器、上游适配、JVM 1,155 项、Android API 35 模拟器 32 项、Go／插件／race 验收均通过。公开签名 APK 为 114,082,824 bytes，SHA-256 `01292c5b8814bc48c9ea5738b4f14e037a6488d7fea24ceb394dab8ead307e42`，并已与正式 Actions 产物逐字节比对。详见 [0.1.66 验收记录](docs/bugfixes-0.1.66.md)。
+0.1.66 是 0.1.68 之前的正式版本，目前已按 Release 保留规则清理其 Release 页面，Git tag `v0.1.66-update-center-7890bf89` 仍保留。该版上游固定于 v0.1.4759；应用内更新器、上游适配、JVM、Android 模拟器、Go／插件／race 验收均通过。此前公开的签名 APK 为 114,082,824 bytes，SHA-256 `01292c5b8814bc48c9ea5738b4f14e037a6488d7fea24ceb394dab8ead307e42`。详见 [0.1.66 验收记录](docs/bugfixes-0.1.66.md)。
 
 - Android 宿主管理 API 改用原生请求头和浏览器 session proof，避免管理密钥通过跨端口共享的 Cookie 暴露。
 - 修复浅色对比度、短屏历史弹窗、提供商页签及模型分组读屏状态；插件登录敏感字段的复制会标记为敏感。
