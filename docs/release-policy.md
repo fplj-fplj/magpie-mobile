@@ -20,7 +20,7 @@ Release 页面只保留当前可用 Latest，以及明确需要长期保留的�
 
 当前应保留：
 
-- Latest：`v0.1.66-update-center-7890bf89`
+- Latest：`v0.1.66-update-center-7890bf89`（发布 0.1.68 后更新为实际新 tag）
 - 长期版本：`v0.1.62-chat-session-clipboard-fixes-90971632`
 
 0.1.66 发布后，清理 dry-run 确认只会移除 0.1.65；执行前已下载核对两项保留 Release 的 APK、SHA-256 附件、GitHub digest 与附件大小：

@@ -2,11 +2,11 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
-## 当前版本：0.1.67-upstream-v0.1.4801
+## 当前版本：0.1.68-upstream-v0.1.4807
 
-- 上游核心锁定于 [`v0.1.4801`](https://github.com/yetone/magpie/releases/tag/v0.1.4801)（commit `9cbf787c`），Android 宿主核心 `0.1.4801-androidhost.4`，应用版本 `0.1.67-upstream-v0.1.4801`（`versionCode = 68`）。
-- 三方合并 13 个上游整文件补丁与 28 个 Android overlay，同步 Bedrock SigV4、MCP OAuth 回调与保活、Gemini `thinkingLevel`／工具调用修复、响应注释与账号筛选修复，以及未启用账号时隐藏内置 Antigravity 添加入口；原生管理请求头隔离、一次性浏览器编辑器 proof 与加密备份桥接保持不变。详见 [0.1.67 适配记录](docs/bugfixes-0.1.67.md)。
-- PR #3（`12b6ce0e`）已通过完整 GitHub Actions Validation 与签名构建验证；正式 Release 发布将基于最终提交重新完成精确 SHA 验证与附件核验后公开。
+- 上游核心锁定于 [`v0.1.4807`](https://github.com/yetone/magpie/releases/tag/v0.1.4807)（commit `a8f96beb`），Android 宿主核心 `0.1.4807-androidhost.4`，应用版本 `0.1.68-upstream-v0.1.4807`（`versionCode = 69`）。
+- 三方合并 13 个上游整文件补丁与 28 个 Android overlay，在保留宿主管控、浏览器编辑会话 proof 与加密备份桥接的基础上，同步上游至 2026-11-25 发布的稳定版本。界面与官方三类插件的 Android 宿主机制保持不变。详见 [0.1.68 适配记录](docs/bugfixes-0.1.68.md)。
+- 4807 上游适配提交 `61d21362` 的完整 GitHub Actions Validation 与签名候选构建均通过。0.1.68 正式发布前，会对最终版本提交重新运行完整 Validation 与签名构建，并核对所有报告及 APK 载荷。
 
 ## 上一正式 Latest：0.1.66-update-center
 
@@ -54,6 +54,7 @@ Release [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-m
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/bugfixes-0.1.68.md](docs/bugfixes-0.1.68.md) | 上游稳定版同步至 v0.1.4807 与精确提交验收 |
 | [docs/bugfixes-0.1.67.md](docs/bugfixes-0.1.67.md) | 上游稳定版同步至 v0.1.4801、宿主兼容性核对与 Actions 验收 |
 | [docs/bugfixes-0.1.66.md](docs/bugfixes-0.1.66.md) | 上游稳定版同步、GitHub 更新器、完整 Actions 验收与正式签名发布 |
 | [docs/bugfixes-0.1.65.md](docs/bugfixes-0.1.65.md) | 管理凭据隔离、敏感剪贴板、界面可访问性与发布防护候选 |
