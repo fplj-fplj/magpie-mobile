@@ -6,11 +6,11 @@
 
 - 上游核心锁定于 [`v0.1.4807`](https://github.com/yetone/magpie/releases/tag/v0.1.4807)（commit `a8f96beb`），Android 宿主核心 `0.1.4807-androidhost.4`，应用版本 `0.1.68-upstream-v0.1.4807`（`versionCode = 69`）。
 - 三方合并 13 个上游整文件补丁与 28 个 Android overlay，在保留宿主管控、浏览器编辑会话 proof 与加密备份桥接的基础上，同步上游至 2026-11-25 发布的稳定版本。界面与官方三类插件的 Android 宿主机制保持不变。详见 [0.1.68 适配记录](docs/bugfixes-0.1.68.md)。
-- 4807 上游适配提交 `61d21362` 的完整 GitHub Actions Validation 与签名候选构建均通过。0.1.68 正式发布前，会对最终版本提交重新运行完整 Validation 与签名构建，并核对所有报告及 APK 载荷。
+- 最终提交 `72ee90650c16b72388d37123e6b81bc1168ee9b0` 的 GitHub Actions [Validation `45661210610`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45661210610) 与正式签名发布构建 [`45663541021`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45663541021) 均成功。JVM 1,155 项、Android API 35 模拟器 32 项、Go mobile 53 项、AndroidHost 61 项及官方／社区插件与 race 验收全部通过。Release 已成为 Latest；签名 APK 为 114,210,220 bytes，SHA-256 `b0b1cf7f68ce50e4dd9b8cbb00864b9e4bd374b1faaa9dad83da3508df1f082f`，并与公开四项附件、固定证书与载荷逐项核对。详见 [完整验收记录](docs/bugfixes-0.1.68.md)。
 
-## 上一正式 Latest：0.1.66-update-center
+## 上一正式版本：0.1.66-update-center
 
-Release [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.66-update-center-7890bf89) 已正式发布并成为 GitHub Latest。上游固定于 v0.1.4759；应用内更新器、上游适配、JVM 1,155 项、Android API 35 模拟器 32 项、Go／插件／race 验收均通过。公开签名 APK 为 114,082,824 bytes，SHA-256 `01292c5b8814bc48c9ea5738b4f14e037a6488d7fea24ceb394dab8ead307e42`，并已与正式 Actions 产物逐字节比对。详见 [0.1.66 验收记录](docs/bugfixes-0.1.66.md)。
+Release [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.66-update-center-7890bf89) 是 0.1.68 之前的正式版本；当前 Latest 为 0.1.68。上游固定于 v0.1.4759；应用内更新器、上游适配、JVM 1,155 项、Android API 35 模拟器 32 项、Go／插件／race 验收均通过。公开签名 APK 为 114,082,824 bytes，SHA-256 `01292c5b8814bc48c9ea5738b4f14e037a6488d7fea24ceb394dab8ead307e42`，并已与正式 Actions 产物逐字节比对。详见 [0.1.66 验收记录](docs/bugfixes-0.1.66.md)。
 
 - Android 宿主管理 API 改用原生请求头和浏览器 session proof，避免管理密钥通过跨端口共享的 Cookie 暴露。
 - 修复浅色对比度、短屏历史弹窗、提供商页签及模型分组读屏状态；插件登录敏感字段的复制会标记为敏感。
@@ -31,7 +31,7 @@ Release [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-m
 - **提供商保存与外部返回**：保存期间锁定手动模型输入并拒绝旧回调，外部返回保留草稿、合并待办，关闭编辑或当前请求退出后自动补读最新列表；未确认前阻止旧配置保存。0.1.58 的 JVM 1,071 项及完整 Actions 验收通过，详见 [0.1.58 修复记录](docs/bugfixes-0.1.58.md)。
 - **聊天预设与停止清理**：预设参数进入真实发送，失败保留表单，存储失败保留原文件；网关停止使用独立清理凭证，重复通知与迟到启动不提前解除屏障。详见 [0.1.57 预设验收](docs/bugfixes-0.1.57.md)及 [0.1.56 停止验收](docs/bugfixes-0.1.56.md)。
 - **实时诊断与退出码**：运行日志有界合并更新，不重复启动连接或通知；停止保留最终日志和实际退出码，完整行先脱敏再截断。详见 [0.1.54 验收记录](docs/bugfixes-0.1.54.md)。
-- **已发布 APK 的上游核心**：0.1.66 Release 使用 `v0.1.4759`（commit `95e6a418`）；当前主分支上游锁已推进至 `v0.1.4801`（commit `9cbf787c`）。
+- **已发布 APK 的上游核心**：0.1.68 Release 使用 `v0.1.4807`（commit `a8f96beb`）；之前的 0.1.66 Release 使用 `v0.1.4759`（commit `95e6a418`）。
 - **聊天与模型目录**：聊天与模型目录在排队前绑定完整连接轮次，同一服务重连也撤销旧请求。模型选择及发送使用已验证目录的连接标识，点击时再核对有效性，覆盖重绘之前的旧按钮窗口；失败保留草稿，成功保存以 Room 的实际提交为准，不自动重发。新增 47 项 JVM 回归，总计 922 项，完整 Actions、真实 Android 核心重连、签名候选与正式发布均通过。详见 [0.1.53 修复与验收记录](docs/bugfixes-0.1.53.md)。
 - **插件登录与取消**：插件读取、编辑、市场及登录绑定完整连接轮次；Start 返回前的取消意图会保留，取得 ID 后只在原连接取消一次，并只读核对真实终态。未知结果保留恢复提示，重建后不接管旧任务，文件导入也校验复制前的连接。0.1.52 新增 47 项 JVM 回归，总计 875 项，完整 Actions、真实 Android 登录取消、签名候选与正式发布均通过。详见 [0.1.52 验收记录](docs/bugfixes-0.1.52.md)。
 - **提供商重连**：提供商页面按完整连接轮次刷新，同一服务重连也不复用旧缓存或旧请求；新轮次仍等待旧写入真正退出。未知保存核对成功后清除旧编辑／新建状态，提示从列表重新打开，普通刷新保留草稿。0.1.51 的 828 项 JVM 回归、完整 Actions、签名候选与正式发布均通过。详见 [0.1.51 验收记录](docs/bugfixes-0.1.51.md)。

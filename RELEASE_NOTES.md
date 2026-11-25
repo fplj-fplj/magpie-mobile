@@ -3,7 +3,7 @@
 - 上游核心由 `v0.1.4801` 升级至 [`yetone/magpie` `v0.1.4807`](https://github.com/yetone/magpie/releases/tag/v0.1.4807)（commit `a8f96beb`），Android 宿主核心版本更新为 `0.1.4807-androidhost.4`。
 - 三方合并 13 个上游整文件补丁与 28 个 Android overlay，完整保留原生管理请求头隔离、一次性浏览器编辑会话 proof、loopback 监听、官方插件宿主桥接及加密备份浏览器下载桥接。
 - 界面保持暖纸色主题、RikkaHub 提供商与聊天页面结构、霞鹜文楷屏幕阅读版以及官方三类外部插件机制；全部构建与运行验证由 GitHub Actions 完成。
-- 上游适配 `61d21362` 的 JVM、Go、插件/race 和 Android API 35 模拟器验证已通过；发布基于的最终提交将重新进行完整验证。
+- 最终提交 `72ee9065` 的完整 Validation `45661210610` 与正式签名构建／发布 `45663541021` 已通过；JVM 1,155 项、Android 32 项、Go mobile 53 项、AndroidHost 61 项及插件/race 检查均无失败。公开 APK 为 114,210,220 bytes，SHA-256 `b0b1cf7f68ce50e4dd9b8cbb00864b9e4bd374b1faaa9dad83da3508df1f082f`，Release 已成为 Latest。
 
 versionName `0.1.68-upstream-v0.1.4807`，versionCode 69，核心 `0.1.4807-androidhost.4`。
 

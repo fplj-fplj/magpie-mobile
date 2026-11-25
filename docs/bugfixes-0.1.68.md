@@ -19,4 +19,12 @@
 
 ## 0.1.68 最终提交验收与 Release
 
-最终生产提交尚待设置应用版本、提交发布记录并推送；该精确提交的完整 Validation 与签名候选构建仍待 GitHub Actions 完成后记录。未完成最终验证前不发布 Release。
+最终生产提交 `72ee90650c16b72388d37123e6b81bc1168ee9b0` 同提交 Validation `45661210610` 与正式签名发布构建 `45663541021` 均成功；构建、单元测试与运行测试均由 GitHub Actions 执行。
+
+- Validation 三个 job 全部 success：JVM core 668＋app 487 共 1,155 项，失败／错误／跳过均为 0；Android API 35 x86_64 模拟器 32 项，失败／错误／跳过均为 0，`android-errors.txt` 为空；Go mobile 53 项、AndroidHost 61 项、TLS、插件参数转发、官方与社区插件及 plugin race 全部通过。
+- 最终签名候选 artifact `15045438809` 经静态核验：APK 114,210,220 bytes；固定签名证书 SHA-256 `dee1d3f485ee17a6184178eaab318d6333fb8b67e7276146a30a03e1f9ee09d6`；包名 `cc.fplj.magpiemobile`、versionName `0.1.68-upstream-v0.1.4807`、versionCode 69；ARM64 核心 SHA-256 `8a9a100c88eb8c314f81733ff3ee958f598ea0b126b1ddf403f59b1def47e833` 与 Bun SHA-256 `f2970336bfccf36e4e8a408b25c627122f210e941672f184198c31f4dbd377a0` 均匹配。
+- Release [`v0.1.68-upstream-v0.1.4807-72ee9065`](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.68-upstream-v0.1.4807-72ee9065) 已公开并成为 Latest。公开 APK 的 SHA-256 为 `b0b1cf7f68ce50e4dd9b8cbb00864b9e4bd374b1faaa9dad83da3508df1f082f`，大小 114,210,220 bytes；与签名候选、checksum 附件及 GitHub asset digest 一致。Release 恰有四个附件，build-info、核心构建信息、APK 与 checksum 均已核验。
+- 同时重新下载并核对长期保留 Release `v0.1.62-chat-session-clipboard-fixes-90971632` 的 APK、checksum、GitHub digest 与附件大小，全部一致。
+- Release 清理 dry-run 只列出旧 Latest `v0.1.66-update-center-7890bf89` 为删除对象。清理已完成，最终列表仅包含 0.1.68 Latest 与长期保留的 0.1.62；旧 0.1.66 Git tag 保留，未删除任何 tag。
+
+最终版本号：`0.1.68-upstream-v0.1.4807`，versionCode 69，核心 `0.1.4807-androidhost.4`。

@@ -20,24 +20,24 @@ Release 页面只保留当前可用 Latest，以及明确需要长期保留的�
 
 当前应保留：
 
-- Latest：`v0.1.66-update-center-7890bf89`（发布 0.1.68 后更新为实际新 tag）
+- Latest：`v0.1.68-upstream-v0.1.4807-72ee9065`
 - 长期版本：`v0.1.62-chat-session-clipboard-fixes-90971632`
 
-0.1.66 发布后，清理 dry-run 确认只会移除 0.1.65；执行前已下载核对两项保留 Release 的 APK、SHA-256 附件、GitHub digest 与附件大小：
+0.1.68 发布后，清理 dry-run 确认只会移除旧 Latest 0.1.66；执行前已下载核对 0.1.68 与长期保留的 0.1.62 Release 的 APK、SHA-256 附件、GitHub digest 与附件大小：
 
 ```sh
 GH_TOKEN=... python3 scripts/cleanup-releases.py \
   --repository fplj-fplj/magpie-mobile \
-  --keep v0.1.66-update-center-7890bf89 \
+  --keep v0.1.68-upstream-v0.1.4807-72ee9065 \
   --keep v0.1.62-chat-session-clipboard-fixes-90971632
 ```
 
-清理已完成。下次执行时检查 dry-run 计划、Latest 状态以及两个保留 Release 的 APK/checksum 可下载且一致后，再执行：
+清理已完成，实际删除与上述 dry-run 计划一致：仅移除了 0.1.66 Release object，保留了该 Git tag。最终 Release 列表只包含 0.1.68 Latest 与 0.1.62 长期版本，各自 APK、checksum、GitHub digest 与附件大小已核对。以后需要清理时，先运行 dry-run 核对计划，再使用：
 
 ```sh
 GH_TOKEN=... python3 scripts/cleanup-releases.py \
   --repository fplj-fplj/magpie-mobile \
-  --keep v0.1.66-update-center-7890bf89 \
+  --keep v0.1.68-upstream-v0.1.4807-72ee9065 \
   --keep v0.1.62-chat-session-clipboard-fixes-90971632 \
   --apply --confirm 'DELETE RELEASE OBJECTS'
 ```
