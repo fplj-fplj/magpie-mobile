@@ -1,0 +1,213 @@
+name: Sync stable Magpie upstream
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      base_branch:
+        description: Branch that receives the generated adaptation PR
+        required: true
+        default: rikkahub-provider-layout
+        type: string
+      target_tag:
+        description: Optional stable vX.Y.Z tag; empty means latest stable release
+        required: false
+        default: ''
+        type: string
+  repository_dispatch:
+    types: [magpie-upstream-sync]
+
+concurrency:
+  group: magpie-upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  sync:
+    if: github.event_name != 'schedule' || vars.MAGPIE_UPSTREAM_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BASE_BRANCH: ${{ github.event.inputs.base_branch || github.event.client_payload.base_branch || vars.MAGPIE_UPSTREAM_BASE_BRANCH || 'rikkahub-provider-layout' }}
+      TARGET_TAG: ${{ github.event.inputs.target_tag || github.event.client_payload.target_tag || '' }}
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.MAGPIE_SYNC_TOKEN || github.token }}
+    steps:
+      - name: Validate the requested base branch
+        run: |
+          set -euo pipefail
+          [[ "$BASE_BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]
+          [[ "/$BASE_BRANCH/" != *"/../"* ]]
+          echo "base=$BASE_BRANCH" >> "$GITHUB_OUTPUT"
+        id: base
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+          token: ${{ secrets.MAGPIE_SYNC_TOKEN || github.token }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Read pinned upstream lock
+        id: upstream
+        run: python3 scripts/read-upstream-lock.py --format github-output >> "$GITHUB_OUTPUT"
+
+      - name: Detect the latest stable upstream release
+        id: detect
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          args=(detect --report build-tmp/upstream-sync/report.json --format github-output)
+          if [[ -n "$TARGET_TAG" ]]; then
+            args+=(--tag "$TARGET_TAG")
+          fi
+          python3 scripts/sync-upstream.py "${args[@]}" >> "$GITHUB_OUTPUT"
+          python3 -m json.tool build-tmp/upstream-sync/report.json
+
+      - name: Check out the detected upstream revision
+        if: steps.detect.outputs.update_available == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.upstream.outputs.repository }}
+          ref: ${{ steps.detect.outputs.revision }}
+          path: build-tmp/upstream
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Apply the Android host adaptation by three-way merge
+        id: adapt
+        if: steps.detect.outputs.update_available == 'true'
+        continue-on-error: true
+        run: |
+          set +e
+          python3 scripts/sync-upstream.py adapt \
+            --upstream-root build-tmp/upstream \
+            --target-tag "${{ steps.detect.outputs.tag }}" \
+            --target-revision "${{ steps.detect.outputs.revision }}" \
+            --report build-tmp/upstream-sync/report.json
+          code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Upload sync report and exact adaptation patch
+        if: always() && steps.detect.outputs.update_available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-sync-${{ steps.detect.outputs.tag }}-${{ github.run_id }}
+          path: build-tmp/upstream-sync/
+          if-no-files-found: error
+
+      - name: Open or update a conflict issue
+        if: steps.adapt.outputs.code == '2'
+        run: |
+          set -euo pipefail
+          title="上游同步冲突：${{ steps.detect.outputs.tag }}"
+          body="${RUNNER_TEMP:?}/upstream-sync-conflict.md"
+          cat > "$body" <<EOF
+          自动适配 \`${{ steps.upstream.outputs.tag }}\` → \`${{ steps.detect.outputs.tag }}\` 时发生三方合并冲突。
+
+          - 当前 revision：\`${{ steps.upstream.outputs.revision }}\`
+          - 目标 revision：\`${{ steps.detect.outputs.revision }}\`
+          - [同步记录](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          - 冲突报告和完整适配补丁保存在该运行的上游同步 artifact 中。
+
+          锁文件与 manifest 未被修改。需要人工审查冲突，再重新运行同步。
+          EOF
+          existing=$(gh issue list --state open --search "$title in:title" --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body-file "$body"
+          else
+            gh issue create --title "$title" --body-file "$body"
+          fi
+
+      - name: Fail after publishing the conflict report
+        if: always() && steps.adapt.outcome == 'failure'
+        run: |
+          echo "Upstream adaptation did not complete; no branch or pull request was created." >&2
+          exit 1
+
+      - name: Validate the generated package and worktree
+        if: steps.adapt.outputs.code == '0'
+        run: |
+          set -euo pipefail
+          python3 scripts/test_upstream_sync.py
+          python3 scripts/test_apply_mobile_core.py
+          git diff --check
+          changed=$(git status --porcelain=v1 | sed -E 's/^.. //' | LC_ALL=C sort)
+          expected=$(printf '%s\n' patches/mobile/manifest.json upstream.lock.properties | LC_ALL=C sort)
+          test "$changed" = "$expected"
+
+      - name: Create and push the adaptation branch
+        id: branch
+        if: steps.adapt.outputs.code == '0'
+        run: |
+          set -euo pipefail
+          tag="${{ steps.detect.outputs.tag }}"
+          branch="automation/upstream-${tag}"
+          git config user.name "magpie-upstream-sync[bot]"
+          git config user.email "magpie-upstream-sync@users.noreply.github.com"
+          git switch -c "$branch"
+          git add patches/mobile/manifest.json upstream.lock.properties
+          git commit -m "chore(upstream): adapt Android host to ${tag}"
+          remote_sha=$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')
+          if [[ -n "$remote_sha" ]]; then
+            git push --force-with-lease="refs/heads/$branch:$remote_sha" origin "HEAD:refs/heads/$branch"
+          else
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+          echo "name=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update the adaptation pull request
+        id: pr
+        if: steps.adapt.outputs.code == '0'
+        run: |
+          set -euo pipefail
+          body="${RUNNER_TEMP:?}/upstream-sync-pr.md"
+          cat > "$body" <<EOF
+          ## 自动适配 Magpie 稳定版
+
+          将 Android host 适配从 \`${{ steps.upstream.outputs.tag }}\` 三方合并到 \`${{ steps.detect.outputs.tag }}\`。
+
+          - 当前 revision：\`${{ steps.upstream.outputs.revision }}\`
+          - 目标 revision：\`${{ steps.detect.outputs.revision }}\`
+          - 目标 CoreVersion：\`${{ steps.detect.outputs.core_version }}\`
+          - [上游同步运行](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          生成内容只包含经过 SHA-256 校验的新上游整文件补丁、overlay 清单和 \`upstream.lock.properties\`。无冲突不表示 API 仍兼容；合并前必须等待该分支的完整 Validation 和 signed-build 运行通过。
+          EOF
+          existing=$(gh pr list --state open --head "${{ steps.branch.outputs.name }}" \
+            --json number,url --jq '.[0].url // ""')
+          if [[ -n "$existing" ]]; then
+            gh pr edit "$existing" --title "chore(upstream): adapt ${{ steps.detect.outputs.tag }}" --body-file "$body"
+            echo "url=$existing" >> "$GITHUB_OUTPUT"
+          else
+            url=$(gh pr create --base "$BASE_BRANCH" \
+              --head "${{ steps.branch.outputs.name }}" \
+              --title "chore(upstream): adapt ${{ steps.detect.outputs.tag }}" \
+              --body-file "$body")
+            echo "url=$url" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Explicitly dispatch exact-branch Validation and signed build
+        if: steps.adapt.outputs.code == '0'
+        run: |
+          set -euo pipefail
+          branch="${{ steps.branch.outputs.name }}"
+          gh workflow run validate.yml --ref "$branch"
+          gh workflow run build.yml --ref "$branch" \
+            -f publish_release=false \
+            -f latest_mode=keep-current
+          printf 'Validation and signed-build dispatched for `%s`; release publication remains skipped.\n' "$branch" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report an already-current lock
+        if: steps.detect.outputs.update_available != 'true'
+        run: |
+          echo "Upstream lock is already at ${{ steps.detect.outputs.tag }} (${{ steps.detect.outputs.revision }})." >> "$GITHUB_STEP_SUMMARY"
