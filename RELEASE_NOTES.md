@@ -1,3 +1,12 @@
+## Magpie-Mobile 0.1.67-upstream-v0.1.4801（上游核心同步至 v0.1.4801）
+
+- 上游核心由 `v0.1.4759` 升级至 [`yetone/magpie` `v0.1.4801`](https://github.com/yetone/magpie/releases/tag/v0.1.4801)（commit `9cbf787c`），Android 宿主核心版本更新为 `0.1.4801-androidhost.4`。
+- 三方合并 13 个上游整文件补丁与 28 个 Android overlay，完整保留原生管理请求头隔离、一次性浏览器编辑会话 proof、loopback 监听、官方插件宿主桥接及加密备份浏览器下载桥接。
+- 同步上游修复与特性：Bedrock AWS Access Key SigV4 鉴权、MCP OAuth 回调与服务保活控制、Gemini `thinkingLevel` 与工具调用修复、响应注释与账户筛选修复，以及未启用账号时隐藏已下线内置 Antigravity 添加入口。
+- 界面保持暖纸色主题、RikkaHub 提供商与聊天页面结构、霞鹜文楷屏幕阅读版以及官方三类外部插件机制；全部构建与运行验证由 GitHub Actions 完成。
+
+versionName `0.1.67-upstream-v0.1.4801`，versionCode 68，核心 `0.1.4801-androidhost.4`。
+
 ## Magpie-Mobile 0.1.66-update-center（上游核心同步与 GitHub 更新）
 
 - “更多”页新增 GitHub 稳定版检查与 APK 下载。固定 Release 元数据、四项附件、APK 哈希、包名、版本、固定签名和 ARM64 Go/Bun 核心载荷均通过检查后，交由 Android 系统安装确认；不热替换 native 文件。

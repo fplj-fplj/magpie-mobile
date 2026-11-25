@@ -2,7 +2,13 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
-## 当前 Latest：0.1.66-update-center
+## 当前版本：0.1.67-upstream-v0.1.4801
+
+- 上游核心锁定于 [`v0.1.4801`](https://github.com/yetone/magpie/releases/tag/v0.1.4801)（commit `9cbf787c`），Android 宿主核心 `0.1.4801-androidhost.4`，应用版本 `0.1.67-upstream-v0.1.4801`（`versionCode = 68`）。
+- 三方合并 13 个上游整文件补丁与 28 个 Android overlay，同步 Bedrock SigV4、MCP OAuth 回调与保活、Gemini `thinkingLevel`／工具调用修复、响应注释与账号筛选修复，以及未启用账号时隐藏内置 Antigravity 添加入口；原生管理请求头隔离、一次性浏览器编辑器 proof 与加密备份桥接保持不变。详见 [0.1.67 适配记录](docs/bugfixes-0.1.67.md)。
+- PR #3（`12b6ce0e`）已通过完整 GitHub Actions Validation 与签名构建验证；正式 Release 发布将基于最终提交重新完成精确 SHA 验证与附件核验后公开。
+
+## 上一正式 Latest：0.1.66-update-center
 
 Release [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.66-update-center-7890bf89) 已正式发布并成为 GitHub Latest。上游固定于 v0.1.4759；应用内更新器、上游适配、JVM 1,155 项、Android API 35 模拟器 32 项、Go／插件／race 验收均通过。公开签名 APK 为 114,082,824 bytes，SHA-256 `01292c5b8814bc48c9ea5738b4f14e037a6488d7fea24ceb394dab8ead307e42`，并已与正式 Actions 产物逐字节比对。详见 [0.1.66 验收记录](docs/bugfixes-0.1.66.md)。
 
@@ -25,7 +31,7 @@ Release [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-m
 - **提供商保存与外部返回**：保存期间锁定手动模型输入并拒绝旧回调，外部返回保留草稿、合并待办，关闭编辑或当前请求退出后自动补读最新列表；未确认前阻止旧配置保存。0.1.58 的 JVM 1,071 项及完整 Actions 验收通过，详见 [0.1.58 修复记录](docs/bugfixes-0.1.58.md)。
 - **聊天预设与停止清理**：预设参数进入真实发送，失败保留表单，存储失败保留原文件；网关停止使用独立清理凭证，重复通知与迟到启动不提前解除屏障。详见 [0.1.57 预设验收](docs/bugfixes-0.1.57.md)及 [0.1.56 停止验收](docs/bugfixes-0.1.56.md)。
 - **实时诊断与退出码**：运行日志有界合并更新，不重复启动连接或通知；停止保留最终日志和实际退出码，完整行先脱敏再截断。详见 [0.1.54 验收记录](docs/bugfixes-0.1.54.md)。
-- **已发布 APK 的上游核心**：v0.1.3781（commit `b52c7111`）；0.1.66 候选的上游锁已更新到 v0.1.4759（commit `95e6a418`）。
+- **已发布 APK 的上游核心**：0.1.66 Release 使用 `v0.1.4759`（commit `95e6a418`）；当前主分支上游锁已推进至 `v0.1.4801`（commit `9cbf787c`）。
 - **聊天与模型目录**：聊天与模型目录在排队前绑定完整连接轮次，同一服务重连也撤销旧请求。模型选择及发送使用已验证目录的连接标识，点击时再核对有效性，覆盖重绘之前的旧按钮窗口；失败保留草稿，成功保存以 Room 的实际提交为准，不自动重发。新增 47 项 JVM 回归，总计 922 项，完整 Actions、真实 Android 核心重连、签名候选与正式发布均通过。详见 [0.1.53 修复与验收记录](docs/bugfixes-0.1.53.md)。
 - **插件登录与取消**：插件读取、编辑、市场及登录绑定完整连接轮次；Start 返回前的取消意图会保留，取得 ID 后只在原连接取消一次，并只读核对真实终态。未知结果保留恢复提示，重建后不接管旧任务，文件导入也校验复制前的连接。0.1.52 新增 47 项 JVM 回归，总计 875 项，完整 Actions、真实 Android 登录取消、签名候选与正式发布均通过。详见 [0.1.52 验收记录](docs/bugfixes-0.1.52.md)。
 - **提供商重连**：提供商页面按完整连接轮次刷新，同一服务重连也不复用旧缓存或旧请求；新轮次仍等待旧写入真正退出。未知保存核对成功后清除旧编辑／新建状态，提示从列表重新打开，普通刷新保留草稿。0.1.51 的 828 项 JVM 回归、完整 Actions、签名候选与正式发布均通过。详见 [0.1.51 验收记录](docs/bugfixes-0.1.51.md)。
@@ -48,6 +54,7 @@ Release [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-m
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/bugfixes-0.1.67.md](docs/bugfixes-0.1.67.md) | 上游稳定版同步至 v0.1.4801、宿主兼容性核对与 Actions 验收 |
 | [docs/bugfixes-0.1.66.md](docs/bugfixes-0.1.66.md) | 上游稳定版同步、GitHub 更新器、完整 Actions 验收与正式签名发布 |
 | [docs/bugfixes-0.1.65.md](docs/bugfixes-0.1.65.md) | 管理凭据隔离、敏感剪贴板、界面可访问性与发布防护候选 |
 | [docs/bugfixes-0.1.64.md](docs/bugfixes-0.1.64.md) | 流式 `reasoning` 别名、重复思考防护、预算与上下文边界 |
@@ -105,7 +112,7 @@ Release [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-m
 
 `Build signed APK (manual release)` 在 `main` 更新时负责固定源码／补丁、ARM64 核心、APK 编译、签名与载荷校验，并把签名产物保存在对应 Actions run，不自动创建 Release。确认版本可用后，手动运行该工作流并勾选 `publish_release`；发布门禁还要求同提交最新可信 `Validation` attempt 的 `regression` 与 `runtime-emulator` 均已完成并成功。附件先上传至草稿并核对名称、大小和 SHA-256，再公开为 Latest，已公开版本不覆盖附件或移动 tag。核心按上游、Go／NDK 版本和补丁哈希缓存，UI 修改可复用核心。`Validation` 独立运行 JVM、Go、真实插件与 Android 模拟器测试，失败保留报告，不阻止已经成功构建的签名产物归档。文档修改不触发重复编译。本地不运行编译。
 
-[下载 GitHub Latest 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/latest)。当前 Latest 为 0.1.65；0.1.66 正式发布前会针对最终文档提交再次完成完整 Validation、签名构建和附件核验。历史 0.1.64 正式 APK 为 103,617,320 bytes，SHA-256 `c3b8c92bfb5172dc773447109d776ff9476ac49a32985138eddbfb4c6c89dc8a`；固定签名与 ARM64 载荷已核对。
+[下载 GitHub Latest 签名 APK](https://github.com/fplj-fplj/magpie-mobile/releases/latest)。历史 0.1.66 正式 APK 为 114,082,824 bytes，SHA-256 `01292c5b8814bc48c9ea5738b4f14e037a6488d7fea24ceb394dab8ead307e42`；历史 0.1.64 正式 APK 为 103,617,320 bytes，SHA-256 `c3b8c92bfb5172dc773447109d776ff9476ac49a32985138eddbfb4c6c89dc8a`；固定签名与 ARM64 载荷均已核对。
 
 官方插件完整通过基线仍可通过 [`05072a47` Actions](https://github.com/fplj-fplj/magpie-mobile/actions/runs/43682069460)追溯；对应历史 Release 条目已按清理策略移除，运行证据与剩余项目记录在[插件接入文档](docs/official-plugin-integration.md)。
 

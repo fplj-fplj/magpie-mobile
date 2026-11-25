@@ -26,8 +26,8 @@ android {
         applicationId = "cc.fplj.magpiemobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 67
-        versionName = "0.1.66-update-center"
+        versionCode = 68
+        versionName = "0.1.67-upstream-v0.1.4801"
         buildConfigField("String", "CORE_VERSION", buildConfigString(upstreamLockValue("coreVersion")))
         buildConfigField("String", "UPSTREAM_TAG", buildConfigString(upstreamLockValue("tag")))
         buildConfigField("String", "UPSTREAM_SHA", buildConfigString(upstreamLockValue("revision")))
