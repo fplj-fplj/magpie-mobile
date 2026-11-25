@@ -5,6 +5,8 @@
 - Release 机器字段与更新协议由 Actions 注入；更新器固定校验仓库、资产协议、摘要、签名和核心载荷，再交由 Android 系统安装。
 - 上游固定为 v0.1.4759（commit `95e6a418`）。完整 JVM／Go／插件／race 与 Android 模拟器验收均通过，最终签名 APK 的固定证书、版本、核心和 Bun 载荷经 Actions 校验。
 - Release 提供固定签名 ARM64 APK、SHA-256、构建信息和核心构建信息；Actions 在同提交完整验证成功后核对四项附件并公开。所有编译与运行测试均由 GitHub Actions 完成，Android 运行验收使用 API 35 x86_64 模拟器，ARM64 正式包核验签名和载荷。
+- 正式 Release [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.66-update-center-7890bf89) 已成为 Latest。Validation `45463706539`、发布构建 `45545664601` 均针对提交 `7890bf89e59d24f815ef95af33478ae4e90863c2` 成功；公开 APK 为 114,082,824 bytes，SHA-256 `01292c5b8814bc48c9ea5738b4f14e037a6488d7fea24ceb394dab8ead307e42`，与该发布 run 签名候选逐字节一致。
+- GitHub 仓库变量 `MAGPIE_UPSTREAM_SYNC_ENABLED=true` 已设置；每日稳定版检查工作流现已启用。自动生成的同步 PR 仍须完整验证和审阅，不会自动改写锁文件或发布 APK。
 
 versionName `0.1.66-update-center`，versionCode 67。
 

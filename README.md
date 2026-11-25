@@ -2,18 +2,14 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
-## 最新候选：0.1.66-update-center（验证通过，等待正式发布）
+## 当前 Latest：0.1.66-update-center
 
-0.1.66 尚未发布，当前 Latest 为 0.1.65。上游固定在 v0.1.4759；应用内更新器、上游适配、JVM 1,155 项、Android API 35 模拟器 32 项、Go／官方插件／race 验收以及签名 APK 静态核查均已通过 GitHub Actions。最终发布提交会再跑完整验证与签名构建，只有新建的 0.1.66 Release 通过附件校验后才会成为 Latest。详见 [0.1.66 验收记录](docs/bugfixes-0.1.66.md)。
+Release [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.66-update-center-7890bf89) 已正式发布并成为 GitHub Latest。上游固定于 v0.1.4759；应用内更新器、上游适配、JVM 1,155 项、Android API 35 模拟器 32 项、Go／插件／race 验收均通过。公开签名 APK 为 114,082,824 bytes，SHA-256 `01292c5b8814bc48c9ea5738b4f14e037a6488d7fea24ceb394dab8ead307e42`，并已与正式 Actions 产物逐字节比对。详见 [0.1.66 验收记录](docs/bugfixes-0.1.66.md)。
 
 - Android 宿主管理 API 改用原生请求头和浏览器 session proof，避免管理密钥通过跨端口共享的 Cookie 暴露。
 - 修复浅色对比度、短屏历史弹窗、提供商页签及模型分组读屏状态；插件登录敏感字段的复制会标记为敏感。
 - Release 附件上传后重新核验同提交 Validation，旧版本恢复默认不替换 Latest，增加受保护的 Release 清理脚本。
-- 上游核心锁定于 v0.1.4759（commit `95e6a418`），由三方适配同步并经 GitHub Actions 验证；“更多”页可检查本项目 Release，核对 APK 后交给 Android 安装器。
-
-## 当前 Latest：0.1.65-editor-session
-
-Release `v0.1.65-editor-session-9cdab250` 当前为 GitHub Latest。0.1.66 的完整代码验证及签名候选均已通过；正式发布等待最终记录提交的同 SHA 验证。
+- 上游核心锁定于 v0.1.4759（commit `95e6a418`），由三方适配同步并经 GitHub Actions 验证；每日自动检查已启用，候选 PR 仍须验证后合并。“更多”页可检查本项目 Release，核对 APK 后交给 Android 安装器。
 
 ## 前一已验证版本：0.1.64-reasoning-aliases
 

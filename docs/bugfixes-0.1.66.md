@@ -1,6 +1,6 @@
 # 0.1.66 GitHub 更新中心与上游同步
 
-0.1.66 增加两个更新路径：构建侧同步 `yetone/magpie` 稳定 Release 并应用 Android 宿主适配；应用侧从本仓库 Latest Release 检查并获取完整签名 APK。上游固定为 v0.1.4759（commit `95e6a4180866afde186e0f1a25369388c7fd7e7f`）。完整 Actions 验收和签名候选均已通过；本记录所处最终提交仍需重复验证与签名构建，然后才发布。
+0.1.66 增加两个更新路径：构建侧同步 `yetone/magpie` 稳定 Release 并应用 Android 宿主适配；应用侧从本仓库 Latest Release 检查并获取完整签名 APK。上游固定为 v0.1.4759（commit `95e6a4180866afde186e0f1a25369388c7fd7e7f`）。正式 Release `v0.1.66-update-center-7890bf89` 已发布并成为 Latest。
 
 ## GitHub Release 应用更新
 
@@ -28,4 +28,10 @@
 - Android API 35 x86_64 完成 32 项，31 项通过。`PackageManager.getPackageArchiveInfo()` 对当前 APK 返回的 application flags 为 0，因此 instrumentation 不再把该读取结果当作 Debug 包证据；仍会检查候选签名不是正式证书，并验证更新器拒绝该归档。生产 APK 的不可调试要求保持不变。
 - 提供商用例在选择第二个模型后等待底部页关闭超时，同阶段日志记录单帧停顿约 9.3 秒。改为在 Compose 帧推进循环之外读取语义树，给予 30 秒退场预算；仍要求选择页实际消失并验证已选模型及未保存草稿边界。
 
-`1200556ad587297bb6199db3ef2c14727dd21342` 的完整 Validation `45458451072` 已通过：JVM core 668＋app 487 共 1,155 项；Android API 35 x86_64 的 32 项零失败、错误与跳过；Go mobile／AndroidHost、安全参数转发、真实 TLS、官方与社区插件、插件 race 全部成功。Actions 签名构建 `45458459475` 成功，APK 静态核对确认包名、版本、固定证书、ARM64 ELF PIE 核心、Bun、版本与上游核心均匹配。此验证记录提交尚未发布；最终文档提交将再次完整验证和签名，准确发布证据随后补入。
+`1200556ad587297bb6199db3ef2c14727dd21342` 的完整 Validation `45458451072` 和签名构建 `45458459475` 均通过，随后修复了 Release 前文档中的候选措辞。最终发布提交 `7890bf89e59d24f815ef95af33478ae4e90863c2` 的 Validation `45463706539` 和签名构建 `45463714959` 均成功：JVM core 668＋app 487 共 1,155 项，Android API 35 x86_64 共 32 项，失败／错误／跳过均为零；Go mobile 53 项、AndroidHost 61 项、核心与 TLS 集成、官方和社区插件及 race 全部通过，Android 错误报告为空。静态检查最终签名候选的包名、versionName `0.1.66-update-center`、versionCode 67、固定证书、ARM64 ELF PIE 核心和 Bun 载荷均匹配。
+
+正式发布构建 `45545664601` 的 build 与 publish jobs 均成功。Latest tag 为 [`v0.1.66-update-center-7890bf89`](https://github.com/fplj-fplj/magpie-mobile/releases/tag/v0.1.66-update-center-7890bf89)，target commit 为 `7890bf89e59d24f815ef95af33478ae4e90863c2`，有四个预期附件且不是 draft／prerelease。公开 APK 114,082,824 bytes，SHA-256 `01292c5b8814bc48c9ea5738b4f14e037a6488d7fea24ceb394dab8ead307e42`，与正式发布 run 的签名候选逐字节一致；checksum、GitHub asset digest、签名证书及载荷均核对通过。
+
+按清理规则移除 0.1.65 Release object，保留 0.1.66 Latest 与长期保留的 0.1.62；Git tag `v0.1.65-editor-session-9cdab250` 未删除。两项保留 Release 的 APK 已下载，并与 SHA-256 附件、asset digest 及附件大小核对一致。清理后 Releases 仅有 0.1.66 和 0.1.62，Latest 仍为 0.1.66。
+
+仓库变量 `MAGPIE_UPSTREAM_SYNC_ENABLED=true` 已创建并经 GitHub API 读回确认；定时同步工作流默认关闭的条件已解除，每日自动检查上游现已启用。同步 PR 仍需审阅及完整验证。
