@@ -1,3 +1,11 @@
+## Magpie-Mobile 0.1.69-upstream-v0.1.4877（上游核心同步至 v0.1.4877）
+
+- 上游核心由 `v0.1.4807` 升级至 [`yetone/magpie` `v0.1.4877`](https://github.com/yetone/magpie/releases/tag/v0.1.4877)（commit `148b6ca2`），Android 宿主核心版本更新为 `0.1.4877-androidhost.4`。
+- 三方合并 13 个上游整文件补丁与 28 个 Android overlay，保留原生管理 API 隔离、一次性浏览器编辑会话 proof、loopback 监听、官方插件宿主与加密备份文件桥接。
+- 完整验证 JVM、Android API 35 模拟器、Go mobile／AndroidHost、TLS、官方与社区插件以及 race；暖纸色、RikkaHub 页面和霞鹜文楷屏幕阅读版保持不变。
+
+versionName `0.1.69-upstream-v0.1.4877`，versionCode 70，核心 `0.1.4877-androidhost.4`。
+
 ## Magpie-Mobile 0.1.68-upstream-v0.1.4807（上游核心同步至 v0.1.4807）
 
 - 上游核心由 `v0.1.4801` 升级至 [`yetone/magpie` `v0.1.4807`](https://github.com/yetone/magpie/releases/tag/v0.1.4807)（commit `a8f96beb`），Android 宿主核心版本更新为 `0.1.4807-androidhost.4`。
