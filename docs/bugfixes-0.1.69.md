@@ -20,7 +20,7 @@
 
 候选签名构建 run `45847229192` 成功，publish 按未授权候选规则跳过。该候选时仍内嵌 0.1.68 版本号，故不用于发布；正式版本号提升到 0.1.69 后，必须对最终提交重新运行完整 Validation 与签名构建，并核验同提交产物。
 
-最终版本提交首轮 Validation `45851078346` 的 JVM、runtime-arm64-capabilities 与 Go/core regression 均通过；Android runtime 因 `OfficialPluginsInstrumentedTest` 的 UiAutomator 选择器失败。截图显示提供商已处于预期的“启用 0 / 目录 1”状态，测试却在合并后的 Compose 行节点内查询不可访问的子文本，并把非 clickable 的“刷新”文字当作按钮。已将选择器改为匹配可点击按钮、整行启用态及独立可见文本；此修复必须在新提交完整复验后才可发布。
+最终版本提交首轮 Validation `45851078346` 的 JVM、runtime-arm64-capabilities 与 Go/core regression 均通过；Android runtime 因 `OfficialPluginsInstrumentedTest` 的 UiAutomator 选择器失败。截图显示提供商已处于预期的“启用 0 / 目录 1”状态，测试却在合并后的 Compose 行节点内查询不可访问的子文本。第一次选择器修正改为独立查找行名和标签，但遗漏了“刷新”文字本身不可点击，精确复验 `45854416931` 在两处分别报告 `provider list refreshed...` 和 `provider refresh visible` 超时。已改为点击刷新文字可见区域中心，并按全局可见标签、行启用态分别验证；最新完整验证仍须通过后才可发布。
 
 ## 最终提交验收与发布
 
