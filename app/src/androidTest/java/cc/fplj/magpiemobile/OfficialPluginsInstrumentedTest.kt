@@ -1746,7 +1746,7 @@ class OfficialPluginsInstrumentedTest {
     /** Wait for a visibly fresh Panel summary; opening only a fresh editable snapshot is insufficient. */
     private fun refreshProviderRow(expectedName: String, expectedTag: String) {
         // TextButton exposes its label on a child text node; that child is not clickable.
-        val refresh = By.text("刷新").enabled(true)
+        val refresh = By.text("刷新").enabled(true).clickable(true)
         await("provider refresh visible") {
             if (device.hasObject(refresh)) true else {
                 device.swipe(device.displayWidth / 2, device.displayHeight / 3,
@@ -1756,9 +1756,11 @@ class OfficialPluginsInstrumentedTest {
         }
         device.findObject(refresh).click()
         await("provider list refreshed to $expectedName / $expectedTag") {
-            val row = device.findObject(By.res("provider-row:android-runtime"))
-            if (row?.isEnabled == true && row.findObject(By.text(expectedName)) != null &&
-                row.findObject(By.text(expectedTag)) != null
+            // Compose merges each ProviderRow into one accessibility node, so its
+            // descendant name/tag text is not queryable through row.findObject().
+            // Match all three independent visible nodes and require the row action too.
+            if (device.hasObject(By.res("provider-row:android-runtime").enabled(true)) &&
+                device.hasObject(By.text(expectedName)) && device.hasObject(By.text(expectedTag))
             ) true else {
                 device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
                     device.displayWidth / 2, device.displayHeight / 3, 20)
