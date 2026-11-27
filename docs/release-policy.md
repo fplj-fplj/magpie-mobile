@@ -20,7 +20,7 @@ Release 页面只保留当前可用 Latest，以及明确需要长期保留的�
 
 当前应保留：
 
-- Latest：`v0.1.70-upstream-v0.1.4934-1e87bcc3`
+- Latest：`v0.1.71-upstream-v0.1.4936-b6097dd0`
 - 长期版本：`v0.1.62-chat-session-clipboard-fixes-90971632`
 
 0.1.70 发布后，清理 dry-run 确认只会移除旧 Latest 0.1.68；执行前已下载核对 0.1.70 与长期保留的 0.1.62 APK/checksum，并核对 0.1.68 的 APK/checksum：
@@ -28,16 +28,16 @@ Release 页面只保留当前可用 Latest，以及明确需要长期保留的�
 ```sh
 GH_TOKEN=... python3 scripts/cleanup-releases.py \
   --repository fplj-fplj/magpie-mobile \
-  --keep v0.1.70-upstream-v0.1.4934-1e87bcc3 \
+  --keep v0.1.71-upstream-v0.1.4936-b6097dd0 \
   --keep v0.1.62-chat-session-clipboard-fixes-90971632
 ```
 
-清理已完成，实际删除与 dry-run 计划一致：仅移除了 0.1.68 Release object，保留了它的 Git tag。最终 Release 列表只包含 0.1.70 Latest 与 0.1.62 长期版本。0.1.70 APK 为 114,961,588 bytes，SHA-256 `da490efbacde7360cfeb8aced8fefa85bb89935af5f3c88691608f0b4db6db22`；0.1.68 APK 为 114,210,220 bytes，SHA-256 `b0b1cf7f68ce50e4dd9b8cbb00864b9e4bd374b1faaa9dad83da3508df1f082f`。两者 checksum 附件均与公开 APK 匹配。以后需要清理时，先运行 dry-run 核对计划，再使用：
+清理已完成：dry-run 列出的唯一待删除项为旧 Latest 0.1.70，执行后只移除了该 Release object，保留其 Git tag。最终 Release 列表只包含 0.1.71 Latest 与 0.1.62 长期版本。执行前核对了 0.1.71、0.1.70 和长期保留的 0.1.62 APK/checksum。0.1.71 APK 为 114,973,396 bytes，SHA-256 `1bad55fbac8df9175af939df94c6158e73936143401bf975becc788f47c0a617`。此前 0.1.70 APK 为 114,961,588 bytes，SHA-256 `da490efbacde7360cfeb8aced8fefa85bb89935af5f3c88691608f0b4db6db22`；0.1.68 APK 为 114,210,220 bytes，SHA-256 `b0b1cf7f68ce50e4dd9b8cbb00864b9e4bd374b1faaa9dad83da3508df1f082f`。三版公开 checksum 均与对应 APK 匹配。以后需要清理时，先运行 dry-run 核对计划，再使用：
 
 ```sh
 GH_TOKEN=... python3 scripts/cleanup-releases.py \
   --repository fplj-fplj/magpie-mobile \
-  --keep v0.1.70-upstream-v0.1.4934-1e87bcc3 \
+  --keep v0.1.71-upstream-v0.1.4936-b6097dd0 \
   --keep v0.1.62-chat-session-clipboard-fixes-90971632 \
   --apply --confirm 'DELETE RELEASE OBJECTS'
 ```

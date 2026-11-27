@@ -415,5 +415,6 @@ versionCode 64，metadata appVersion `0.1.63`；核心 `0.1.3781-androidhost.3`�
 
 - 上游核心同步至 [`yetone/magpie` `v0.1.4936`](https://github.com/yetone/magpie/releases/tag/v0.1.4936)（`cd6d110e`）。会话面板新增长会话轮数、按需载入后续内容、每轮对话文字摘要，以及首次打开时展开折叠步骤。
 - 保留 Android 宿主的提供商配置修订校验、浏览器编辑会话、官方插件和加密备份桥接。
+- 最终提交 `b6097dd00e4f576acaad800c89ea19a5180b3a66` 的 Validation `45946935424` 和正式发布构建 `45948834699` 均通过；Release `v0.1.71-upstream-v0.1.4936-b6097dd0` 已成为 Latest。JVM 1,155 项、Android 模拟器 32 项、Go／AndroidHost／插件／race 及 ARM64 能力核验全部通过。公开签名 APK 为 114,973,396 bytes，SHA-256 `1bad55fbac8df9175af939df94c6158e73936143401bf975becc788f47c0a617`，与 checksum 附件和 GitHub digest 一致。
 
 versionName `0.1.71-upstream-v0.1.4936`，versionCode 72，核心 `0.1.4936-androidhost.4`。

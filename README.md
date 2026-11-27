@@ -6,12 +6,17 @@
 
 - 候选锁定上游 Magpie [`v0.1.4936`](https://github.com/yetone/magpie/releases/tag/v0.1.4936)（commit `cd6d110e`），应用 versionCode 72。上游会话面板新增长会话轮数、按需加载及对话文本展示。宿主改动与候选版本仍由 GitHub Actions 完整验证后发布。
 
-## 当前正式版本：0.1.70-upstream-v0.1.4934
+## 当前正式版本：0.1.71-upstream-v0.1.4936
+
+- 上游核心同步至 [`v0.1.4936`](https://github.com/yetone/magpie/releases/tag/v0.1.4936)（commit `cd6d110e`），Android 宿主核心 `0.1.4936-androidhost.4`，应用 `versionCode = 72`。
+- 最终提交 `b6097dd00e4f576acaad800c89ea19a5180b3a66` 的 GitHub Actions [Validation `45946935424`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45946935424) 与正式签名发布构建 [`45948834699`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45948834699) 均成功。JVM 1,155 项，Android API 35 模拟器 32 项，ARM64 capability、Go mobile／AndroidHost、插件和 race 检查通过。Release 已成为 Latest；APK 为 114,973,396 bytes，SHA-256 `1bad55fbac8df9175af939df94c6158e73936143401bf975becc788f47c0a617`，公开下载、checksum 附件和 GitHub digest 一致。详见 [0.1.71 验收记录](docs/bugfixes-0.1.71.md)。
+
+## 前一正式版本：0.1.70-upstream-v0.1.4934
 
 - 上游核心锁定 [`v0.1.4934`](https://github.com/yetone/magpie/releases/tag/v0.1.4934)（commit `f834c203`），Android 宿主核心 `0.1.4934-androidhost.4`，应用 `versionCode = 71`。
 - 最终提交 `1e87bcc34a8c540e1c6926fc05b2fcd5cc075423` 的 GitHub Actions [Validation `45940919896`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45940919896) 与正式签名发布构建 [`45943337172`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45943337172) 均成功。Regression 和 Android API 35 模拟器通过；签名证书、ARM64 核心载荷与 APK 运行时探测通过。Release 已成为 Latest，APK 为 114,961,588 bytes，SHA-256 `da490efbacde7360cfeb8aced8fefa85bb89935af5f3c88691608f0b4db6db22`，与公开 checksum 和 GitHub digest 一致。详见 [0.1.70 验收记录](docs/bugfixes-0.1.70.md)。
 
-## 前一正式版本：0.1.68-upstream-v0.1.4807
+## 历史正式版本：0.1.68-upstream-v0.1.4807
 
 - 上游核心锁定于 [`v0.1.4807`](https://github.com/yetone/magpie/releases/tag/v0.1.4807)（commit `a8f96beb`），Android 宿主核心 `0.1.4807-androidhost.4`，应用版本 `0.1.68-upstream-v0.1.4807`（`versionCode = 69`）。
 - 三方合并 13 个上游整文件补丁与 28 个 Android overlay，在保留宿主管控、浏览器编辑会话 proof 与加密备份桥接的基础上，同步上游至 2026-11-25 发布的稳定版本。界面与官方三类插件的 Android 宿主机制保持不变。详见 [0.1.68 适配记录](docs/bugfixes-0.1.68.md)。
