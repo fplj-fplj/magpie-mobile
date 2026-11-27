@@ -440,7 +440,11 @@ func TestAndroidHostBackupBootFlagIsRestrictedToAndroidHostBrowser(t *testing.T)
 			if w.Code != http.StatusOK {
 				t.Fatalf("boot failed: HTTP %d", w.Code)
 			}
-			body := strings.TrimSuffix(strings.TrimPrefix(w.Body.String(), "window.bootPrefs = "), ";\n")
+			body := strings.TrimPrefix(w.Body.String(), "window.bootPrefs = ")
+			body, _, ok := strings.Cut(body, ";\n")
+			if !ok {
+				t.Fatal("boot response did not terminate the preferences assignment")
+			}
 			var boot map[string]any
 			if err := json.Unmarshal([]byte(body), &boot); err != nil {
 				t.Fatal(err)
