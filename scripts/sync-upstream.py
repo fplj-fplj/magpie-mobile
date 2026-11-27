@@ -360,6 +360,29 @@ def merge_updater_guard(ours: str, theirs: str) -> str | None:
     return textwrap.indent(guard + "\n" + behind + "\n", indent)
 
 
+def merge_android_web_artifact_handler(ours: str, theirs: str) -> str | None:
+    mobile = "return webCompressed(androidHostEditor(port, key, where, box, page))"
+    desktop = (
+        'return webCompressed(webArtifactPages(webGuard("magpie_web_"+port, key, where, box, '
+        "webArtifactLinks(webOwnPage(page)))))"
+    )
+    sides = {textwrap.dedent(ours).strip(), textwrap.dedent(theirs).strip()}
+    if sides != {mobile, desktop}:
+        return None
+    # Android's short-lived editor session replaces the desktop web cookie
+    # guard. Keep the artifact's origin check, read-only navigation redirect
+    # and HMAC-scoped file route inside that Android page handler. The desktop
+    # webGuard is deliberately not used here: Android has no desktop sign-in
+    # session, and the artifact content route is a read-only capability URL.
+    merged = (
+        'return webCompressed(androidHostEditor(port, key, where, box, '
+        "webArtifactPages(webArtifactLinks(webOwnPage(page)))))"
+    )
+    first_line = next((line for line in ours.splitlines() if line.strip()), "")
+    indent = re.match(r"^[ \t]*", first_line).group(0)
+    return indent + merged + "\n"
+
+
 def auto_resolve_conflict_file(root: Path, name: str) -> str | None:
     path = APPLIER.safe_path(root, name)
     try:
@@ -385,6 +408,8 @@ def auto_resolve_conflict_file(root: Path, name: str) -> str | None:
             merged = "\n".join(merged_lines) + ("\n" if merged_lines else "")
         if merged is None and name == "internal/gui/update.go":
             merged = merge_updater_guard(ours, theirs)
+        if merged is None and name == "internal/gui/web.go":
+            merged = merge_android_web_artifact_handler(ours, theirs)
         return merged if merged is not None else match.group(0)
 
     updated = CONFLICT_BLOCK.sub(resolve, text)
@@ -440,8 +465,11 @@ def validate_android_security_surface(sources: dict[str, str]) -> None:
             raise SyncError("adapted gatewaymode.go lost Android gateway-mode policy")
     if "func webHandler(port, key, where string, box boxSignIn, page http.Handler) http.Handler" not in web:
         raise SyncError("adapted web.go no longer accepts the upstream where string")
-    if "androidHostEditor(port, key, where, box, page)" not in web:
-        raise SyncError("adapted web.go no longer routes through the Android editor wrapper")
+    if not all(token in web for token in (
+        "androidHostEditor(port, key, where, box, webArtifactPages(",
+        "webArtifactLinks(webOwnPage(page))",
+    )):
+        raise SyncError("adapted web.go lost Android session proof or artifact capability routing")
 
     for token in (
         "usage: use.checked",

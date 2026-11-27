@@ -287,6 +287,34 @@ class UpstreamSyncTests(unittest.TestCase):
         merged_updater = updater.read_text(encoding="utf-8")
         self.assertLess(merged_updater.index("if mobilepolicy.Enabled"), merged_updater.index("u.behind"))
 
+    def test_android_web_handler_keeps_artifact_routes_inside_session_proof(self):
+        web = self.repo / "internal/gui/web.go"
+        web.parent.mkdir(parents=True)
+        web.write_text(
+            "package gui\n\nfunc webHandler(port string) {\n"
+            "<<<<<<< ours\n"
+            "\treturn webCompressed(androidHostEditor(port, key, where, box, page))\n"
+            "=======\n"
+            '\treturn webCompressed(webArtifactPages(webGuard("magpie_web_"+port, key, where, box, '
+            "webArtifactLinks(webOwnPage(page)))))\n"
+            ">>>>>>> theirs\n}\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            "internal/gui/web.go",
+            sync.auto_resolve_conflict_file(self.repo, "internal/gui/web.go"),
+        )
+        merged = web.read_text(encoding="utf-8")
+        self.assertNotIn("<<<<<<<", merged)
+        self.assertIn("androidHostEditor(port, key, where, box, webArtifactPages(", merged)
+        self.assertIn("webArtifactLinks(webOwnPage(page))", merged)
+        self.assertNotIn('webGuard("magpie_web_', merged)
+
+        self.assertIsNone(sync.merge_android_web_artifact_handler(
+            "\treturn webCompressed(androidHostEditor(port, key, where, box, page))\n",
+            "\treturn webCompressed(webArtifactPages(page))\n",
+        ))
+
     def test_finalize_regenerates_from_reviewed_worktree(self):
         _, target_revision, target = self.make_fixture(conflict=True)
         code, report = self.adapt(target_revision)
