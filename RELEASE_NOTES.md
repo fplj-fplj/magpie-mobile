@@ -2,6 +2,7 @@
 
 - 上游核心同步至 [`yetone/magpie` `v0.1.4934`](https://github.com/yetone/magpie/releases/tag/v0.1.4934)（`f834c203`）。官方路由界面现在会显示未出账失败尝试的状态和提供商消息，以及跳过成员的原因；新会话按同一账户合并席位计数。
 - 保留 Android 宿主的提供商配置修订校验、浏览器编辑会话和官方插件桥接，同时兼容上游搜索配置的显式空列表。
+- 最终提交 `1e87bcc34a8c540e1c6926fc05b2fcd5cc075423` 的 Validation `45940919896` 与正式发布构建 `45943337172` 均通过，Release `v0.1.70-upstream-v0.1.4934-1e87bcc3` 已成为 Latest。JVM、Go／插件／race 回归和 Android API 35 模拟器无失败；APK 固定签名、核心载荷和运行时探测通过。公开 APK 为 114,961,588 bytes，SHA-256 `da490efbacde7360cfeb8aced8fefa85bb89935af5f3c88691608f0b4db6db22`，与公开 checksum 和 GitHub digest 一致。
 
 versionName `0.1.70-upstream-v0.1.4934`，versionCode 71，核心 `0.1.4934-androidhost.4`。
 

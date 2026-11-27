@@ -2,15 +2,16 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
-## 当前正式版本：0.1.68-upstream-v0.1.4807
+## 当前正式版本：0.1.70-upstream-v0.1.4934
+
+- 上游核心锁定 [`v0.1.4934`](https://github.com/yetone/magpie/releases/tag/v0.1.4934)（commit `f834c203`），Android 宿主核心 `0.1.4934-androidhost.4`，应用 `versionCode = 71`。
+- 最终提交 `1e87bcc34a8c540e1c6926fc05b2fcd5cc075423` 的 GitHub Actions [Validation `45940919896`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45940919896) 与正式签名发布构建 [`45943337172`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45943337172) 均成功。Regression 和 Android API 35 模拟器通过；签名证书、ARM64 核心载荷与 APK 运行时探测通过。Release 已成为 Latest，APK 为 114,961,588 bytes，SHA-256 `da490efbacde7360cfeb8aced8fefa85bb89935af5f3c88691608f0b4db6db22`，与公开 checksum 和 GitHub digest 一致。详见 [0.1.70 验收记录](docs/bugfixes-0.1.70.md)。
+
+## 前一正式版本：0.1.68-upstream-v0.1.4807
 
 - 上游核心锁定于 [`v0.1.4807`](https://github.com/yetone/magpie/releases/tag/v0.1.4807)（commit `a8f96beb`），Android 宿主核心 `0.1.4807-androidhost.4`，应用版本 `0.1.68-upstream-v0.1.4807`（`versionCode = 69`）。
 - 三方合并 13 个上游整文件补丁与 28 个 Android overlay，在保留宿主管控、浏览器编辑会话 proof 与加密备份桥接的基础上，同步上游至 2026-11-25 发布的稳定版本。界面与官方三类插件的 Android 宿主机制保持不变。详见 [0.1.68 适配记录](docs/bugfixes-0.1.68.md)。
 - 最终提交 `72ee90650c16b72388d37123e6b81bc1168ee9b0` 的 GitHub Actions [Validation `45661210610`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45661210610) 与正式签名发布构建 [`45663541021`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45663541021) 均成功。JVM 1,155 项、Android API 35 模拟器 32 项、Go mobile 53 项、AndroidHost 61 项及官方／社区插件与 race 验收全部通过。Release 已成为 Latest；签名 APK 为 114,210,220 bytes，SHA-256 `b0b1cf7f68ce50e4dd9b8cbb00864b9e4bd374b1faaa9dad83da3508df1f082f`，并与公开四项附件、固定证书与载荷逐项核对。详见 [完整验收记录](docs/bugfixes-0.1.68.md)。
-
-## 最新上游适配：0.1.70-upstream-v0.1.4934
-
-候选已锁定上游 Magpie [`v0.1.4934`](https://github.com/yetone/magpie/releases/tag/v0.1.4934)（`f834c203`），应用 versionCode 为 71。当前正式 Release 仍为 0.1.68；候选的验证和签名构建均由 GitHub Actions 执行。
 
 ## 上一正式版本：0.1.66-update-center
 
