@@ -8,9 +8,9 @@
 - 三方合并 13 个上游整文件补丁与 28 个 Android overlay，在保留宿主管控、浏览器编辑会话 proof 与加密备份桥接的基础上，同步上游至 2026-11-25 发布的稳定版本。界面与官方三类插件的 Android 宿主机制保持不变。详见 [0.1.68 适配记录](docs/bugfixes-0.1.68.md)。
 - 最终提交 `72ee90650c16b72388d37123e6b81bc1168ee9b0` 的 GitHub Actions [Validation `45661210610`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45661210610) 与正式签名发布构建 [`45663541021`](https://github.com/fplj-fplj/magpie-mobile/actions/runs/45663541021) 均成功。JVM 1,155 项、Android API 35 模拟器 32 项、Go mobile 53 项、AndroidHost 61 项及官方／社区插件与 race 验收全部通过。Release 已成为 Latest；签名 APK 为 114,210,220 bytes，SHA-256 `b0b1cf7f68ce50e4dd9b8cbb00864b9e4bd374b1faaa9dad83da3508df1f082f`，并与公开四项附件、固定证书与载荷逐项核对。详见 [完整验收记录](docs/bugfixes-0.1.68.md)。
 
-## 最新上游适配：0.1.69-upstream-v0.1.4877
+## 最新上游适配：0.1.70-upstream-v0.1.4934
 
-上游 Magpie `v0.1.4877` 已完成宿主同步及候选全量验证；应用版本已提升至 versionCode 70，正在对最终发布提交重新验证。当前正式 Release 仍为 0.1.68。未完成最终签名构建与发布门禁前不把候选标作可下载版本。
+候选已锁定上游 Magpie [`v0.1.4934`](https://github.com/yetone/magpie/releases/tag/v0.1.4934)（`f834c203`），应用 versionCode 为 71。当前正式 Release 仍为 0.1.68；候选的验证和签名构建均由 GitHub Actions 执行。
 
 ## 上一正式版本：0.1.66-update-center
 
@@ -58,6 +58,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/bugfixes-0.1.70.md](docs/bugfixes-0.1.70.md) | 上游稳定版同步至 v0.1.4934 与 Android 宿主适配 |
 | [docs/bugfixes-0.1.68.md](docs/bugfixes-0.1.68.md) | 上游稳定版同步至 v0.1.4807 与精确提交验收 |
 | [docs/bugfixes-0.1.69.md](docs/bugfixes-0.1.69.md) | 上游稳定版同步至 v0.1.4877 与精确提交验收 |
 | [docs/bugfixes-0.1.67.md](docs/bugfixes-0.1.67.md) | 上游稳定版同步至 v0.1.4801、宿主兼容性核对与 Actions 验收 |

@@ -1,3 +1,10 @@
+## Magpie-Mobile 0.1.70-upstream-v0.1.4934（上游核心同步至 v0.1.4934）
+
+- 上游核心同步至 [`yetone/magpie` `v0.1.4934`](https://github.com/yetone/magpie/releases/tag/v0.1.4934)（`f834c203`）。官方路由界面现在会显示未出账失败尝试的状态和提供商消息，以及跳过成员的原因；新会话按同一账户合并席位计数。
+- 保留 Android 宿主的提供商配置修订校验、浏览器编辑会话和官方插件桥接，同时兼容上游搜索配置的显式空列表。
+
+versionName `0.1.70-upstream-v0.1.4934`，versionCode 71，核心 `0.1.4934-androidhost.4`。
+
 ## Magpie-Mobile 0.1.69-upstream-v0.1.4877（上游核心同步至 v0.1.4877）
 
 - 上游核心由 `v0.1.4807` 升级至 [`yetone/magpie` `v0.1.4877`](https://github.com/yetone/magpie/releases/tag/v0.1.4877)（commit `148b6ca2`），Android 宿主核心版本更新为 `0.1.4877-androidhost.4`。
