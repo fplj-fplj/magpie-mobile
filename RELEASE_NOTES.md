@@ -4,8 +4,6 @@
 - 保留 Android 宿主的提供商配置修订校验、浏览器编辑会话和官方插件桥接，同时兼容上游搜索配置的显式空列表。
 - 最终提交 `1e87bcc34a8c540e1c6926fc05b2fcd5cc075423` 的 Validation `45940919896` 与正式发布构建 `45943337172` 均通过，Release `v0.1.70-upstream-v0.1.4934-1e87bcc3` 已成为 Latest。JVM、Go／插件／race 回归和 Android API 35 模拟器无失败；APK 固定签名、核心载荷和运行时探测通过。公开 APK 为 114,961,588 bytes，SHA-256 `da490efbacde7360cfeb8aced8fefa85bb89935af5f3c88691608f0b4db6db22`，与公开 checksum 和 GitHub digest 一致。
 
-versionName `0.1.70-upstream-v0.1.4934`，versionCode 71，核心 `0.1.4934-androidhost.4`。
-
 ## Magpie-Mobile 0.1.69-upstream-v0.1.4877（上游核心同步至 v0.1.4877）
 
 - 上游核心由 `v0.1.4807` 升级至 [`yetone/magpie` `v0.1.4877`](https://github.com/yetone/magpie/releases/tag/v0.1.4877)（commit `148b6ca2`），Android 宿主核心版本更新为 `0.1.4877-androidhost.4`。
@@ -413,3 +411,9 @@ versionCode 64，metadata appVersion `0.1.63`；核心 `0.1.3781-androidhost.3`�
 - **ChatPanel 瘦身**：历史会话对话框（切换/重命名/删除/加载更多，约 90 行）外迁至 SessionHistoryDialog.kt，ChatPanel 由 154 行降至约 105 行；
 - `chatDate` 工具函数随迁（internal，同包共用，ChatPanel 保留调用）；
 - 纯代码移动：括号平衡、import 去重、调用点与定义分离核验通过，行为零变更。
+## Magpie-Mobile 0.1.71-upstream-v0.1.4936（上游核心同步至 v0.1.4936）
+
+- 上游核心同步至 [`yetone/magpie` `v0.1.4936`](https://github.com/yetone/magpie/releases/tag/v0.1.4936)（`cd6d110e`）。会话面板新增长会话轮数、按需载入后续内容、每轮对话文字摘要，以及首次打开时展开折叠步骤。
+- 保留 Android 宿主的提供商配置修订校验、浏览器编辑会话、官方插件和加密备份桥接。
+
+versionName `0.1.71-upstream-v0.1.4936`，versionCode 72，核心 `0.1.4936-androidhost.4`。

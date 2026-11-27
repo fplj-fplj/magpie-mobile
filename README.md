@@ -2,6 +2,10 @@
 
 把 [usemagpie.ai 的 Magpie](https://github.com/yetone/magpie)（AI 模型网关，MIT）移植为 Android 原生独立 APK：提供后台模型网关、其他 App 接入、应用内聊天与双编辑入口。当前实现范围见 [完整核心与双编辑说明](docs/full-core-dual-editors.md)，长期规划见 [移植计划](plan.md)。
 
+## 最新上游适配：0.1.71-upstream-v0.1.4936
+
+- 候选锁定上游 Magpie [`v0.1.4936`](https://github.com/yetone/magpie/releases/tag/v0.1.4936)（commit `cd6d110e`），应用 versionCode 72。上游会话面板新增长会话轮数、按需加载及对话文本展示。宿主改动与候选版本仍由 GitHub Actions 完整验证后发布。
+
 ## 当前正式版本：0.1.70-upstream-v0.1.4934
 
 - 上游核心锁定 [`v0.1.4934`](https://github.com/yetone/magpie/releases/tag/v0.1.4934)（commit `f834c203`），Android 宿主核心 `0.1.4934-androidhost.4`，应用 `versionCode = 71`。
@@ -59,6 +63,7 @@
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [docs/bugfixes-0.1.71.md](docs/bugfixes-0.1.71.md) | 上游稳定版同步至 v0.1.4936 与会话面板更新 |
 | [docs/bugfixes-0.1.70.md](docs/bugfixes-0.1.70.md) | 上游稳定版同步至 v0.1.4934 与 Android 宿主适配 |
 | [docs/bugfixes-0.1.68.md](docs/bugfixes-0.1.68.md) | 上游稳定版同步至 v0.1.4807 与精确提交验收 |
 | [docs/bugfixes-0.1.69.md](docs/bugfixes-0.1.69.md) | 上游稳定版同步至 v0.1.4877 与精确提交验收 |
