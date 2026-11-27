@@ -465,10 +465,19 @@ def validate_android_security_surface(sources: dict[str, str]) -> None:
             raise SyncError("adapted gatewaymode.go lost Android gateway-mode policy")
     if "func webHandler(port, key, where string, box boxSignIn, page http.Handler) http.Handler" not in web:
         raise SyncError("adapted web.go no longer accepts the upstream where string")
-    if not all(token in web for token in (
-        "androidHostEditor(port, key, where, box, webArtifactPages(",
-        "webArtifactLinks(webOwnPage(page))",
-    )):
+    if "androidHostEditor(port, key, where, box," not in web:
+        raise SyncError("adapted web.go no longer routes through the Android editor wrapper")
+    # Artifact capabilities were added upstream after the currently pinned
+    # mobile core. Keep the checked-in older overlay valid, but once an
+    # upstream source includes those handlers require them to stay nested
+    # inside Android's short-lived editor proof.
+    artifact_routes = ("webArtifactPages(", "webArtifactLinks(webOwnPage(page))")
+    if any(token in web for token in artifact_routes) and not all(
+        token in web for token in (
+            "androidHostEditor(port, key, where, box, webArtifactPages(",
+            "webArtifactLinks(webOwnPage(page))",
+        )
+    ):
         raise SyncError("adapted web.go lost Android session proof or artifact capability routing")
 
     for token in (
